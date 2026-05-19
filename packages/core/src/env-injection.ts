@@ -1,5 +1,6 @@
 import { getCatalogEntry, normalizeResourceEngine } from './catalog.ts';
 import { slugify } from './ids.ts';
+import { secureRandomSecret } from './secret-vault.ts';
 
 type AnyRecord = Record<string, any>;
 
@@ -13,7 +14,7 @@ function userFor(resource: AnyRecord) {
 }
 
 function passwordFor(resource: AnyRecord) {
-  return resource.password || `generated-${slugify(resource.name || resource.engine || 'secret')}-password`;
+  return resource.password || secureRandomSecret(24);
 }
 
 function databaseFor(resource: AnyRecord) {
@@ -60,8 +61,14 @@ export function connectionEnvForResource(resource: AnyRecord, projectSlug = 'pro
       env.MONGO_USER = username;
       env.MONGO_PASSWORD = password;
       break;
+    case 'sqlite':
+      env.SQLITE_PATH = resource.sqlitePath || `/data/${slugify(resource.name || 'app')}.db`;
+      env.DATABASE_URL = `sqlite:${env.SQLITE_PATH}`;
+      break;
     case 'redis':
+    case 'valkey':
       env.REDIS_URL = `${protocol}://:${password}@${host}:${port}`;
+      if (entry.key === 'valkey') env.VALKEY_URL = env.REDIS_URL;
       env.REDIS_HOST = host;
       env.REDIS_PORT = String(port);
       env.REDIS_PASSWORD = password;
@@ -74,11 +81,13 @@ export function connectionEnvForResource(resource: AnyRecord, projectSlug = 'pro
       env.S3_SECRET_KEY = resource.secretKey || `sk-${bucket}`;
       break;
     case 'vector-db':
+    case 'qdrant':
       env.VECTOR_DB_URL = resource.url || `http://${host}:${port}`;
       env.VECTOR_DB_API_KEY = resource.apiKey || `vdb-${slugify(resource.name || 'key')}`;
       env.VECTOR_DB_COLLECTION = resource.collection || slugify(resource.name || 'collection');
       break;
     case 'message-queue':
+    case 'nats':
       env.QUEUE_URL = resource.url || `nats://${host}:${port}`;
       env.QUEUE_USERNAME = username;
       env.QUEUE_PASSWORD = password;
@@ -106,10 +115,14 @@ function defaultPort(engine: string) {
     case 'mysql':
     case 'mariadb': return 3306;
     case 'mongodb': return 27017;
-    case 'redis': return 6379;
+    case 'redis':
+    case 'valkey': return 6379;
+    case 'sqlite': return 0;
     case 'object-storage': return 9000;
-    case 'vector-db': return 6333;
-    case 'message-queue': return 4222;
+    case 'vector-db':
+    case 'qdrant': return 6333;
+    case 'message-queue':
+    case 'nats': return 4222;
     default: return 0;
   }
 }

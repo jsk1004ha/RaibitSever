@@ -1,5 +1,6 @@
 import { normalizeResourceEngine } from './catalog.ts';
 import { slugify } from './ids.ts';
+import YAML from 'yaml';
 
 type AnyRecord = Record<string, any>;
 
@@ -16,6 +17,15 @@ function parseScalar(value: any) {
 }
 
 export function parseComposeYaml(text) {
+  try {
+    const parsed = YAML.parse(String(text || '')) || {};
+    if (parsed && typeof parsed === 'object' && parsed.services && typeof parsed.services === 'object') {
+      return { services: parsed.services };
+    }
+  } catch {
+    // Keep the small legacy parser as a compatibility path for partial snippets;
+    // full docker-compose files use the YAML parser above.
+  }
   const services: AnyRecord = {};
   const lines = String(text || '').split(/\r?\n/);
   let inServices = false;
@@ -103,6 +113,7 @@ export function importCompose(text: any, { projectName = 'compose-project' }: An
     const build = normalizeBuild(spec.build);
     const ports = normalizePorts(spec.ports || []);
     const environment = normalizeEnvironment(spec.environment || {});
+    const envFiles = normalizeEnvFiles(spec.env_file);
     services.push({
       name: slugify(name),
       type: ports.length ? 'web' : inferNonHttpType(name, image),
@@ -113,6 +124,12 @@ export function importCompose(text: any, { projectName = 'compose-project' }: An
       image: spec.image || undefined,
       port: ports[0]?.containerPort || undefined,
       environment,
+      envFiles,
+      dependsOn: normalizeDependsOn(spec.depends_on),
+      command: spec.command,
+      entrypoint: spec.entrypoint,
+      healthCheck: spec.healthcheck || spec.healthCheck || undefined,
+      composeWarnings: spec.profiles ? ['compose profiles are not executed directly; profile-specific services are imported as normal desired state'] : [],
       attachedResources: [],
     });
   }
@@ -157,6 +174,18 @@ function normalizeEnvironment(environment: any) {
     }));
   }
   return { ...environment };
+}
+
+function normalizeEnvFiles(envFile: any) {
+  if (!envFile) return [];
+  return (Array.isArray(envFile) ? envFile : [envFile]).map(String);
+}
+
+function normalizeDependsOn(dependsOn: any) {
+  if (!dependsOn) return [];
+  if (Array.isArray(dependsOn)) return dependsOn.map(String);
+  if (typeof dependsOn === 'object') return Object.keys(dependsOn);
+  return [String(dependsOn)];
 }
 
 function detectResourceEngine(name: any, image: any) {

@@ -59,7 +59,10 @@ export async function cloneRepository(options: Record<string, any>) {
       steps.push(await runCommand({ executable: 'git', args: ['checkout', String(options.commitSha)], cwd: destination }, { dryRun, timeoutMs: options.timeoutMs || 10 * 60 * 1000 }));
     }
   } finally {
-    if (askPassPath) await fs.unlink(askPassPath).catch(() => undefined);
+    if (askPassPath) {
+      await fs.writeFile(askPassPath, '#!/bin/sh\nexit 1\n', { mode: 0o700 }).catch(() => undefined);
+      await fs.unlink(askPassPath).catch(() => undefined);
+    }
   }
   return {
     provider: repoUrl.includes('github.com') ? 'github' : 'git',

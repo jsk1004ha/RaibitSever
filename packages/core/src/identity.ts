@@ -49,6 +49,9 @@ export function sessionPayloadForUser(user: Record<string, any>, memberships: Ar
     role: memberships[0]?.role || 'developer',
     organizationId: organizationIds[0] || null,
     organizationIds,
+    accountType: user.accountType || 'NON_CLUB',
+    approvalStatus: user.approvalStatus || 'PENDING',
+    userRole: user.role || 'USER',
   };
 }
 

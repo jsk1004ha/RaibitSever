@@ -71,6 +71,9 @@ export function subjectFromRequest(req: any, auth: Record<string, any> = {}) {
     projectIds: payload.projectIds || null,
     global: payload.global === true,
     authMode: 'jwt',
+    accountType: payload.accountType || null,
+    approvalStatus: payload.approvalStatus || null,
+    userRole: payload.userRole || null,
     claims: payload,
   };
 }

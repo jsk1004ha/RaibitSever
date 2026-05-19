@@ -1,227 +1,82 @@
 openapi: 3.1.0
 info:
   title: RAIBITSERVER API
-  version: 0.1.0
-  description: Desired-state API contract for the RAIBITSERVER PaaS + DBaaS control plane.
+  version: 0.2.0
+  description: Canonical desired-state contract shared by NestJS API, prototype handler, API client, CLI, and local E2E.
 servers:
+  - url: http://localhost:3000/api
   - url: https://api.raibitserver.app
 security:
   - bearerAuth: []
 paths:
-  /auth/signup:
-    post:
-      summary: Register a user, create an owned organization, and return a scoped session JWT.
-      security: []
-      responses:
-        '201': { description: User, organization membership, and token created }
-  /auth/login:
-    post:
-      summary: Log in with email/password and return a scoped session JWT.
-      security: []
-      responses:
-        '200': { description: User memberships and token }
-  /config/runtime:
-    get:
-      summary: Return configured/unconfigured runtime keys with secret values masked.
-      responses:
-        '200': { description: Runtime configuration status }
-  /orgs:
-    post:
-      summary: Create an organization workspace.
-      operationId: createOrganization
-      responses:
-        '201': { description: Created }
-  /orgs/{orgId}/projects:
-    get:
-      summary: List organization projects.
-      parameters:
-        - name: orgId
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        '200': { description: Project list }
-  /projects:
-    get:
-      summary: List projects visible to the authenticated subject.
-      responses:
-        '200': { description: Scoped project list }
-    post:
-      summary: Store desired state for a new project.
-      responses:
-        '201': { description: Created }
-  /projects/{projectId}/services:
-    post:
-      summary: Add an app service desired state.
-      parameters:
-        - name: projectId
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        '201': { description: Created }
-  /projects/{projectId}/services/{serviceId}/deployments:
-    post:
-      summary: Queue a deployment workflow for a service in a scoped project.
-      parameters:
-        - name: projectId
-          in: path
-          required: true
-          schema: { type: string }
-        - name: serviceId
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        '202': { description: Deployment and workflow job queued }
-  /projects/{projectId}/services/{serviceId}/env:
-    get:
-      summary: List masked environment variables for a service.
-      parameters:
-        - name: projectId
-          in: path
-          required: true
-          schema: { type: string }
-        - name: serviceId
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        '200': { description: Masked service environment }
-    post:
-      summary: Upsert service environment variables and secret values.
-      parameters:
-        - name: projectId
-          in: path
-          required: true
-          schema: { type: string }
-        - name: serviceId
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        '200': { description: Environment variables stored with secrets masked }
-  /projects/{projectId}/services/{serviceId}/env-file:
-    post:
-      summary: Upload .env file content for a service.
-      parameters:
-        - name: projectId
-          in: path
-          required: true
-          schema: { type: string }
-        - name: serviceId
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        '200': { description: Parsed .env entries stored with secret masking }
-  /integrations/github:
-    get:
-      summary: List GitHub integrations visible to an organization-scoped subject.
-      parameters:
-        - name: organizationId
-          in: query
-          required: false
-          schema: { type: string }
-      responses:
-        '200': { description: GitHub integrations }
-    post:
-      summary: Connect a GitHub token/App installation to an organization.
-      responses:
-        '201': { description: GitHub integration stored with token masked }
-  /projects/{projectId}/services/{serviceId}/github:
-    post:
-      summary: Attach a GitHub repository/integration to a service desired state.
-      parameters:
-        - name: projectId
-          in: path
-          required: true
-          schema: { type: string }
-        - name: serviceId
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        '200': { description: Service source updated to GitHub repository }
-  /projects/{projectId}/resources:
-    post:
-      summary: Add a managed database/storage/cache resource desired state.
-      parameters:
-        - name: projectId
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        '201': { description: Created }
-  /deployments/{deploymentId}/logs:
-    get:
-      summary: Stream or page build/runtime logs.
-      parameters:
-        - name: deploymentId
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        '200': { description: Logs }
-  /domains:
-    post:
-      summary: Attach and verify a custom domain.
-      responses:
-        '202': { description: Domain verification started }
-  /plan/source:
-    post:
-      summary: Plan a real Git/GitHub checkout command.
-      responses:
-        '200': { description: Checkout plan }
-  /plan/build-execution:
-    post:
-      summary: Plan Docker/BuildKit build and registry push commands.
-      responses:
-        '200': { description: Build execution plan }
-  /plan/registry-push:
-    post:
-      summary: Plan a registry push command for an image.
-      responses:
-        '200': { description: Registry push plan }
-  /plan/kubernetes-apply:
-    post:
-      summary: Plan kubectl apply for compiled desired-state manifests without executing it.
-      responses:
-        '200': { description: Kubernetes apply plan }
-  /plan/provisioning:
-    post:
-      summary: Plan managed resource provisioning CRs and credential secrets.
-      responses:
-        '200': { description: Provisioning plan }
+  /auth/github/login: { get: { summary: Start GitHub OAuth login, responses: { '302': { description: Redirect } } } }
+  /auth/github/callback: { get: { summary: Complete GitHub OAuth login, responses: { '302': { description: Session created } } } }
+  /auth/signup: { post: { summary: Register email/password local user for local E2E, security: [], responses: { '201': { description: User, organization, membership, token } } } }
+  /auth/login: { post: { summary: Log in and return scoped JWT, security: [], responses: { '200': { description: Session } } } }
+  /auth/logout: { post: { summary: Invalidate current session, responses: { '200': { description: Logged out } } } }
+  /auth/me: { get: { summary: Return current user/account/quota subject, responses: { '200': { description: Current user } } } }
+  /organizations: { get: { summary: List visible organizations, responses: { '200': { description: Organizations } } }, post: { summary: Create organization, responses: { '201': { description: Created } } } }
+  /organizations/{organizationId}: { get: { summary: Get organization, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Organization } } }, patch: { summary: Update organization, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Updated } } } }
+  /organizations/{organizationId}/members: { get: { summary: List members, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Members } } }, post: { summary: Add member, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '201': { description: Added } } } }
+  /organizations/{organizationId}/projects: { get: { summary: List organization projects, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Projects } } }, post: { summary: Create project in organization, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '201': { description: Created } } } }
+  /projects: { get: { summary: List visible projects, responses: { '200': { description: Projects } } }, post: { summary: Create project using subject organization, responses: { '201': { description: Created } } } }
+  /projects/{projectId}: { get: { summary: Get project, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '200': { description: Project } } }, patch: { summary: Update project, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '200': { description: Updated } } }, delete: { summary: Delete project, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '204': { description: Deleted } } } }
+  /projects/{projectId}/services: { get: { summary: List services, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '200': { description: Services } } }, post: { summary: Create service desired state, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '201': { description: Created } } } }
+  /services/{serviceId}: { get: { summary: Get service, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Service } } }, patch: { summary: Update service, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Updated } } }, delete: { summary: Delete service, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '204': { description: Deleted } } } }
+  /services/{serviceId}/deployments: { get: { summary: List deployments, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Deployments } } }, post: { summary: Queue production/manual/preview deployment, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '202': { description: Deployment and workflow job queued } } } }
+  /deployments/{deploymentId}: { get: { summary: Get deployment, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '200': { description: Deployment } } } }
+  /deployments/{deploymentId}/cancel: { post: { summary: Cancel deployment, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '202': { description: Cancellation queued } } } }
+  /deployments/{deploymentId}/rollback: { post: { summary: Roll back to previous READY image, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '202': { description: Rollback queued } } } }
+  /deployments/{deploymentId}/logs: { get: { summary: List build logs, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '200': { description: Build logs } } } }
+  /deployments/{deploymentId}/events: { get: { summary: List deployment events, parameters: [ { $ref: '#/components/parameters/deploymentId' } ], responses: { '200': { description: Events } } } }
+  /services/{serviceId}/logs: { get: { summary: List runtime logs, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Runtime logs } } } }
+  /projects/{projectId}/resources: { get: { summary: List resources, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '200': { description: Resources } } }, post: { summary: Create managed resource, parameters: [ { $ref: '#/components/parameters/projectId' } ], responses: { '201': { description: Created } } } }
+  /resources/{resourceId}: { get: { summary: Get resource, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Resource } } }, patch: { summary: Update resource, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Updated } } }, delete: { summary: Delete resource, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '204': { description: Deleted } } } }
+  /resources/{resourceId}/attach: { post: { summary: Attach resource env to service, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Attached } } } }
+  /resources/{resourceId}/detach: { post: { summary: Detach resource env from service, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Detached } } } }
+  /resources/{resourceId}/connection: { get: { summary: Return masked connection info, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Connection } } } }
+  /resources/{resourceId}/rotate-credentials: { post: { summary: Rotate resource credentials, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '202': { description: Rotation queued } } } }
+  /resources/{resourceId}/backups: { get: { summary: List backups, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Backups } } }, post: { summary: Create backup, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '202': { description: Backup queued } } } }
+  /resources/{resourceId}/restore: { post: { summary: Restore backup, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '202': { description: Restore queued } } } }
+  /resources/{resourceId}/console/schema: { get: { summary: DB console schema, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Schema } } } }
+  /resources/{resourceId}/console/tables: { get: { summary: SQL table list, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Tables } } } }
+  /resources/{resourceId}/console/collections: { get: { summary: Mongo/vector collection list, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Collections } } } }
+  /resources/{resourceId}/console/keys: { get: { summary: Redis/Valkey keys, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Keys } } } }
+  /resources/{resourceId}/console/query: { post: { summary: Guarded DB console query, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Query result }, '403': { description: Destructive/read-only guard blocked } } } }
+  /resources/{resourceId}/console/command: { post: { summary: Guarded provider command, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Command result } } } }
+  /resources/{resourceId}/console/browse: { post: { summary: Browse DB/object/queue resource, parameters: [ { $ref: '#/components/parameters/resourceId' } ], responses: { '200': { description: Browse result } } } }
+  /services/{serviceId}/domains: { get: { summary: List domains, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '200': { description: Domains } } }, post: { summary: Add domain, parameters: [ { $ref: '#/components/parameters/serviceId' } ], responses: { '201': { description: Created } } } }
+  /domains/{domainId}/verify: { post: { summary: Verify domain, parameters: [ { $ref: '#/components/parameters/domainId' } ], responses: { '202': { description: Verification queued } } } }
+  /domains/{domainId}: { delete: { summary: Delete domain, parameters: [ { $ref: '#/components/parameters/domainId' } ], responses: { '204': { description: Deleted } } } }
+  /github/installations: { get: { summary: List GitHub App installations, responses: { '200': { description: Installations } } } }
+  /github/installations/{installationId}/repositories: { get: { summary: List installation repositories, parameters: [ { name: installationId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Repositories } } } }
+  /github/webhooks: { post: { summary: GitHub webhook receiver with signature verification, security: [], responses: { '202': { description: Accepted } } } }
+  /github/repositories/import: { post: { summary: Import GitHub repo as service, responses: { '201': { description: Imported } } } }
+  /github/repositories/{repositoryId}/sync: { post: { summary: Sync repository metadata, parameters: [ { name: repositoryId, in: path, required: true, schema: { type: string } } ], responses: { '202': { description: Sync queued } } } }
+  /usage/me: { get: { summary: Current user usage/quota, responses: { '200': { description: Usage } } } }
+  /organizations/{organizationId}/usage: { get: { summary: Organization usage, parameters: [ { $ref: '#/components/parameters/organizationId' } ], responses: { '200': { description: Usage } } } }
+  /admin/users: { get: { summary: Admin list users, responses: { '200': { description: Users } } } }
+  /admin/users/pending: { get: { summary: Admin pending users, responses: { '200': { description: Pending users } } } }
+  /admin/users/{userId}/approve: { post: { summary: Approve user, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Approved } } } }
+  /admin/users/{userId}/reject: { post: { summary: Reject user, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Rejected } } } }
+  /admin/users/{userId}/quota: { patch: { summary: Update user quota, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Updated } } } }
+  /admin/users/{userId}/account-type: { patch: { summary: Update account type, parameters: [ { name: userId, in: path, required: true, schema: { type: string } } ], responses: { '200': { description: Updated } } } }
+  /admin/usage: { get: { summary: Admin global usage, responses: { '200': { description: Usage } } } }
+  /admin/audit-logs: { get: { summary: Admin audit logs, responses: { '200': { description: Audit logs } } } }
+  /internal/plan/build: { post: { summary: Internal build planner, responses: { '200': { description: Plan } } } }
+  /internal/plan/compose: { post: { summary: Internal compose importer, responses: { '200': { description: Plan } } } }
+  /internal/plan/manifests: { post: { summary: Internal manifest compiler, responses: { '200': { description: Plan } } } }
+  /internal/validate: { post: { summary: Internal validator, responses: { '200': { description: Findings } } } }
 components:
+  parameters:
+    organizationId: { name: organizationId, in: path, required: true, schema: { type: string } }
+    projectId: { name: projectId, in: path, required: true, schema: { type: string } }
+    serviceId: { name: serviceId, in: path, required: true, schema: { type: string } }
+    deploymentId: { name: deploymentId, in: path, required: true, schema: { type: string } }
+    resourceId: { name: resourceId, in: path, required: true, schema: { type: string } }
+    domainId: { name: domainId, in: path, required: true, schema: { type: string } }
   securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
   schemas:
-    Project:
-      type: object
-      required: [id, organizationId, name, slug]
-      properties:
-        id: { type: string }
-        organizationId: { type: string }
-        name: { type: string }
-        slug: { type: string }
-    Service:
-      type: object
-      required: [id, projectId, name, type, sourceType]
-      properties:
-        id: { type: string }
-        projectId: { type: string }
-        name: { type: string }
-        type: { enum: [web, private, worker, cron, job] }
-        sourceType: { enum: [github, gitlab, zip, image, local] }
-    Resource:
-      type: object
-      required: [id, projectId, name, engine]
-      properties:
-        id: { type: string }
-        projectId: { type: string }
-        name: { type: string }
-        engine: { enum: [postgresql, mysql, mariadb, mongodb, redis, object-storage, vector-db, message-queue] }
+    ServiceType: { enum: [web, private, worker, cron, job] }
+    ResourceEngine: { enum: [postgresql, mysql, mariadb, mongodb, redis, valkey, sqlite, object-storage, qdrant, weaviate, milvus, nats, rabbitmq, kafka, redpanda] }

@@ -3,6 +3,8 @@ import { maskSecretValue, maskSecrets } from './secrets.ts';
 import { createWorkflowJobRecord } from './workflows.ts';
 import { normalizeEnvEntries, parseDotEnv, maskEnvEntries } from './env-file.ts';
 import { githubIntegrationSummary, parseGitHubRepository } from './github-integration.ts';
+import { openSecret, publicSecretRecord, sealSecret, secureRandomSecret } from './secret-vault.ts';
+import { runDbConsoleQuery, browseDbConsole } from './db-console.ts';
 
 export class ControlPlaneStore {
   organizations: Map<string, any>;
@@ -19,6 +21,11 @@ export class ControlPlaneStore {
   secrets: Map<string, any>;
   environmentVariables: Map<string, any>;
   githubIntegrations: Map<string, any>;
+  buildLogs: any[];
+  runtimeLogs: any[];
+  deploymentEvents: any[];
+  quotas: Map<string, any>;
+  resourceAttachments: any[];
 
   constructor() {
     this.organizations = new Map();
@@ -35,6 +42,11 @@ export class ControlPlaneStore {
     this.secrets = new Map();
     this.environmentVariables = new Map();
     this.githubIntegrations = new Map();
+    this.buildLogs = [];
+    this.runtimeLogs = [];
+    this.deploymentEvents = [];
+    this.quotas = new Map();
+    this.resourceAttachments = [];
   }
 
   createOrganization({ name, slug, plan = 'free' }: Record<string, any>) {
@@ -50,8 +62,8 @@ export class ControlPlaneStore {
     return organization ? deepClone(organization) : null;
   }
 
-  createUser({ name, email, githubId = null, passwordHash = null }: Record<string, any>) {
-    const user = { id: stableId('usr', email || name), name, email: String(email || '').toLowerCase(), githubId, passwordHash, createdAt: nowIso() };
+  createUser({ name, email, githubId = null, passwordHash = null, role = 'USER', accountType = 'NON_CLUB', approvalStatus = 'PENDING', avatarUrl = null }: Record<string, any>) {
+    const user = { id: stableId('usr', email || name), name, email: String(email || '').toLowerCase(), avatarUrl, githubId, passwordHash, role, accountType, approvalStatus, createdAt: nowIso(), updatedAt: nowIso() };
     this.users.set(user.id, user);
     return deepClone(redactUser(user));
   }
@@ -113,17 +125,61 @@ export class ControlPlaneStore {
   }
 
   createResource({ projectId, name, type = 'database', engine, provider = 'kubernetes-operator', plan = 'shared-small', region = 'local', status = 'provisioning', ...rest }: Record<string, any>) {
-    const resource = { id: stableId('res', projectId, name), projectId, type, name, engine, provider, status, plan, region, createdAt: nowIso(), ...rest };
+    const resource = { id: stableId('res', projectId, name), projectId, type, name, slug: slugify(name), engine, provider, status, plan, region, createdAt: nowIso(), ...rest };
     this.resources.set(resource.id, resource);
     this.audit('system', 'resource:create', 'resource', resource.id, { projectId, engine, provider });
     return deepClone(resource);
   }
 
+  attachResource({ resourceId, serviceId, envPrefix = null, injectedEnv = {} }: Record<string, any>) {
+    const resource = this.resources.get(resourceId);
+    const service = this.services.get(serviceId);
+    if (!resource) throw notFound(`resource not found: ${resourceId}`);
+    if (!service) throw notFound(`service not found: ${serviceId}`);
+    if (resource.projectId !== service.projectId) throw forbidden('resource and service must be in the same project');
+    const row = { id: stableId('attach', resourceId, serviceId), resourceId, serviceId, envPrefix, injectedEnv: maskSecrets(injectedEnv), createdAt: nowIso() };
+    this.resourceAttachments.push(row);
+    this.audit('system', 'resource:attach', 'service', serviceId, { resourceId, envPrefix });
+    return deepClone(row);
+  }
+
   createDeployment({ serviceId, commitHash = null, imageUrl, status = 'queued', deploymentType = 'production', branch = 'main', previewUrl = null }: Record<string, any>) {
-    const deployment = { id: stableId('dep', serviceId, commitHash || imageUrl || Date.now()), serviceId, commitHash, imageUrl, status, deploymentType, branch, previewUrl, startedAt: nowIso(), finishedAt: null };
+    const service = this.services.get(serviceId);
+    const deployment = { id: stableId('dep', serviceId, commitHash || imageUrl || Date.now()), serviceId, projectId: service?.projectId || null, commitHash, commitSha: commitHash, imageUrl, status, deploymentType, branch, previewUrl, triggerType: 'manual', startedAt: nowIso(), createdAt: nowIso(), updatedAt: nowIso(), finishedAt: null };
     this.deployments.set(deployment.id, deployment);
     this.audit('system', 'deployment:create', 'deployment', deployment.id, { serviceId, status });
+    this.appendDeploymentEvent({ deploymentId: deployment.id, type: 'deployment.queued', message: `Deployment queued for ${serviceId}` });
     return deepClone(deployment);
+  }
+
+  appendBuildLog({ deploymentId, step = 'build', line, level = 'info' }: Record<string, any>) {
+    const row = { id: stableId('blog', deploymentId, this.buildLogs.length), deploymentId, step, line: String(line ?? ''), level, timestamp: nowIso() };
+    this.buildLogs.push(row);
+    return deepClone(row);
+  }
+
+  appendRuntimeLog({ serviceId, deploymentId = null, podName = 'local-pod', containerName = 'app', line, level = 'info' }: Record<string, any>) {
+    const row = { id: stableId('rlog', serviceId, this.runtimeLogs.length), serviceId, deploymentId, podName, containerName, line: String(line ?? ''), level, timestamp: nowIso() };
+    this.runtimeLogs.push(row);
+    return deepClone(row);
+  }
+
+  appendDeploymentEvent({ deploymentId, type, message, metadata = {} }: Record<string, any>) {
+    const row = { id: stableId('devevt', deploymentId, this.deploymentEvents.length), deploymentId, type, message, metadata: maskSecrets(metadata), timestamp: nowIso() };
+    this.deploymentEvents.push(row);
+    return deepClone(row);
+  }
+
+  listDeploymentLogs(deploymentId: string) {
+    return deepClone(this.buildLogs.filter((row) => row.deploymentId === deploymentId));
+  }
+
+  listRuntimeLogs(serviceId: string) {
+    return deepClone(this.runtimeLogs.filter((row) => row.serviceId === serviceId));
+  }
+
+  listDeploymentEvents(deploymentId: string) {
+    return deepClone(this.deploymentEvents.filter((row) => row.deploymentId === deploymentId));
   }
 
   enqueueWorkflowJob(input: Record<string, any>) {
@@ -134,15 +190,17 @@ export class ControlPlaneStore {
   }
 
   createSecret({ scopeType = 'service', scopeId, key, value, actorUserId = 'system', metadata = {} }: Record<string, any>) {
-    const id = stableId('sec', scopeType, scopeId, key);
-    const row = { id, scopeType, scopeId, key, value: String(value ?? ''), valueMasked: maskSecretValue(value), metadata: maskSecrets(metadata), createdAt: nowIso(), updatedAt: nowIso() };
+    const existing = [...this.secrets.values()].find((secret) => secret.scopeType === scopeType && secret.scopeId === scopeId && secret.key === key);
+    const id = existing?.id || `sec_${secureRandomSecret(18)}`;
+    const row = { id, scopeType, scopeId, key, sealedValue: sealSecret(value), valueMasked: maskSecretValue(value), metadata: maskSecrets(metadata), createdAt: existing?.createdAt || nowIso(), updatedAt: nowIso() };
     this.secrets.set(id, row);
     this.audit(actorUserId, 'secret:upsert', scopeType, scopeId, { key, secretId: id });
     return publicSecret(row);
   }
 
   getSecretValue(secretId: string) {
-    return this.secrets.get(secretId)?.value || null;
+    const secret = this.secrets.get(secretId);
+    return secret?.sealedValue ? openSecret(secret.sealedValue) : null;
   }
 
   upsertServiceEnvironment({ projectId, serviceId, entries, actorUserId = 'system', source = 'api' }: Record<string, any>) {
@@ -158,9 +216,9 @@ export class ControlPlaneStore {
         const secret = this.createSecret({ scopeType: 'service', scopeId: serviceId, key: entry.key, value: entry.value, actorUserId, metadata: { source: entry.source } });
         secretId = secret.id;
       }
-      environment[entry.key] = entry.value;
+      environment[entry.key] = entry.isSecret ? `secret:${secretId}` : entry.value;
       const id = stableId('env', serviceId, entry.key);
-      const row = { id, projectId, serviceId, key: entry.key, value: entry.value, isSecret: entry.isSecret, secretId, valueMasked: entry.valueMasked, source: entry.source || source, updatedAt: nowIso() };
+      const row = { id, projectId, serviceId, key: entry.key, value: entry.isSecret ? null : entry.value, isSecret: entry.isSecret, secretId, valueMasked: entry.valueMasked, source: entry.source || source, updatedAt: nowIso() };
       this.environmentVariables.set(id, row);
       publicRows.push(row);
     }
@@ -231,6 +289,59 @@ export class ControlPlaneStore {
     return deepClone(row);
   }
 
+  setQuota({ userId, accountType = 'NON_CLUB', ...limits }: Record<string, any>) {
+    const id = stableId('quota', userId, accountType);
+    const row = { id, userId, accountType, maxProjects: 1, maxServices: 2, maxDeploymentsPerDay: 3, maxPreviewDeployments: 1, maxCpuMillicores: 500, maxMemoryMb: 512, maxDbStorageMb: 512, maxObjectStorageMb: 1024, maxBuildMinutesPerMonth: 60, maxRuntimeHoursPerMonth: 120, ...limits, createdAt: this.quotas.get(id)?.createdAt || nowIso(), updatedAt: nowIso() };
+    this.quotas.set(id, row);
+    this.audit('system', 'quota:set', 'user', userId, { accountType, limits });
+    return deepClone(row);
+  }
+
+  approveUser(userId: string, { accountType = 'NON_CLUB', role = null }: Record<string, any> = {}) {
+    const user = this.users.get(userId);
+    if (!user) throw notFound(`user not found: ${userId}`);
+    user.approvalStatus = 'APPROVED';
+    user.accountType = accountType;
+    if (role) user.role = role;
+    user.updatedAt = nowIso();
+    if (accountType === 'NON_CLUB') this.setQuota({ userId, accountType });
+    this.audit('system', 'user:approve', 'user', userId, { accountType });
+    return redactUser(deepClone(user));
+  }
+
+  rejectUser(userId: string) {
+    const user = this.users.get(userId);
+    if (!user) throw notFound(`user not found: ${userId}`);
+    user.approvalStatus = 'REJECTED';
+    user.updatedAt = nowIso();
+    this.audit('system', 'user:reject', 'user', userId, {});
+    return redactUser(deepClone(user));
+  }
+
+  enforceUserCan({ userId, action, metric = null, increment = 1 }: Record<string, any>) {
+    const user = this.users.get(userId);
+    if (!user) return true;
+    if (user.role === 'ADMIN' || user.accountType === 'CLUB_MEMBER') return true;
+    if (user.approvalStatus !== 'APPROVED') throw forbidden(`user ${userId} is ${user.approvalStatus || 'PENDING'} and cannot ${action}`);
+    const quota = [...this.quotas.values()].find((row) => row.userId === userId) || this.setQuota({ userId, accountType: user.accountType || 'NON_CLUB' });
+    if (metric && quota[metric] !== undefined && increment > Number(quota[metric])) throw forbidden(`quota exceeded: ${metric}`);
+    return true;
+  }
+
+  async runResourceConsoleQuery(resourceId: string, query: string, options: Record<string, any> = {}) {
+    const resource = this.resources.get(resourceId);
+    if (!resource) throw notFound(`resource not found: ${resourceId}`);
+    const result = await runDbConsoleQuery(resource, query, options);
+    this.audit(options.actorUserId || 'system', 'resource.console:query', 'resource', resourceId, { query, resultRows: (result as any).rowCount || result.rows?.length || 0 });
+    return result;
+  }
+
+  async browseResourceConsole(resourceId: string, options: Record<string, any> = {}) {
+    const resource = this.resources.get(resourceId);
+    if (!resource) throw notFound(`resource not found: ${resourceId}`);
+    return browseDbConsole(resource, options);
+  }
+
   audit(actorUserId: any, action: string, targetType: string, targetId: any, metadata: Record<string, any> = {}) {
     const row = { id: stableId('aud', action, targetId, Date.now(), this.auditLogs.length), actorUserId, action, targetType, targetId, metadata: maskSecrets(metadata), createdAt: nowIso() };
     this.auditLogs.push(row);
@@ -253,12 +364,17 @@ export class ControlPlaneStore {
       secrets: [...this.secrets.values()].map(publicSecret),
       environmentVariables: maskEnvEntries([...this.environmentVariables.values()]),
       githubIntegrations: [...this.githubIntegrations.values()],
+      buildLogs: this.buildLogs,
+      runtimeLogs: this.runtimeLogs,
+      deploymentEvents: this.deploymentEvents,
+      quotas: [...this.quotas.values()],
+      resourceAttachments: this.resourceAttachments,
     });
   }
 }
 
 function publicSecret(row: Record<string, any>) {
-  return { id: row.id, scopeType: row.scopeType, scopeId: row.scopeId, key: row.key, valueMasked: row.valueMasked, metadata: row.metadata || {}, createdAt: row.createdAt, updatedAt: row.updatedAt };
+  return publicSecretRecord(row);
 }
 
 function redactUser(user: Record<string, any>) {

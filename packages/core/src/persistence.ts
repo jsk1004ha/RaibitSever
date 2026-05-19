@@ -1,6 +1,7 @@
 import { ControlPlaneStore } from './store.ts';
 import { deepClone } from './ids.ts';
-import { maskSecrets } from './secrets.ts';
+import { maskSecretValue, maskSecrets } from './secrets.ts';
+import { sealSecret } from './secret-vault.ts';
 
 export class InMemoryControlPlaneRepository {
   store: ControlPlaneStore;
@@ -19,6 +20,7 @@ export class InMemoryControlPlaneRepository {
   async createService(input: Record<string, any>) { return this.store.createService(input); }
   async createResource(input: Record<string, any>) { return this.store.createResource(input); }
   async createDeployment(input: Record<string, any>) { return this.store.createDeployment(input); }
+  async createSecret(input: Record<string, any>) { return this.store.createSecret(input); }
   async createDeploymentWorkflow(input: Record<string, any>) {
     const deployment = this.store.createDeployment(input.deployment || input);
     const workflowJob = this.store.enqueueWorkflowJob({
@@ -37,6 +39,19 @@ export class InMemoryControlPlaneRepository {
   async listGitHubIntegrations(input: Record<string, any>) { return this.store.listGitHubIntegrations(input); }
   async attachGitHubRepositoryToService(input: Record<string, any>) { return this.store.attachGitHubRepositoryToService(input); }
   async enqueueWorkflowJob(input: Record<string, any>) { return this.store.enqueueWorkflowJob(input); }
+  async approveUser(userId: string, input: Record<string, any> = {}) { return this.store.approveUser(userId, input); }
+  async rejectUser(userId: string) { return this.store.rejectUser(userId); }
+  async setQuota(input: Record<string, any>) { return this.store.setQuota(input); }
+  async enforceUserCan(input: Record<string, any>) { return this.store.enforceUserCan(input); }
+  async attachResource(input: Record<string, any>) { return this.store.attachResource(input); }
+  async appendBuildLog(input: Record<string, any>) { return this.store.appendBuildLog(input); }
+  async appendRuntimeLog(input: Record<string, any>) { return this.store.appendRuntimeLog(input); }
+  async appendDeploymentEvent(input: Record<string, any>) { return this.store.appendDeploymentEvent(input); }
+  async listDeploymentLogs(deploymentId: string) { return this.store.listDeploymentLogs(deploymentId); }
+  async listRuntimeLogs(serviceId: string) { return this.store.listRuntimeLogs(serviceId); }
+  async listDeploymentEvents(deploymentId: string) { return this.store.listDeploymentEvents(deploymentId); }
+  async runResourceConsoleQuery(resourceId: string, query: string, options: Record<string, any> = {}) { return this.store.runResourceConsoleQuery(resourceId, query, options); }
+  async browseResourceConsole(resourceId: string, options: Record<string, any> = {}) { return this.store.browseResourceConsole(resourceId, options); }
   async snapshot() { return this.store.snapshot(); }
 }
 
@@ -75,8 +90,8 @@ export class PrismaControlPlaneRepository {
   async createUser(input: Record<string, any>) {
     return this.prisma.user.upsert({
       where: { email: input.email },
-      update: { name: input.name, githubId: input.githubId || null, passwordHash: input.passwordHash || undefined },
-      create: { name: input.name, email: input.email, githubId: input.githubId || null, passwordHash: input.passwordHash || null },
+      update: { name: input.name, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || undefined, role: input.role || undefined, accountType: input.accountType || undefined, approvalStatus: input.approvalStatus || undefined },
+      create: { name: input.name, email: input.email, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || null, role: input.role || 'USER', accountType: input.accountType || 'NON_CLUB', approvalStatus: input.approvalStatus || 'PENDING' },
     });
   }
 
@@ -85,7 +100,7 @@ export class PrismaControlPlaneRepository {
   }
 
   async addMember(input: Record<string, any>) {
-    return this.prisma.organizationMember.upsert({
+    return this.prisma.membership.upsert({
       where: { organizationId_userId: { organizationId: input.organizationId, userId: input.userId } },
       update: { role: input.role || 'developer' },
       create: { organizationId: input.organizationId, userId: input.userId, role: input.role || 'developer' },
@@ -93,7 +108,7 @@ export class PrismaControlPlaneRepository {
   }
 
   async listMembershipsForUser(userId: string) {
-    return this.prisma.organizationMember.findMany({ where: { userId } });
+    return this.prisma.membership.findMany({ where: { userId } });
   }
 
   async createProject(input: Record<string, any>) {
@@ -116,7 +131,7 @@ export class PrismaControlPlaneRepository {
     return this.prisma.resource.upsert({
       where: { projectId_name: { projectId: input.projectId, name: input.name } },
       update: resourceData(input),
-      create: { projectId: input.projectId, name: input.name, ...resourceData(input) },
+      create: { projectId: input.projectId, name: input.name, slug: input.slug || slugInput(input.name), ...resourceData(input) },
     });
   }
 
@@ -126,7 +141,9 @@ export class PrismaControlPlaneRepository {
 
   async createDeploymentWorkflow(input: Record<string, any>) {
     return this.prisma.$transaction(async (tx: any) => {
-      const deployment = await tx.deployment.create({ data: deploymentData(input.deployment || input) });
+      const requestedDeployment = input.deployment || input;
+      const service = await tx.service.findUnique({ where: { id: requestedDeployment.serviceId } });
+      const deployment = await tx.deployment.create({ data: deploymentData({ ...requestedDeployment, projectId: requestedDeployment.projectId || service?.projectId }) });
       const workflowJob = await tx.workflowJob.create({ data: workflowJobData({
         ...(input.workflow || {}),
         targetType: 'deployment',
@@ -142,9 +159,19 @@ export class PrismaControlPlaneRepository {
   }
 
   async upsertServiceEnvironment(input: Record<string, any>) {
+    const { normalizeEnvEntries } = await import('./env-file.ts');
     const rows = [];
-    for (const entry of input.entries || []) {
-      const data = envVariableData({ ...entry, projectId: input.projectId, serviceId: input.serviceId, source: entry.source || input.source || 'api' });
+    for (const entry of normalizeEnvEntries(input.entries || [], { source: input.source || 'api' })) {
+      let secretRef = (entry as any).secretId || null;
+      if (entry.isSecret) {
+        const secret = await this.prisma.secretValue.upsert({
+          where: { scopeType_scopeId_key: { scopeType: 'service', scopeId: input.serviceId, key: entry.key } },
+          update: { sealedValue: sealSecret(entry.value), valueMasked: maskSecretValue(entry.value), metadata: maskSecrets({ source: entry.source || input.source || 'api' }) },
+          create: { scopeType: 'service', scopeId: input.serviceId, key: entry.key, sealedValue: sealSecret(entry.value), valueMasked: maskSecretValue(entry.value), metadata: maskSecrets({ source: entry.source || input.source || 'api' }) },
+        });
+        secretRef = secret.id;
+      }
+      const data = envVariableData({ ...entry, projectId: input.projectId, serviceId: input.serviceId, source: entry.source || input.source || 'api', secretRef });
       const row = await this.prisma.environmentVariable.upsert({
         where: { serviceId_key: { serviceId: input.serviceId, key: data.key } },
         update: data,
@@ -171,7 +198,7 @@ export class PrismaControlPlaneRepository {
   async createGitHubIntegration(input: Record<string, any>) {
     const { githubIntegrationSummary } = await import('./github-integration.ts');
     const summary = githubIntegrationSummary(input);
-    const row = await this.prisma.githubIntegration.create({
+    let row = await this.prisma.githubIntegration.create({
       data: {
         organizationId: input.organizationId,
         userId: input.userId || null,
@@ -183,6 +210,14 @@ export class PrismaControlPlaneRepository {
         defaultBranch: input.defaultBranch || 'main',
       },
     });
+    if (input.token) {
+      const secret = await this.prisma.secretValue.upsert({
+        where: { scopeType_scopeId_key: { scopeType: 'github-integration', scopeId: row.id, key: 'GITHUB_TOKEN' } },
+        update: { sealedValue: sealSecret(input.token), valueMasked: maskSecretValue(input.token), metadata: maskSecrets({ accountLogin: input.accountLogin }) },
+        create: { scopeType: 'github-integration', scopeId: row.id, key: 'GITHUB_TOKEN', sealedValue: sealSecret(input.token), valueMasked: maskSecretValue(input.token), metadata: maskSecrets({ accountLogin: input.accountLogin }) },
+      });
+      row = await this.prisma.githubIntegration.update({ where: { id: row.id }, data: { tokenSecretId: secret.id } });
+    }
     await this.prisma.auditLog.create({ data: { actorUserId: input.userId || 'system', action: 'github:connect', targetType: 'organization', targetId: input.organizationId, metadata: maskSecrets({ integrationId: row.id, accountLogin: row.accountLogin }) } });
     return row;
   }
@@ -205,6 +240,44 @@ export class PrismaControlPlaneRepository {
   async enqueueWorkflowJob(input: Record<string, any>) {
     return this.prisma.workflowJob.create({ data: workflowJobData(input) });
   }
+
+
+  async approveUser(userId: string, input: Record<string, any> = {}) {
+    const user = await this.prisma.user.update({ where: { id: userId }, data: { approvalStatus: 'APPROVED', accountType: input.accountType || 'NON_CLUB', role: input.role || undefined } });
+    if ((input.accountType || user.accountType) === 'NON_CLUB') await this.setQuota({ userId, accountType: 'NON_CLUB' });
+    await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'user:approve', targetType: 'user', targetId: userId, metadata: maskSecrets({ accountType: input.accountType || user.accountType }) } });
+    return redactUser(user);
+  }
+
+  async rejectUser(userId: string, input: Record<string, any> = {}) {
+    const user = await this.prisma.user.update({ where: { id: userId }, data: { approvalStatus: 'REJECTED' } });
+    await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'user:reject', targetType: 'user', targetId: userId, metadata: {} } });
+    return redactUser(user);
+  }
+
+  async setQuota(input: Record<string, any>) {
+    return this.prisma.quota.upsert({
+      where: { id: input.id || `quota_${input.userId}_${input.accountType || 'NON_CLUB'}` },
+      update: quotaData(input),
+      create: { id: input.id || `quota_${input.userId}_${input.accountType || 'NON_CLUB'}`, userId: input.userId, accountType: input.accountType || 'NON_CLUB', ...quotaData(input) },
+    });
+  }
+
+  async enforceUserCan(input: Record<string, any>) {
+    const user = await this.prisma.user.findUnique({ where: { id: input.userId } });
+    if (!user || user.role === 'ADMIN' || user.accountType === 'CLUB_MEMBER') return true;
+    if (user.approvalStatus !== 'APPROVED') {
+      await this.prisma.auditLog.create({ data: { actorUserId: input.userId, action: 'quota:block', targetType: input.action || 'action', targetId: input.metric || input.action || 'unknown', metadata: { reason: user.approvalStatus || 'PENDING' } } });
+      const error = new Error(`user ${input.userId} is ${user.approvalStatus || 'PENDING'} and cannot ${input.action}`);
+      (error as any).statusCode = 403;
+      throw error;
+    }
+    return true;
+  }
+
+  async listDeploymentLogs(deploymentId: string) { return this.prisma.buildLog.findMany({ where: { deploymentId }, orderBy: { timestamp: 'asc' } }); }
+  async listRuntimeLogs(serviceId: string) { return this.prisma.runtimeLog.findMany({ where: { serviceId }, orderBy: { timestamp: 'asc' } }); }
+  async listDeploymentEvents(deploymentId: string) { return this.prisma.deploymentEvent.findMany({ where: { deploymentId }, orderBy: { timestamp: 'asc' } }); }
 
   async writeDesiredProject(projectSpec: Record<string, any>) {
     const orgInput = projectSpec.organization || { name: projectSpec.organizationSlug || 'default', slug: projectSpec.organizationSlug || 'default', plan: 'free' };
@@ -243,7 +316,7 @@ export class PrismaControlPlaneRepository {
     const [organizations, users, members, projects, services, resources, deployments, auditLogs, usageRecords, workflowJobs] = await Promise.all([
       this.prisma.organization.findMany(),
       this.prisma.user.findMany(),
-      this.prisma.organizationMember.findMany(),
+      this.prisma.membership.findMany(),
       this.prisma.project.findMany(),
       this.prisma.service.findMany(),
       this.prisma.resource.findMany(),
@@ -276,37 +349,59 @@ function serviceData(input: Record<string, any>) {
     type: input.type || 'web',
     runtimeType: input.runtimeType || 'container',
     sourceType: input.sourceType || 'github',
-    buildMode: input.buildMode || null,
+    buildMode: input.buildMode || 'AUTO',
     repoUrl: input.repoUrl || null,
+    githubRepositoryId: input.githubRepositoryId || null,
     branch: input.branch || null,
+    rootDirectory: input.rootDirectory || null,
+    buildContext: input.buildContext || null,
+    dockerfilePath: input.dockerfilePath || null,
+    installCommand: input.installCommand || null,
+    buildCommand: input.buildCommand || null,
+    startCommand: input.startCommand || null,
+    outputDirectory: input.outputDirectory || null,
+    image: input.image || null,
     imageUrl: input.imageUrl || input.image || null,
     port: input.port ? Number(input.port) : null,
     status: input.status || 'created',
+    desiredSpec: sanitizeJson(input.desiredSpec || input),
     desiredState: sanitizeJson(input),
   };
 }
 
 function resourceData(input: Record<string, any>) {
   return {
+    slug: input.slug || slugInput(input.name),
     type: input.type || 'database',
     engine: input.engine,
     provider: input.provider || 'kubernetes-operator',
     plan: input.plan || 'shared-small',
     region: input.region || 'local',
+    version: input.version || null,
     status: input.status || 'provisioning',
+    desiredSpec: sanitizeJson(input.desiredSpec || input),
     desiredState: sanitizeJson(input),
+    connectionSecretName: input.connectionSecretName || null,
   };
 }
 
 function deploymentData(input: Record<string, any>) {
+  if (!input.projectId) throw new Error('projectId is required for deployment persistence');
   return {
     serviceId: input.serviceId,
+    projectId: input.projectId,
+    commitSha: input.commitSha || input.commitHash || null,
     commitHash: input.commitHash || input.commitSha || null,
     imageUrl: input.imageUrl || input.image || null,
+    imageDigest: input.imageDigest || null,
     status: input.status || 'queued',
     deploymentType: input.deploymentType || 'production',
+    triggerType: input.triggerType || 'manual',
     branch: input.branch || 'main',
+    pullRequestNumber: input.pullRequestNumber ? Number(input.pullRequestNumber) : null,
     previewUrl: input.previewUrl || null,
+    errorCode: input.errorCode || null,
+    errorMessage: input.errorMessage || null,
   };
 }
 
@@ -358,4 +453,9 @@ function maskEnvRow(row: Record<string, any>) {
 function redactUser(user: Record<string, any>) {
   const { passwordHash, ...rest } = user;
   return rest;
+}
+
+function quotaData(input: Record<string, any>) {
+  const keys = ['maxProjects','maxServices','maxDeploymentsPerDay','maxPreviewDeployments','maxCpuMillicores','maxMemoryMb','maxDbStorageMb','maxObjectStorageMb','maxBuildMinutesPerMonth','maxRuntimeHoursPerMonth'];
+  return Object.fromEntries(keys.filter((key) => input[key] !== undefined).map((key) => [key, Number(input[key])]));
 }

@@ -8,10 +8,11 @@ import { ResourcesController } from './modules/resources/resources.controller';
 import { AuthController } from './modules/auth/auth.controller';
 import { EnvironmentController } from './modules/environment/environment.controller';
 import { GitHubIntegrationController } from './modules/integrations/github.controller';
+import { AdminController } from './modules/admin.controller';
 import { RbacGuard } from './auth/rbac.guard';
 
 @Module({
-  controllers: [AuthController, ProjectsController, ServicesController, DeploymentsController, ResourcesController, EnvironmentController, GitHubIntegrationController],
+  controllers: [AuthController, ProjectsController, ServicesController, DeploymentsController, ResourcesController, EnvironmentController, GitHubIntegrationController, AdminController],
   providers: [RAIBITSERVERService, { provide: APP_GUARD, useClass: RbacGuard }],
 })
 export class AppModule {}

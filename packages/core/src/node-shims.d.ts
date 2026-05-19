@@ -6,3 +6,4 @@ declare module 'node:fs/promises' { const mod: any; export default mod; }
 declare module 'node:child_process' { export const spawn: any; }
 declare module 'node:events' { export const once: any; }
 declare module 'node:os' { const mod: any; export default mod; }
+declare module 'node:sqlite' { export const DatabaseSync: any; const mod: any; export default mod; }

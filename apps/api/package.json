@@ -11,17 +11,18 @@
   },
   "dependencies": {
     "@raibitserver/schemas": "workspace:*",
-    "@nestjs/common": "latest",
-    "@nestjs/core": "latest",
-    "@nestjs/platform-express": "latest",
-    "@prisma/client": "^6.19.0",
-    "bullmq": "latest",
-    "zod": "latest",
+    "@nestjs/common": "11.1.21",
+    "@nestjs/core": "11.1.21",
+    "@nestjs/platform-express": "11.1.21",
+    "@prisma/client": "6.19.0",
+    "bullmq": "5.76.10",
+    "zod": "4.4.3",
     "@raibitserver/core": "workspace:*"
   },
   "devDependencies": {
-    "@nestjs/cli": "latest",
-    "prisma": "^6.19.0",
-    "typescript": "latest"
+    "@nestjs/cli": "11.0.21",
+    "prisma": "6.19.0",
+    "typescript": "6.0.3",
+    "@types/node": "25.9.0"
   }
 }

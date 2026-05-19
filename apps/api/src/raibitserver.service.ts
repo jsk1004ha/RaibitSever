@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
-import { createControlPlaneRepository, createSessionToken, hashPassword, normalizeEmail, organizationScopeFromProjectInput, personalOrganizationSlug, requireScope, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
+import { createControlPlaneRepository, createSessionToken, hashPassword, normalizeEmail, organizationScopeFromProjectInput, personalOrganizationSlug, requireScope, validateServiceSecurity, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 
 /**
  * NestJS-facing desired-state service.
@@ -33,7 +33,15 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const existingOrganization = repository.findOrganizationBySlug ? await repository.findOrganizationBySlug(organizationSlug) : repository.store.findOrganizationBySlug(organizationSlug);
     if (existingOrganization) throw new ForbiddenException('organization slug already exists');
     const organization = await repository.createOrganization({ name: input.organizationName || organizationSlug, slug: organizationSlug, plan: input.plan || 'free' });
-    const user = await repository.createUser({ name: input.name || email, email, passwordHash: hashPassword(input.password) });
+    const adminEmails = String(process.env.ADMIN_EMAILS || '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
+    const user = await repository.createUser({
+      name: input.name || email,
+      email,
+      passwordHash: hashPassword(input.password),
+      role: adminEmails.includes(email) ? 'ADMIN' : 'USER',
+      accountType: input.accountType || (input.plan === 'club' ? 'CLUB_MEMBER' : 'NON_CLUB'),
+      approvalStatus: input.approvalStatus || (adminEmails.includes(email) || input.accountType === 'CLUB_MEMBER' || input.plan === 'club' ? 'APPROVED' : 'PENDING'),
+    });
     const membership = await repository.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
     const token = createSessionToken({ ...user, email }, [membership], jwtSecret, { issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', expiresInSeconds: input.expiresInSeconds || 3600 });
     return { user, organization, membership, token };
@@ -55,6 +63,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const projectInput = project as any;
     const organizationId = organizationScopeFromProjectInput(projectInput, subject);
     enforceScope(subject, { organizationId });
+    if (repository.enforceUserCan) await repository.enforceUserCan({ userId: subject.id, action: 'project:create', metric: 'maxProjects', increment: 1 });
     if (repository.writeDesiredProject) return repository.writeDesiredProject(projectInput);
     const organization = repository.store.organizations.get(organizationId)
       ? repository.store.organizations.get(organizationId)
@@ -77,12 +86,14 @@ export class RAIBITSERVERService implements OnModuleDestroy {
   async addService(projectId: string, service: ServiceSpec, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     await assertProjectAccess(repository, projectId, subject);
+    if (repository.enforceUserCan) await repository.enforceUserCan({ userId: subject.id, action: 'service:create', metric: 'maxServices', increment: 1 });
     return repository.createService({ ...service, projectId });
   }
 
   async addResource(projectId: string, resource: ResourceSpec, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     await assertProjectAccess(repository, projectId, subject);
+    if (repository.enforceUserCan) await repository.enforceUserCan({ userId: subject.id, action: 'resource:create', metric: String((resource as any).type || '').toLowerCase() === 'storage' ? 'maxObjectStorageMb' : 'maxDbStorageMb', increment: Number((resource as any).storageMb || (resource as any).storageGb || 1) });
     return repository.createResource({ ...resource, projectId });
   }
 
@@ -92,8 +103,11 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const service = await repository.getService(serviceId);
     if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
     if (String(service.projectId) !== String(projectId)) throw new ForbiddenException('service does not belong to project');
+    if (repository.enforceUserCan) await repository.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxDeploymentsPerDay', increment: 1 });
+    const security = validateServiceSecurity(service.desiredState || service.desiredSpec || service);
+    if (!security.ok) throw new ForbiddenException(`deployment blocked by security policy: ${security.findings.filter((finding: any) => finding.level === 'block').map((finding: any) => finding.code).join(', ')}`);
     const { deployment, workflowJob } = await repository.createDeploymentWorkflow({
-      deployment: { serviceId, status: 'queued', deploymentType: 'production' },
+      deployment: { serviceId, projectId, status: 'queued', deploymentType: 'production' },
       workflow: { type: 'build-and-deploy', payload: { projectId, serviceId } },
     });
     return {
@@ -123,6 +137,33 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     await assertProjectAccess(repository, projectId, subject);
     await assertServiceInProject(repository, projectId, serviceId);
     return repository.importServiceEnvFile({ projectId, serviceId, content: input.content || input.text || '', actorUserId: subject.id, source: input.filename || '.env' });
+  }
+
+
+  async currentUser(subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const snapshot = await repository.snapshot();
+    const user = snapshot.users.find((candidate: Record<string, any>) => String(candidate.id) === String(subject.id)) || null;
+    const memberships = repository.listMembershipsForUser ? await repository.listMembershipsForUser(subject.id) : [];
+    return { user, subject, memberships };
+  }
+
+  async approveUser(userId: string, input: Record<string, any>, subject: Record<string, any>) {
+    assertAdmin(subject);
+    const repository: any = await this.repositoryPromise;
+    return repository.approveUser(userId, { ...input, actorUserId: subject.id });
+  }
+
+  async rejectUser(userId: string, subject: Record<string, any>) {
+    assertAdmin(subject);
+    const repository: any = await this.repositoryPromise;
+    return repository.rejectUser(userId, { actorUserId: subject.id });
+  }
+
+  async setUserQuota(userId: string, input: Record<string, any>, subject: Record<string, any>) {
+    assertAdmin(subject);
+    const repository: any = await this.repositoryPromise;
+    return repository.setQuota({ ...input, userId });
   }
 
   async connectGitHub(input: Record<string, any>, subject: Record<string, any>) {
@@ -182,6 +223,11 @@ function enforceScope(subject: Record<string, any>, scope: Record<string, any>) 
 
 function isGlobalSubject(subject: Record<string, any>) {
   return subject?.global === true || subject?.authMode === 'disabled';
+}
+
+function assertAdmin(subject: Record<string, any>) {
+  if (subject?.global === true || subject?.role === 'owner' || subject?.userRole === 'ADMIN' || subject?.claims?.userRole === 'ADMIN') return;
+  throw new ForbiddenException('admin required');
 }
 
 function jwtSecretOrThrow() {

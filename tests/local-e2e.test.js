@@ -1,0 +1,63 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import http from 'node:http';
+import { once } from 'node:events';
+import { RAIBITSERVERClient } from '../packages/api-client/src/index.ts';
+import { createApiHandler } from '../packages/core/src/api.ts';
+import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
+import { sealSecretValue, unsealSecretValue, maskSecrets } from '../packages/core/src/secrets.ts';
+
+
+test('local E2E script verifies approval, quota, logs, preview, and SQLite console', async () => {
+  const result = await runNode(['scripts/dev-e2e.mjs'], { RAIBITSERVER_AUTH_JWT_SECRET: 'test-local-e2e-secret-32-bytes' });
+  assert.equal(result.code, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.deploymentStatus, 'READY');
+  assert.equal(parsed.checks.some((check) => check.includes('non-club pending blocked')), true);
+  const report = JSON.parse(await fs.readFile('.raibitserver-work/e2e-report.json', 'utf8'));
+  assert.match(report.previewDeploymentId, /^dep[-_]/);
+  assert.equal(report.checks.includes('SQLite DB console query works'), true);
+});
+
+test('api-client matches prototype API project/service/resource contract', async () => {
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'disabled', allowDisabled: true } }));
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const client = new RAIBITSERVERClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
+  try {
+    const org = await client.createOrganization({ name: 'Client Org', slug: 'client-org' });
+    const project = await client.createProject({ name: 'Client App', slug: 'client-app' }, org.id);
+    const service = await client.createService(project.id, { name: 'web', sourceType: 'image', image: 'localhost:5000/client/web:latest' });
+    const resource = await client.createResource(project.id, { name: 'data', type: 'database', engine: 'sqlite' });
+    assert.equal(service.projectId, project.id);
+    assert.equal(resource.projectId, project.id);
+    assert.equal((await client.listServices(project.id)).services.length, 1);
+  } finally {
+    server.close();
+  }
+});
+
+test('secret helpers encrypt at rest and mask nested primitive values', () => {
+  const sealed = sealSecretValue('postgresql://user:secret@db/app', { ENCRYPTION_KEY: 'x'.repeat(32) });
+  assert.equal(sealed.sealedValue.includes('postgresql://user:secret@db/app'), false);
+  assert.equal(unsealSecretValue(sealed.sealedValue, { ENCRYPTION_KEY: 'x'.repeat(32) }), 'postgresql://user:secret@db/app');
+  const masked = maskSecrets({ nested: { token: 123456789, password: 'super-secret' } });
+  assert.equal(masked.nested.token, '12****89');
+  assert.equal(masked.nested.password, 'su****et');
+});
+
+function runNode(args, env = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(process.execPath, args, { cwd: new URL('..', import.meta.url).pathname, env: { ...process.env, ...env } });
+    const stdout = [];
+    const stderr = [];
+    proc.stdout.on('data', (chunk) => stdout.push(chunk));
+    proc.stderr.on('data', (chunk) => stderr.push(chunk));
+    proc.on('error', reject);
+    proc.on('close', (code) => resolve({ code, stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8') }));
+  });
+}

@@ -15,19 +15,33 @@
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
-    "lint": "turbo lint",
-    "typecheck": "turbo typecheck",
+    "lint": "git diff --check && node scripts/check-structure.js",
+    "typecheck": "tsc -p packages/core/tsconfig.json --noEmit && pnpm --filter @raibitserver/api typecheck && pnpm --filter @raibitserver/cli typecheck && pnpm --filter @raibitserver/dashboard typecheck",
     "test": "node --test",
     "check:structure": "node scripts/check-structure.js",
     "start:prototype-api": "node src/server.js",
-    "cli": "node src/cli.js"
+    "cli": "node src/cli.js",
+    "dev:up": "node scripts/dev-up.mjs",
+    "dev:seed": "node scripts/dev-seed.mjs",
+    "dev:e2e": "node scripts/dev-e2e.mjs",
+    "dev:down": "node scripts/dev-down.mjs",
+    "e2e": "node scripts/dev-e2e.mjs",
+    "e2e:local": "node scripts/dev-e2e.mjs",
+    "prisma:validate": "sh -c 'DATABASE_URL=${DATABASE_URL:-postgresql://raibitserver:raibitserver@localhost:5432/raibitserver} prisma validate --schema prisma/schema.prisma'",
+    "prisma:generate": "sh -c 'DATABASE_URL=${DATABASE_URL:-postgresql://raibitserver:raibitserver@localhost:5432/raibitserver} prisma generate --schema prisma/schema.prisma'"
   },
   "bin": {
     "raibitserver-prototype": "src/cli.js"
   },
   "devDependencies": {
-    "turbo": "latest",
-    "typescript": "latest"
+    "turbo": "2.9.14",
+    "typescript": "6.0.3",
+    "prisma": "6.19.0",
+    "@prisma/client": "6.19.0",
+    "yaml": "2.9.0",
+    "@types/node": "25.9.0",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3"
   },
   "keywords": [
     "paas",
@@ -39,5 +53,16 @@
     "monorepo",
     "go-controller"
   ],
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@11.1.2",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@nestjs/core",
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "sharp",
+      "msgpackr-extract"
+    ]
+  }
 }

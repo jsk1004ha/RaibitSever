@@ -65,9 +65,11 @@ export async function runCommand(command: CommandSpec, { dryRun = false, timeout
   const [exitCodeRaw] = await once(child, 'close');
   clearTimeout(timer);
   const exitCode = Number(exitCodeRaw ?? 0);
-  const result = { command: printable, executable: command.executable, args, cwd: command.cwd, dryRun: false, exitCode, stdout, stderr } satisfies CommandRunResult;
+  const safeStdout = redactCommandText(stdout);
+  const safeStderr = redactCommandText(stderr);
+  const result = { command: printable, executable: command.executable, args, cwd: command.cwd, dryRun: false, exitCode, stdout: safeStdout, stderr: safeStderr } satisfies CommandRunResult;
   if (exitCode !== 0) {
-    const error = new Error(`command failed (${exitCode}): ${printable}\n${stderr || stdout}`);
+    const error = new Error(`command failed (${exitCode}): ${printable}\n${safeStderr || safeStdout}`);
     (error as any).result = result;
     throw error;
   }
@@ -81,4 +83,10 @@ export async function commandExists(executable: string) {
   } catch {
     return false;
   }
+}
+
+function redactCommandText(value: string) {
+  return String(value || '')
+    .replace(/([A-Z0-9_]*(?:SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|MONGODB_URI|REDIS_URL)[A-Z0-9_]*=)([^\s]+)/gi, '$1****')
+    .replace(/(ghp_|github_pat_|glpat-|sk-[A-Za-z0-9_-]*|xox[baprs]-)[A-Za-z0-9_\-]+/g, '$1****');
 }

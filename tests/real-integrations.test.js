@@ -136,9 +136,9 @@ test('Prisma persistence contract and CI workflow are present', async () => {
   assert.match(schema, /model Deployment/);
   assert.match(schema, /provider = "postgresql"/);
   const ci = await fs.readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
-  assert.match(ci, /npm test/);
+  assert.match(ci, /pnpm test/);
   assert.match(ci, /go test/);
-  assert.match(ci, /prisma@6 validate/);
+  assert.match(ci, /pnpm prisma:validate/);
 
   const token = signJwtHs256({ sub: 'user-1', role: 'owner' }, 'secret');
   assert.equal(verifyJwtHs256(token, 'secret').role, 'owner');

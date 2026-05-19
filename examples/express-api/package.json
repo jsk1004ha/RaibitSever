@@ -1,0 +1,11 @@
+{
+  "name": "raibitserver-express-api-example",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "5.2.1"
+  }
+}

@@ -27,3 +27,6 @@ yarn-error.log*
 
 # RAIBITSERVER local execution workspace
 .raibitserver-work/
+
+# TypeScript incremental
+*.tsbuildinfo

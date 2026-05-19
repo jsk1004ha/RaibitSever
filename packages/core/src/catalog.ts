@@ -39,6 +39,16 @@ export const RESOURCE_CATALOG = Object.freeze({
     env: ['MONGODB_URI', 'MONGO_URL', 'MONGO_HOST', 'MONGO_DATABASE', 'MONGO_USER', 'MONGO_PASSWORD'],
     features: ['collection-browser', 'document-editor', 'index-management', 'backup-restore'],
   },
+  sqlite: {
+    type: 'database',
+    engine: 'sqlite',
+    displayName: 'SQLite',
+    defaultVersion: '3',
+    priority: 3,
+    operator: 'PVC-backed file database provider',
+    env: ['DATABASE_URL', 'SQLITE_PATH'],
+    features: ['sql-editor', 'table-browser', 'pvc-mount', 'single-writer-warning'],
+  },
   redis: {
     type: 'cache',
     engine: 'redis',
@@ -48,6 +58,16 @@ export const RESOURCE_CATALOG = Object.freeze({
     operator: 'Redis Operator / Redis Enterprise Operator / Upstash adapter',
     env: ['REDIS_URL', 'REDIS_HOST', 'REDIS_PORT', 'REDIS_PASSWORD'],
     features: ['key-browser', 'ttl', 'memory-usage', 'eviction-policy', 'pubsub-monitoring'],
+  },
+  valkey: {
+    type: 'cache',
+    engine: 'valkey',
+    displayName: 'Valkey',
+    defaultVersion: '8',
+    priority: 1,
+    operator: 'Valkey/Redis-compatible provider adapter',
+    env: ['REDIS_URL', 'VALKEY_URL', 'REDIS_HOST', 'REDIS_PORT', 'REDIS_PASSWORD'],
+    features: ['key-browser', 'ttl', 'memory-usage', 'pubsub-monitoring'],
   },
   'object-storage': {
     type: 'storage',
@@ -68,6 +88,26 @@ export const RESOURCE_CATALOG = Object.freeze({
     operator: 'Qdrant/Weaviate/Milvus provider adapter',
     env: ['VECTOR_DB_URL', 'VECTOR_DB_API_KEY', 'VECTOR_DB_COLLECTION'],
     features: ['collection-management', 'embedding-dimensions', 'similarity-search-test', 'usage-monitoring'],
+  },
+  qdrant: {
+    type: 'vector',
+    engine: 'qdrant',
+    displayName: 'Qdrant',
+    defaultVersion: 'latest',
+    priority: 2,
+    operator: 'Qdrant local/provider adapter',
+    env: ['VECTOR_DB_URL', 'VECTOR_DB_API_KEY', 'VECTOR_DB_COLLECTION'],
+    features: ['collection-management', 'similarity-search-test', 'usage-monitoring'],
+  },
+  nats: {
+    type: 'queue',
+    engine: 'nats',
+    displayName: 'NATS',
+    defaultVersion: 'latest',
+    priority: 2,
+    operator: 'NATS local/provider adapter',
+    env: ['QUEUE_URL', 'QUEUE_USERNAME', 'QUEUE_PASSWORD', 'QUEUE_TOPIC'],
+    features: ['subjects', 'jetstream-connection-info', 'usage-monitoring'],
   },
   'message-queue': {
     type: 'queue',
@@ -98,9 +138,13 @@ export function normalizeResourceEngine(engine) {
   if (['mysql'].includes(value)) return 'mysql';
   if (['mariadb'].includes(value)) return 'mariadb';
   if (['mongo', 'mongodb'].includes(value)) return 'mongodb';
-  if (['redis', 'valkey'].includes(value)) return 'redis';
+  if (['redis'].includes(value)) return 'redis';
+  if (['valkey'].includes(value)) return 'valkey';
+  if (['sqlite', 'sqlite3'].includes(value)) return 'sqlite';
   if (['s3', 'minio', 'object', 'object-storage', 'storage'].includes(value)) return 'object-storage';
-  if (['vector', 'vector-db', 'qdrant', 'weaviate', 'milvus'].includes(value)) return 'vector-db';
-  if (['queue', 'message-queue', 'nats', 'kafka', 'redpanda', 'rabbitmq'].includes(value)) return 'message-queue';
+  if (['qdrant'].includes(value)) return 'qdrant';
+  if (['vector', 'vector-db', 'weaviate', 'milvus'].includes(value)) return 'vector-db';
+  if (['nats'].includes(value)) return 'nats';
+  if (['queue', 'message-queue', 'kafka', 'redpanda', 'rabbitmq'].includes(value)) return 'message-queue';
   return value;
 }

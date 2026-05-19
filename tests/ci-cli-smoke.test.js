@@ -30,15 +30,18 @@ test('CI dry-run CLI smoke commands return stable PaaS and DBaaS artifacts', asy
 test('CI workflow keeps local smoke checks and Prisma validation environment', async () => {
   const ci = await fs.readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
   for (const command of [
-    'npm test',
+    'pnpm install --frozen-lockfile',
+    'pnpm test',
+    'pnpm typecheck',
     'node scripts/check-structure.js',
-    'npx -y -p typescript@latest tsc -p packages/core/tsconfig.json --noEmit',
     'node src/cli.js validate examples/project.json',
     'node src/cli.js manifest examples/project.json',
     'node src/cli.js compose examples/docker-compose.yml',
     'node src/cli.js provision-plan examples/project.json',
     'node src/cli.js k8s-apply examples/project.json',
-    'npx -y prisma@6 validate --schema prisma/schema.prisma',
+    'pnpm prisma:validate',
+    'pnpm prisma:generate',
+    'pnpm dev:e2e',
   ]) {
     assert.match(ci, new RegExp(escapeRegExp(command)));
   }

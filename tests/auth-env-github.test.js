@@ -28,7 +28,7 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
   await once(server, 'listening');
   const { port } = server.address();
   try {
-    const aliceSignup = await request(port, 'POST', '/auth/signup', { email: 'alice@example.com', password: 'correct-horse', organizationSlug: 'alice-org' });
+    const aliceSignup = await request(port, 'POST', '/auth/signup', { email: 'alice@example.com', password: 'correct-horse', organizationSlug: 'alice-org', accountType: 'CLUB_MEMBER', approvalStatus: 'APPROVED' });
     assert.equal(aliceSignup.statusCode, 201);
     assert.equal(Boolean(aliceSignup.body.token), true);
     assert.equal(aliceSignup.body.user.passwordHash, undefined);
