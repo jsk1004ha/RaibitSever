@@ -1,6 +1,8 @@
 import { DEFAULT_DOMAIN } from './constants.ts';
 import { slugify } from './ids.ts';
 
+type AnyRecord = Record<string, any>;
+
 export const SUBDOMAIN_ZONES = Object.freeze({
   DASHBOARD: 'app',
   API: 'api',
@@ -13,38 +15,38 @@ export const SUBDOMAIN_ZONES = Object.freeze({
   METRICS: 'metrics',
 });
 
-function joinLabel(...parts) {
+function joinLabel(...parts: any[]) {
   return parts.filter(Boolean).map((part) => slugify(part)).join('--');
 }
 
-export function serviceHostname({ organizationSlug = 'org', projectSlug = 'project', serviceName = 'service', baseDomain = DEFAULT_DOMAIN, customDomain = null, preview = null }) {
+export function serviceHostname({ organizationSlug = 'org', projectSlug = 'project', serviceName = 'service', baseDomain = DEFAULT_DOMAIN, customDomain = null, preview = null }: AnyRecord = {}) {
   if (customDomain) return customDomain;
   const label = joinLabel(preview, serviceName, projectSlug, organizationSlug);
   const zone = preview ? SUBDOMAIN_ZONES.PREVIEW : SUBDOMAIN_ZONES.APPS;
   return `${label}.${zone}.${baseDomain}`;
 }
 
-export function serviceConsoleHostname({ organizationSlug = 'org', projectSlug = 'project', serviceName = 'service', baseDomain = DEFAULT_DOMAIN }) {
+export function serviceConsoleHostname({ organizationSlug = 'org', projectSlug = 'project', serviceName = 'service', baseDomain = DEFAULT_DOMAIN }: AnyRecord = {}) {
   return `${joinLabel(serviceName, projectSlug, organizationSlug)}.${SUBDOMAIN_ZONES.CONSOLE}.${baseDomain}`;
 }
 
-export function resourceConsoleHostname({ organizationSlug = 'org', projectSlug = 'project', resourceName = 'resource', baseDomain = DEFAULT_DOMAIN }) {
+export function resourceConsoleHostname({ organizationSlug = 'org', projectSlug = 'project', resourceName = 'resource', baseDomain = DEFAULT_DOMAIN }: AnyRecord = {}) {
   return `${joinLabel(resourceName, projectSlug, organizationSlug)}.${SUBDOMAIN_ZONES.RESOURCES}.${baseDomain}`;
 }
 
-export function projectConsoleHostname({ organizationSlug = 'org', projectSlug = 'project', baseDomain = DEFAULT_DOMAIN }) {
+export function projectConsoleHostname({ organizationSlug = 'org', projectSlug = 'project', baseDomain = DEFAULT_DOMAIN }: AnyRecord = {}) {
   return `${joinLabel(projectSlug, organizationSlug)}.${SUBDOMAIN_ZONES.CONSOLE}.${baseDomain}`;
 }
 
-export function workspaceConsoleHostname({ organizationSlug = 'org', baseDomain = DEFAULT_DOMAIN }) {
+export function workspaceConsoleHostname({ organizationSlug = 'org', baseDomain = DEFAULT_DOMAIN }: AnyRecord = {}) {
   return `${slugify(organizationSlug)}.${SUBDOMAIN_ZONES.CONSOLE}.${baseDomain}`;
 }
 
-export function internalServiceHostname({ projectSlug = 'project', serviceName = 'service' }) {
+export function internalServiceHostname({ projectSlug = 'project', serviceName = 'service' }: AnyRecord = {}) {
   return `${slugify(serviceName)}.${slugify(projectSlug)}.svc.cluster.local`;
 }
 
-export function domainPlanForProject(spec = {}) {
+export function domainPlanForProject(spec: AnyRecord = {}) {
   const organization = spec.organization || { slug: spec.organizationSlug || 'default' };
   const project = spec.project || { name: spec.name || 'project', slug: spec.slug || spec.name || 'project' };
   const organizationSlug = slugify(organization.slug || organization.name || 'org');

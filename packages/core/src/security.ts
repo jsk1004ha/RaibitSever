@@ -1,5 +1,7 @@
 import { isSecretKey, maskSecrets } from './secrets.ts';
 
+type AnyRecord = Record<string, any>;
+
 export const DEFAULT_CONTAINER_SECURITY_CONTEXT = Object.freeze({
   runAsNonRoot: true,
   runAsUser: 10001,
@@ -14,7 +16,7 @@ export const DEFAULT_POD_SECURITY_CONTEXT = Object.freeze({
   seccompProfile: { type: 'RuntimeDefault' },
 });
 
-export function validateServiceSecurity(service = {}) {
+export function validateServiceSecurity(service: AnyRecord = {}) {
   const findings = [];
   if (service.privileged === true || service.securityContext?.privileged === true) {
     findings.push({ level: 'block', code: 'NO_PRIVILEGED', message: 'privileged containers are not allowed' });
@@ -40,7 +42,7 @@ export function validateServiceSecurity(service = {}) {
   };
 }
 
-export function secureContainerDefaults(service = {}) {
+export function secureContainerDefaults(service: AnyRecord = {}) {
   return {
     ...DEFAULT_CONTAINER_SECURITY_CONTEXT,
     ...(service.securityContext || {}),
@@ -49,7 +51,7 @@ export function secureContainerDefaults(service = {}) {
   };
 }
 
-export function guardDatabaseQuery(query, { confirmed = false, role = 'developer' } = {}) {
+export function guardDatabaseQuery(query: any, { confirmed = false, role = 'developer' }: AnyRecord = {}) {
   const text = String(query || '').trim();
   const normalized = text.replace(/\s+/g, ' ').toUpperCase();
   const destructive = /\b(DROP|TRUNCATE|ALTER|REINDEX|VACUUM\s+FULL)\b/.test(normalized)
@@ -65,16 +67,16 @@ export function guardDatabaseQuery(query, { confirmed = false, role = 'developer
   return { allowed: true, reason: 'query accepted', destructive };
 }
 
-export function sanitizeLogRecord(record) {
+export function sanitizeLogRecord(record: any) {
   if (typeof record === 'string') {
     return record.replace(/([A-Z0-9_]*(?:SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|MONGODB_URI|REDIS_URL)[A-Z0-9_]*=)([^\s]+)/gi, '$1****');
   }
   return maskSecrets(record);
 }
 
-export function splitEnvForSecret(environment = {}) {
-  const plain = {};
-  const secret = {};
+export function splitEnvForSecret(environment: AnyRecord = {}) {
+  const plain: AnyRecord = {};
+  const secret: AnyRecord = {};
   for (const [key, value] of Object.entries(environment)) {
     if (isSecretKey(key)) secret[key] = String(value);
     else plain[key] = String(value);

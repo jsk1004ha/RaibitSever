@@ -1,24 +1,26 @@
 import { getCatalogEntry, normalizeResourceEngine } from './catalog.ts';
 import { slugify } from './ids.ts';
 
-function hostFor(resource, projectSlug) {
+type AnyRecord = Record<string, any>;
+
+function hostFor(resource: AnyRecord, projectSlug: any) {
   const name = slugify(resource.name || resource.engine || 'resource');
   return resource.internalHost || `${name}.${slugify(projectSlug || resource.projectSlug || 'project')}.svc.cluster.local`;
 }
 
-function userFor(resource) {
+function userFor(resource: AnyRecord) {
   return resource.username || slugify(resource.name || resource.engine || 'app');
 }
 
-function passwordFor(resource) {
+function passwordFor(resource: AnyRecord) {
   return resource.password || `generated-${slugify(resource.name || resource.engine || 'secret')}-password`;
 }
 
-function databaseFor(resource) {
+function databaseFor(resource: AnyRecord) {
   return resource.databaseName || slugify(resource.database || resource.name || 'app');
 }
 
-export function connectionEnvForResource(resource, projectSlug = 'project') {
+export function connectionEnvForResource(resource: AnyRecord, projectSlug = 'project') {
   const engine = normalizeResourceEngine(resource.engine || resource.type);
   const entry = getCatalogEntry(engine);
   const host = hostFor(resource, projectSlug);
@@ -29,7 +31,7 @@ export function connectionEnvForResource(resource, projectSlug = 'project') {
   const bucket = resource.bucket || slugify(resource.name || 'bucket');
   const protocol = resource.tls ? 'rediss' : 'redis';
 
-  const env = {};
+  const env: AnyRecord = {};
   switch (entry.key) {
     case 'postgresql':
       env.DATABASE_URL = `postgresql://${username}:${password}@${host}:${port}/${database}`;
@@ -88,7 +90,7 @@ export function connectionEnvForResource(resource, projectSlug = 'project') {
   return env;
 }
 
-export function injectResourceEnv(service, resources = [], projectSlug = 'project') {
+export function injectResourceEnv(service: AnyRecord, resources: AnyRecord[] = [], projectSlug = 'project') {
   const base = { ...(service.environment || {}) };
   const attachedNames = new Set(service.attachedResources || resources.map((resource) => resource.name));
   for (const resource of resources) {
@@ -98,7 +100,7 @@ export function injectResourceEnv(service, resources = [], projectSlug = 'projec
   return base;
 }
 
-function defaultPort(engine) {
+function defaultPort(engine: string) {
   switch (engine) {
     case 'postgresql': return 5432;
     case 'mysql':

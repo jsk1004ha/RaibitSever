@@ -22,6 +22,8 @@ export interface ServiceSpec {
   buildMode?: BuildMode;
   repoUrl?: string;
   branch?: string;
+  commitSha?: string;
+  commitHash?: string;
   rootDirectory?: string;
   buildContext?: string;
   dockerfilePath?: string;

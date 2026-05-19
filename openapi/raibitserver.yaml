@@ -5,7 +5,26 @@ info:
   description: Desired-state API contract for the RAIBITSERVER PaaS + DBaaS control plane.
 servers:
   - url: https://api.raibitserver.app
+security:
+  - bearerAuth: []
 paths:
+  /auth/signup:
+    post:
+      summary: Register a user, create an owned organization, and return a scoped session JWT.
+      security: []
+      responses:
+        '201': { description: User, organization membership, and token created }
+  /auth/login:
+    post:
+      summary: Log in with email/password and return a scoped session JWT.
+      security: []
+      responses:
+        '200': { description: User memberships and token }
+  /config/runtime:
+    get:
+      summary: Return configured/unconfigured runtime keys with secret values masked.
+      responses:
+        '200': { description: Runtime configuration status }
   /orgs:
     post:
       summary: Create an organization workspace.
@@ -23,6 +42,10 @@ paths:
       responses:
         '200': { description: Project list }
   /projects:
+    get:
+      summary: List projects visible to the authenticated subject.
+      responses:
+        '200': { description: Scoped project list }
     post:
       summary: Store desired state for a new project.
       responses:
@@ -37,16 +60,89 @@ paths:
           schema: { type: string }
       responses:
         '201': { description: Created }
-  /services/{serviceId}/deployments:
+  /projects/{projectId}/services/{serviceId}/deployments:
     post:
-      summary: Queue a deployment workflow for a service.
+      summary: Queue a deployment workflow for a service in a scoped project.
       parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: { type: string }
         - name: serviceId
           in: path
           required: true
           schema: { type: string }
       responses:
-        '202': { description: Deployment queued }
+        '202': { description: Deployment and workflow job queued }
+  /projects/{projectId}/services/{serviceId}/env:
+    get:
+      summary: List masked environment variables for a service.
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: serviceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Masked service environment }
+    post:
+      summary: Upsert service environment variables and secret values.
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: serviceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Environment variables stored with secrets masked }
+  /projects/{projectId}/services/{serviceId}/env-file:
+    post:
+      summary: Upload .env file content for a service.
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: serviceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Parsed .env entries stored with secret masking }
+  /integrations/github:
+    get:
+      summary: List GitHub integrations visible to an organization-scoped subject.
+      parameters:
+        - name: organizationId
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200': { description: GitHub integrations }
+    post:
+      summary: Connect a GitHub token/App installation to an organization.
+      responses:
+        '201': { description: GitHub integration stored with token masked }
+  /projects/{projectId}/services/{serviceId}/github:
+    post:
+      summary: Attach a GitHub repository/integration to a service desired state.
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: serviceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Service source updated to GitHub repository }
   /projects/{projectId}/resources:
     post:
       summary: Add a managed database/storage/cache resource desired state.
@@ -72,7 +168,37 @@ paths:
       summary: Attach and verify a custom domain.
       responses:
         '202': { description: Domain verification started }
+  /plan/source:
+    post:
+      summary: Plan a real Git/GitHub checkout command.
+      responses:
+        '200': { description: Checkout plan }
+  /plan/build-execution:
+    post:
+      summary: Plan Docker/BuildKit build and registry push commands.
+      responses:
+        '200': { description: Build execution plan }
+  /plan/registry-push:
+    post:
+      summary: Plan a registry push command for an image.
+      responses:
+        '200': { description: Registry push plan }
+  /plan/kubernetes-apply:
+    post:
+      summary: Plan kubectl apply for compiled desired-state manifests without executing it.
+      responses:
+        '200': { description: Kubernetes apply plan }
+  /plan/provisioning:
+    post:
+      summary: Plan managed resource provisioning CRs and credential secrets.
+      responses:
+        '200': { description: Provisioning plan }
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   schemas:
     Project:
       type: object

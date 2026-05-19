@@ -4,9 +4,11 @@ import http from 'node:http';
 import { once } from 'node:events';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
+import { InMemoryControlPlaneRepository } from '../packages/core/src/persistence.ts';
 
 test('HTTP API serves health, catalog, and manifest planning', async () => {
-  const server = http.createServer(createApiHandler(new RAIBITSERVERControlPlane()));
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'disabled', allowDisabled: true } }));
   server.listen(0);
   await once(server, 'listening');
   const { port } = server.address();
@@ -27,6 +29,13 @@ test('HTTP API serves health, catalog, and manifest planning', async () => {
       resources: [],
     });
     assert.equal(manifest.manifests.some((m) => m.kind === 'Ingress'), true);
+
+    const project = controlPlane.store.createProject({ organizationId: org.id, name: 'demo', slug: 'demo' });
+    const service = controlPlane.store.createService({ projectId: project.id, name: 'api' });
+    const deployment = controlPlane.store.createDeployment({ serviceId: service.id });
+    const job = controlPlane.store.enqueueWorkflowJob({ type: 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id } });
+    assert.equal(job.status, 'queued');
+    assert.equal(controlPlane.store.snapshot().workflowJobs.length, 1);
   } finally {
     server.close();
   }
@@ -51,3 +60,13 @@ function request(port, method, path, body) {
     req.end();
   });
 }
+
+
+test('repository creates deployment and workflow job as one operation', async () => {
+  const repository = new InMemoryControlPlaneRepository();
+  const project = await repository.createProject({ organizationId: 'org-1', name: 'demo', slug: 'demo' });
+  const service = await repository.createService({ projectId: project.id, name: 'api' });
+  const { deployment, workflowJob } = await repository.createDeploymentWorkflow({ deployment: { serviceId: service.id }, workflow: { payload: { serviceId: service.id } } });
+  assert.equal(workflowJob.targetId, deployment.id);
+  assert.equal((await repository.snapshot()).workflowJobs.length, 1);
+});

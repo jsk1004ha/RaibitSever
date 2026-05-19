@@ -6,6 +6,14 @@ import { ControlPlaneStore } from './store.ts';
 import { checkQuota } from './quota.ts';
 import { validateServiceSecurity, guardDatabaseQuery } from './security.ts';
 import { metricSeries, alertPolicies } from './observability.ts';
+import { sourceCheckoutPlan } from './source-control.ts';
+import { buildExecutionPlan } from './build-executor.ts';
+import { registryPushPlan } from './registry.ts';
+import { kubernetesApplyPlan } from './kubernetes.ts';
+import { compileProjectProvisioning } from './provisioner.ts';
+import { runtimeConfigStatus } from './config.ts';
+import { parseDotEnv } from './env-file.ts';
+import { parseGitHubRepository } from './github-integration.ts';
 import type { ProjectSpec, ResourceSpec, ServiceSpec } from './types.ts';
 
 export class RAIBITSERVERControlPlane {
@@ -19,6 +27,10 @@ export class RAIBITSERVERControlPlane {
     return listCatalog();
   }
 
+  configStatus(env: Record<string, any> = process.env) {
+    return runtimeConfigStatus(env);
+  }
+
   planBuild(service: ServiceSpec, files: Record<string, string> = {}) {
     return resolveBuildStrategy(service, files);
   }
@@ -29,6 +41,35 @@ export class RAIBITSERVERControlPlane {
 
   compileManifests(projectSpec: ProjectSpec, filesByService: Record<string, Record<string, string>> = {}) {
     return compileProject(projectSpec, filesByService);
+  }
+
+  planSourceCheckout(service: ServiceSpec, options: Record<string, unknown> = {}) {
+    return sourceCheckoutPlan(service, options);
+  }
+
+  planBuildExecution(service: ServiceSpec, files: Record<string, string> = {}, options: Record<string, unknown> = {}) {
+    return buildExecutionPlan(service, files, options);
+  }
+
+  planRegistryPush(image: string) {
+    return registryPushPlan(image);
+  }
+
+  planKubernetesApply(projectSpec: ProjectSpec, filesByService: Record<string, Record<string, string>> = {}, options: Record<string, unknown> = {}) {
+    const compiled = compileProject(projectSpec, filesByService);
+    return { compiled, apply: kubernetesApplyPlan(compiled.manifests, options) };
+  }
+
+  planProvisioning(projectSpec: ProjectSpec) {
+    return compileProjectProvisioning(projectSpec);
+  }
+
+  parseEnvFile(text: string, options: Record<string, unknown> = {}) {
+    return parseDotEnv(text, options);
+  }
+
+  parseGitHubRepository(input: string | Record<string, unknown>) {
+    return parseGitHubRepository(input);
   }
 
   validateProject(projectSpec: ProjectSpec) {

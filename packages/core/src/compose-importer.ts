@@ -1,11 +1,13 @@
 import { normalizeResourceEngine } from './catalog.ts';
 import { slugify } from './ids.ts';
 
-function stripQuotes(value) {
+type AnyRecord = Record<string, any>;
+
+function stripQuotes(value: any) {
   return String(value ?? '').trim().replace(/^['"]|['"]$/g, '');
 }
 
-function parseScalar(value) {
+function parseScalar(value: any) {
   const raw = stripQuotes(value);
   if (raw === 'true') return true;
   if (raw === 'false') return false;
@@ -14,12 +16,12 @@ function parseScalar(value) {
 }
 
 export function parseComposeYaml(text) {
-  const services = {};
+  const services: AnyRecord = {};
   const lines = String(text || '').split(/\r?\n/);
   let inServices = false;
-  let currentName = null;
-  let currentProp = null;
-  let nestedObject = null;
+  let currentName: string | null = null;
+  let currentProp: string | null = null;
+  let nestedObject: string | null = null;
 
   for (const originalLine of lines) {
     const lineWithoutComment = originalLine.replace(/\s+#.*$/, '');
@@ -78,12 +80,13 @@ export function parseComposeYaml(text) {
   return { services };
 }
 
-export function importCompose(text, { projectName = 'compose-project' } = {}) {
+export function importCompose(text: any, { projectName = 'compose-project' }: AnyRecord = {}) {
   const parsed = parseComposeYaml(text);
   const services = [];
   const resources = [];
 
-  for (const [name, spec] of Object.entries(parsed.services || {})) {
+  for (const [name, rawSpec] of Object.entries(parsed.services || {})) {
+    const spec = rawSpec as AnyRecord;
     const image = String(spec.image || '').toLowerCase();
     const resourceEngine = detectResourceEngine(name, image);
     if (resourceEngine) {
@@ -130,13 +133,13 @@ export function importCompose(text, { projectName = 'compose-project' } = {}) {
   };
 }
 
-function normalizeBuild(build) {
+function normalizeBuild(build: any) {
   if (!build) return null;
   if (typeof build === 'string') return { context: build, dockerfile: 'Dockerfile' };
   return { context: build.context || '.', dockerfile: build.dockerfile || 'Dockerfile' };
 }
 
-function normalizePorts(ports) {
+function normalizePorts(ports: any) {
   return (Array.isArray(ports) ? ports : []).map((port) => {
     const text = String(port);
     const parts = text.split(':');
@@ -146,7 +149,7 @@ function normalizePorts(ports) {
   }).filter((port) => Number.isFinite(port.containerPort));
 }
 
-function normalizeEnvironment(environment) {
+function normalizeEnvironment(environment: any) {
   if (Array.isArray(environment)) {
     return Object.fromEntries(environment.map((entry) => {
       const [key, ...valueParts] = String(entry).split('=');
@@ -156,9 +159,9 @@ function normalizeEnvironment(environment) {
   return { ...environment };
 }
 
-function detectResourceEngine(name, image) {
+function detectResourceEngine(name: any, image: any) {
   const haystack = `${name} ${image}`.toLowerCase();
-  const rules = [
+  const rules: Array<[string, RegExp]> = [
     ['postgresql', /(postgres|postgis)/],
     ['mysql', /\bmysql\b/],
     ['mariadb', /mariadb/],
@@ -172,7 +175,7 @@ function detectResourceEngine(name, image) {
   return match ? normalizeResourceEngine(match[0]) : null;
 }
 
-function resourceType(engine) {
+function resourceType(engine: string) {
   if (['postgresql', 'mysql', 'mariadb', 'mongodb'].includes(engine)) return 'database';
   if (engine === 'redis') return 'cache';
   if (engine === 'object-storage') return 'storage';
@@ -181,7 +184,7 @@ function resourceType(engine) {
   return 'resource';
 }
 
-function inferNonHttpType(name, image) {
+function inferNonHttpType(name: any, image: any) {
   const value = `${name} ${image}`.toLowerCase();
   if (/cron|schedule/.test(value)) return 'cron';
   if (/worker|bot|consumer|crawler/.test(value)) return 'worker';

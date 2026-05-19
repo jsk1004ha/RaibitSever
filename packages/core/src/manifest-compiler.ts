@@ -6,17 +6,19 @@ import { getCatalogEntry, normalizeResourceEngine } from './catalog.ts';
 import { slugify } from './ids.ts';
 import { domainPlanForProject, serviceHostname } from './domain-router.ts';
 
-export function compileProject(spec = {}, filesByService = {}) {
+type AnyRecord = Record<string, any>;
+
+export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord = {}) {
   const organization = spec.organization || { slug: spec.organizationSlug || 'default' };
   const project = spec.project || { name: spec.name || 'project', slug: spec.slug || spec.name || 'project' };
   const projectSlug = slugify(project.slug || project.name);
   const organizationSlug = slugify(organization.slug || organization.name || 'org');
   const baseDomain = spec.baseDomain || DEFAULT_DOMAIN;
   const namespace = slugify(`${organization.slug || organization.name || 'org'}-${projectSlug}`);
-  const services = spec.services || [];
-  const resources = spec.resources || [];
-  const manifests = [namespaceManifest(namespace, projectSlug)];
-  const buildPlans = [];
+  const services: AnyRecord[] = spec.services || [];
+  const resources: AnyRecord[] = spec.resources || [];
+  const manifests: AnyRecord[] = [namespaceManifest(namespace, projectSlug)];
+  const buildPlans: AnyRecord[] = [];
   const resourcePlans = resources.map((resource) => resourcePlan(resource, namespace, projectSlug));
 
   for (const service of services) {
@@ -58,14 +60,14 @@ export function compileProject(spec = {}, filesByService = {}) {
   };
 }
 
-function compileService({ namespace, organizationSlug, projectSlug, baseDomain, service, resources, image }) {
+function compileService({ namespace, organizationSlug, projectSlug, baseDomain, service, resources, image }: AnyRecord) {
   const serviceName = slugify(service.name);
   const type = service.type || SERVICE_TYPES.WEB;
   const port = Number(service.port || DEFAULT_PORT);
   const env = injectResourceEnv(service, resources, projectSlug);
   const { plain, secret } = splitEnvForSecret(env);
   const labels = labelsFor(projectSlug, serviceName, type);
-  const out = [];
+  const out: AnyRecord[] = [];
 
   if (Object.keys(secret).length) out.push(secretManifest(namespace, `${serviceName}-env`, labels, secret));
   if (Object.keys(plain).length) out.push(configMapManifest(namespace, `${serviceName}-config`, labels, plain));
@@ -93,7 +95,7 @@ function compileService({ namespace, organizationSlug, projectSlug, baseDomain, 
   return out;
 }
 
-function namespaceManifest(namespace, projectSlug) {
+function namespaceManifest(namespace: string, projectSlug: string): AnyRecord {
   return {
     apiVersion: 'v1',
     kind: 'Namespace',
@@ -107,7 +109,7 @@ function namespaceManifest(namespace, projectSlug) {
   };
 }
 
-function labelsFor(projectSlug, serviceName, type) {
+function labelsFor(projectSlug: string, serviceName: string, type: string): AnyRecord {
   return {
     'app.kubernetes.io/name': serviceName,
     'app.kubernetes.io/managed-by': 'raibitserver',
@@ -117,13 +119,13 @@ function labelsFor(projectSlug, serviceName, type) {
   };
 }
 
-function envRefs(plain, secret, secretName) {
+function envRefs(plain: AnyRecord, secret: AnyRecord, secretName: string): AnyRecord[] {
   const values = Object.keys(plain).map((key) => ({ name: key, valueFrom: { configMapKeyRef: { name: secretName.replace('-env', '-config'), key } } }));
   const secrets = Object.keys(secret).map((key) => ({ name: key, valueFrom: { secretKeyRef: { name: secretName, key } } }));
   return [...values, ...secrets];
 }
 
-function containerFor(service, image, port, plain, secret) {
+function containerFor(service: AnyRecord, image: string, port: number, plain: AnyRecord, secret: AnyRecord): AnyRecord {
   const serviceName = slugify(service.name);
   return {
     name: serviceName,
@@ -143,7 +145,7 @@ function containerFor(service, image, port, plain, secret) {
   };
 }
 
-function podSpec(service, image, port, plain, secret, restartPolicy = 'Always') {
+function podSpec(service: AnyRecord, image: string, port: number, plain: AnyRecord, secret: AnyRecord, restartPolicy = 'Always'): AnyRecord {
   return {
     securityContext: DEFAULT_POD_SECURITY_CONTEXT,
     restartPolicy,
@@ -152,7 +154,7 @@ function podSpec(service, image, port, plain, secret, restartPolicy = 'Always') 
   };
 }
 
-function deploymentManifest(namespace, service, labels, image, port, plain, secret) {
+function deploymentManifest(namespace: string, service: AnyRecord, labels: AnyRecord, image: string, port: number, plain: AnyRecord, secret: AnyRecord): AnyRecord {
   const serviceName = slugify(service.name);
   const replicas = service.sleepPolicy === 'scale-to-zero' ? 0 : Number(service.scaling?.minReplicas ?? service.replicas ?? 1);
   return {
@@ -171,7 +173,7 @@ function deploymentManifest(namespace, service, labels, image, port, plain, secr
   };
 }
 
-function cronJobManifest(namespace, service, labels, image, port, plain, secret) {
+function cronJobManifest(namespace: string, service: AnyRecord, labels: AnyRecord, image: string, port: number, plain: AnyRecord, secret: AnyRecord): AnyRecord {
   const serviceName = slugify(service.name);
   return {
     apiVersion: 'batch/v1',
@@ -192,7 +194,7 @@ function cronJobManifest(namespace, service, labels, image, port, plain, secret)
   };
 }
 
-function jobManifest(namespace, service, labels, image, port, plain, secret) {
+function jobManifest(namespace: string, service: AnyRecord, labels: AnyRecord, image: string, port: number, plain: AnyRecord, secret: AnyRecord): AnyRecord {
   const serviceName = slugify(service.name);
   return {
     apiVersion: 'batch/v1',
@@ -205,7 +207,7 @@ function jobManifest(namespace, service, labels, image, port, plain, secret) {
   };
 }
 
-function serviceManifest(namespace, serviceName, labels, port) {
+function serviceManifest(namespace: string, serviceName: string, labels: AnyRecord, port: number): AnyRecord {
   return {
     apiVersion: 'v1',
     kind: 'Service',
@@ -218,7 +220,7 @@ function serviceManifest(namespace, serviceName, labels, port) {
   };
 }
 
-function ingressManifest(namespace, service, organizationSlug, projectSlug, baseDomain, labels, port) {
+function ingressManifest(namespace: string, service: AnyRecord, organizationSlug: string, projectSlug: string, baseDomain: string, labels: AnyRecord, port: number): AnyRecord {
   const serviceName = slugify(service.name);
   const host = serviceHostname({
     organizationSlug,
@@ -247,7 +249,7 @@ function ingressManifest(namespace, service, organizationSlug, projectSlug, base
   };
 }
 
-function hpaManifest(namespace, serviceName, scaling) {
+function hpaManifest(namespace: string, serviceName: string, scaling: AnyRecord): AnyRecord {
   return {
     apiVersion: 'autoscaling/v2',
     kind: 'HorizontalPodAutoscaler',
@@ -261,7 +263,7 @@ function hpaManifest(namespace, serviceName, scaling) {
   };
 }
 
-function pdbManifest(namespace, serviceName, labels, availability = {}) {
+function pdbManifest(namespace: string, serviceName: string, labels: AnyRecord, availability: AnyRecord = {}): AnyRecord {
   return {
     apiVersion: 'policy/v1',
     kind: 'PodDisruptionBudget',
@@ -273,7 +275,7 @@ function pdbManifest(namespace, serviceName, labels, availability = {}) {
   };
 }
 
-function secretManifest(namespace, name, labels, data) {
+function secretManifest(namespace: string, name: string, labels: AnyRecord, data: AnyRecord): AnyRecord {
   return {
     apiVersion: 'v1',
     kind: 'Secret',
@@ -283,7 +285,7 @@ function secretManifest(namespace, name, labels, data) {
   };
 }
 
-function configMapManifest(namespace, name, labels, data) {
+function configMapManifest(namespace: string, name: string, labels: AnyRecord, data: AnyRecord): AnyRecord {
   return {
     apiVersion: 'v1',
     kind: 'ConfigMap',
@@ -292,7 +294,7 @@ function configMapManifest(namespace, name, labels, data) {
   };
 }
 
-function httpProbe(path, port) {
+function httpProbe(path: string, port: number): AnyRecord {
   return {
     httpGet: { path, port: 'http' },
     initialDelaySeconds: 10,
@@ -302,7 +304,7 @@ function httpProbe(path, port) {
   };
 }
 
-function networkPolicyManifest(namespace, services, resources) {
+function networkPolicyManifest(namespace: string, services: AnyRecord[], resources: AnyRecord[]): AnyRecord {
   const serviceNames = services.map((service) => slugify(service.name));
   const resourceNames = resources.map((resource) => slugify(resource.name));
   return {
@@ -330,7 +332,7 @@ function networkPolicyManifest(namespace, services, resources) {
   };
 }
 
-function resourcePlan(resource, namespace, projectSlug) {
+function resourcePlan(resource: AnyRecord, namespace: string, projectSlug: string): AnyRecord {
   const engine = normalizeResourceEngine(resource.engine || resource.type);
   const entry = getCatalogEntry(engine);
   return {

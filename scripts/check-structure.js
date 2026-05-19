@@ -15,6 +15,9 @@ const required = [
   'infra/terraform/main.tf',
   'infra/helm/raibitserver/Chart.yaml',
   'deploy/local/docker-compose.yml',
+  'infra/operators/managedresources-crd.yaml',
+  '.github/workflows/ci.yml',
+  'prisma/schema.prisma',
 ];
 
 const missing = required.filter((path) => !fs.existsSync(path));

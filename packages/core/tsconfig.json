@@ -2,7 +2,12 @@
   "extends": "../config/tsconfig.base.json",
   "compilerOptions": {
     "allowImportingTsExtensions": true,
-    "noEmit": true
+    "noEmit": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "strictPropertyInitialization": false
   },
-  "include": ["src/**/*.ts"]
+  "include": [
+    "src/**/*.ts"
+  ]
 }

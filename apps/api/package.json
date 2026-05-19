@@ -14,14 +14,14 @@
     "@nestjs/common": "latest",
     "@nestjs/core": "latest",
     "@nestjs/platform-express": "latest",
-    "@prisma/client": "latest",
+    "@prisma/client": "^6.19.0",
     "bullmq": "latest",
     "zod": "latest",
     "@raibitserver/core": "workspace:*"
   },
   "devDependencies": {
     "@nestjs/cli": "latest",
-    "prisma": "latest",
+    "prisma": "^6.19.0",
     "typescript": "latest"
   }
 }

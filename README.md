@@ -48,7 +48,7 @@ RAIBITSERVER/
 │  ├─ terraform/              # cloud/DNS/registry/base infra skeleton
 │  ├─ helm/raibitserver/      # control plane + infra services Helm chart skeleton
 │  ├─ k8s/                    # AppService CRD 등 raw manifest
-│  └─ operators/              # ManagedDatabase CRD 등 operator 확장
+│  └─ operators/              # ManagedDatabase/ManagedCache/Storage/Queue 등 operator 확장
 │
 ├─ deploy/
 │  ├─ local/                  # local PostgreSQL/Redis/MinIO compose
@@ -104,6 +104,159 @@ RAIBITSERVER/
 
 ---
 
+
+---
+
+## Production-capable execution paths
+
+이전 prototype은 대부분 plan/manifests만 만들었습니다. 현재 구현은 **기본값은 dry-run**이지만 CLI에서 `--execute`를 명시하거나 Go worker에 `RAIBITSERVER_EXECUTE=1`을 설정하면 실제 도구를 실행할 수 있는 adapter를 포함합니다. HTTP API는 실제 실행을 직접 수행하지 않고 desired state/plan/queue 경계만 담당합니다. 로컬 테스트는 여전히 GitHub, Docker, registry, Kubernetes, PostgreSQL 자격증명 없이 통과합니다.
+
+### 실제 GitHub/Git clone
+
+- Core: `packages/core/src/source-control.ts`
+- CLI:
+
+```sh
+node src/cli.js source-plan examples/project.json --service web
+node src/cli.js clone examples/project.json --service web --workspace .raibitserver-work --execute
+```
+
+GitHub token은 `githubToken`/`token` 옵션으로 전달할 수 있고 출력에는 redaction됩니다.
+
+### 실제 Docker/BuildKit build + registry push
+
+- Core: `packages/core/src/build-executor.ts`, `packages/core/src/registry.ts`
+- Go worker: `services/builder/main.go`
+- CLI dry-run/build 실행:
+
+```sh
+node src/cli.js build-execute examples/project.json --service api --builder docker-buildx --push
+node src/cli.js build-execute examples/project.json --service api --builder docker-buildx --push --execute
+node src/cli.js registry-push ghcr.io/acme/festival-api:2026 --execute
+```
+
+Dockerfile이 있으면 사용자 Dockerfile을 그대로 우선 사용하고, `--push`는 `docker buildx build --push`를 실행합니다. `--execute`가 없으면 실행하지 않고 command/evidence만 생성합니다.
+
+### 실제 Kubernetes apply
+
+- Core: `packages/core/src/kubernetes.ts`
+- Go reconciler CLI: `services/orchestrator/main.go`
+- CLI:
+
+```sh
+node src/cli.js k8s-apply examples/project.json
+node src/cli.js k8s-apply examples/project.json --kubeconfig ~/.kube/config --context prod --execute
+```
+
+컴파일된 manifest는 Kubernetes `List` JSON으로 임시 파일에 저장되고 `kubectl apply --server-side -f <file>`로 적용됩니다.
+
+### 실제 managed DB/resource provisioning path
+
+- Core: `packages/core/src/provisioner.ts`
+- Go provisioner CLI: `services/provisioner/main.go`
+- CLI:
+
+```sh
+node src/cli.js provision-plan examples/project.json
+node src/cli.js provision examples/project.json --execute
+```
+
+PostgreSQL/MySQL/MariaDB/MongoDB resource는 `ManagedDatabase`, Redis는 `ManagedCache`, Object Storage는 `ManagedObjectStorage`, Vector DB는 `ManagedVectorDatabase`, Queue는 `ManagedMessageQueue` desired-state CR + credential Secret으로 컴파일됩니다. 실제 provisioning은 cluster에 RAIBITSERVER provisioner/operator가 설치되어 있을 때 `kubectl apply` 후 reconcile됩니다.
+
+### 실제 Prisma persistence
+
+- Prisma schema: `prisma/schema.prisma`
+- Repository adapter: `packages/core/src/persistence.ts`
+- NestJS service: `apps/api/src/raibitserver.service.ts`
+
+Production API에서 다음 환경변수를 설정하면 desired state가 PostgreSQL에 Prisma로 저장됩니다.
+
+```sh
+export RAIBITSERVER_PERSISTENCE=prisma
+export DATABASE_URL=postgresql://raibitserver:secret@postgres:5432/raibitserver
+npx prisma migrate deploy --schema prisma/schema.prisma
+npm run dev --workspace apps/api
+```
+
+### 실제 auth/RBAC enforcement
+
+- Core: `packages/core/src/auth.ts`
+- Signup/login/password hashing: `packages/core/src/identity.ts`
+- HTTP API integration: `packages/core/src/api.ts`
+- NestJS guard: `apps/api/src/auth/rbac.guard.ts`
+
+HTTP/Nest API auth는 기본적으로 fail-closed입니다. `RAIBITSERVER_AUTH_JWT_SECRET`이 없으면 보호된 endpoint는 401을 반환하며, 로컬 prototype에서만 `RAIBITSERVER_AUTH_DISABLED=1`을 명시해 비활성화할 수 있습니다. Secret을 설정하면 HS256 Bearer JWT + RBAC permission + organization/project scope가 enforcement됩니다.
+
+```sh
+export RAIBITSERVER_AUTH_JWT_SECRET='change-me'
+TOKEN=$(RAIBITSERVER_AUTH_JWT_SECRET='change-me' node src/cli.js auth-token --role owner --sub user-1 | jq -r .token)  # add scoped claims in production issuers
+curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/snapshot
+```
+
+회원가입/로그인 endpoint도 추가되어 사용자는 자기 organization scope가 들어간 JWT를 받습니다. 이후 프로젝트/서비스/환경변수/GitHub 연동 API는 이 scope를 기준으로 필터링/차단됩니다.
+
+```sh
+curl -X POST http://localhost:3000/auth/signup \
+  -H 'content-type: application/json' \
+  -d '{"email":"alice@example.com","password":"correct-horse","organizationSlug":"alice-org"}'
+
+curl -X POST http://localhost:3000/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"email":"alice@example.com","password":"correct-horse"}'
+```
+
+### Runtime key/config + .env upload
+
+- Runtime key catalog: `packages/core/src/config.ts`
+- `.env` parser/secret classifier: `packages/core/src/env-file.ts`
+- API: `GET /config/runtime`, `POST /projects/{projectId}/services/{serviceId}/env`, `POST /projects/{projectId}/services/{serviceId}/env-file`
+- CLI:
+
+```sh
+node src/cli.js config
+node src/cli.js env-parse .env.production
+```
+
+운영에 중요한 key는 env로 명시 설정할 수 있습니다.
+
+| Key | 용도 |
+| --- | --- |
+| `RAIBITSERVER_AUTH_JWT_SECRET` | signup/login 및 API Bearer JWT 서명 |
+| `RAIBITSERVER_SECRET_ENCRYPTION_KEY` | production secret store 암호화 키 |
+| `RAIBITSERVER_GITHUB_CLIENT_ID` / `RAIBITSERVER_GITHUB_CLIENT_SECRET` | GitHub OAuth/App 연동 |
+| `RAIBITSERVER_GITHUB_WEBHOOK_SECRET` | GitHub webhook HMAC 검증 |
+| `RAIBITSERVER_REGISTRY_USERNAME` / `RAIBITSERVER_REGISTRY_PASSWORD` | 기본 registry 인증 |
+| `DATABASE_URL` | Prisma/PostgreSQL persistence |
+
+`.env` 업로드는 `DATABASE_URL`, `API_KEY`, `TOKEN`, `PASSWORD` 같은 secret-looking key를 자동 secret으로 분류하고 응답/snapshot/CLI 출력에는 masked value만 반환합니다. 실제 workload manifest 생성 시에는 기존 `Secret`/`ConfigMap` 분리 규칙을 그대로 사용합니다.
+
+```sh
+curl -X POST "$API/projects/$PROJECT_ID/services/$SERVICE_ID/env-file" \
+  -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"filename":".env.production","content":"PUBLIC_URL=https://app.example\\nDATABASE_URL=postgresql://user:pass@db/app\\nAPI_KEY=secret"}'
+```
+
+### GitHub integration
+
+- GitHub helper: `packages/core/src/github-integration.ts`
+- API: `POST /integrations/github`, `GET /integrations/github`, `POST /projects/{projectId}/services/{serviceId}/github`
+- CLI:
+
+```sh
+node src/cli.js github-repo owner/repo
+```
+
+조직 owner/admin은 GitHub token 또는 App installation metadata를 연결할 수 있습니다. Token은 raw 값으로 응답하지 않고 preview/fingerprint만 저장·노출합니다. 서비스에는 GitHub repository를 attach하여 `sourceType=github`, `repoUrl`, `branch`, `githubIntegrationId` desired state를 저장합니다. 실제 private repo clone은 builder/CLI execution path에서 integration token을 `GIT_ASKPASS` 방식으로 주입하는 구조를 사용합니다.
+
+### 실제 CI
+
+GitHub Actions workflow가 `.github/workflows/ci.yml`에 추가되었습니다.
+
+- Node 24: `npm test`, structure check, CLI validate/manifest/compose/provision/k8s dry-run
+- Go 1.22: Go service `go test ./...`
+- Prisma: `npx prisma validate --schema prisma/schema.prisma`
+
 ## 빠른 검증
 
 요구사항: Node.js 24 이상 권장. 현재 testable prototype은 Node의 TypeScript 실행 지원을 사용하므로 외부 npm install 없이 실행됩니다.
@@ -115,6 +268,8 @@ node src/cli.js catalog
 node src/cli.js validate examples/project.json
 node src/cli.js manifest examples/project.json > /tmp/raibitserver-manifest.json
 node src/cli.js compose examples/docker-compose.yml > /tmp/raibitserver-compose-plan.json
+node src/cli.js provision-plan examples/project.json > /tmp/raibitserver-provision-plan.json
+node src/cli.js k8s-apply examples/project.json > /tmp/raibitserver-k8s-apply.json
 npm run start:prototype-api
 ```
 
@@ -399,6 +554,10 @@ node src/cli.js catalog
 node src/cli.js validate examples/project.json
 node src/cli.js manifest examples/project.json
 node src/cli.js compose examples/docker-compose.yml
+node src/cli.js source-plan examples/project.json --service web
+node src/cli.js build-execute examples/project.json --service api --push        # dry-run by default
+node src/cli.js k8s-apply examples/project.json                                # dry-run by default
+node src/cli.js provision-plan examples/project.json
 RAIBITSERVER_CONFIRMED=1 node src/cli.js guard-query "DROP TABLE users"
 ```
 
@@ -438,7 +597,7 @@ OpenAPI contract는 `openapi/raibitserver.yaml`에 있습니다.
 초기 Prisma schema skeleton:
 
 ```txt
-apps/api/prisma/schema.prisma
+prisma/schema.prisma
 ```
 
 핵심 엔티티:

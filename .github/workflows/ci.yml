@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    name: Node verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm test
+      - run: node scripts/check-structure.js
+      - run: npx -y -p typescript@latest tsc -p packages/core/tsconfig.json --noEmit
+      - run: node src/cli.js validate examples/project.json
+      - run: node src/cli.js manifest examples/project.json >/tmp/raibitserver-manifest.json
+      - run: node src/cli.js compose examples/docker-compose.yml >/tmp/raibitserver-compose-plan.json
+      - run: node src/cli.js provision-plan examples/project.json >/tmp/raibitserver-provision-plan.json
+      - run: node src/cli.js k8s-apply examples/project.json >/tmp/raibitserver-k8s-apply.json
+
+  go:
+    name: Go services build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+      - run: |
+          for dir in services/builder services/orchestrator services/provisioner services/log-ingester services/metrics-ingester; do
+            test -f "$dir/go.mod"
+            (cd "$dir" && go test ./... && go build ./...)
+          done
+
+  prisma:
+    name: Prisma schema validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npx -y prisma@6 validate --schema prisma/schema.prisma
+        env:
+          DATABASE_URL: postgresql://raibitserver:raibitserver@localhost:5432/raibitserver

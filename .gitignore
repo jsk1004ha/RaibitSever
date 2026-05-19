@@ -24,3 +24,6 @@ yarn-error.log*
 .DS_Store
 /tmp/
 .omx/
+
+# RAIBITSERVER local execution workspace
+.raibitserver-work/

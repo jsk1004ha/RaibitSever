@@ -3,7 +3,9 @@ import { detectFramework } from './framework-detector.ts';
 import { slugify } from './ids.ts';
 import { serviceHostname } from './domain-router.ts';
 
-function normalizeMode(mode) {
+type AnyRecord = Record<string, any>;
+
+function normalizeMode(mode: any) {
   if (!mode) return BUILD_MODES.AUTO;
   const value = String(mode).toLowerCase();
   if (['dockerfile', 'docker'].includes(value)) return BUILD_MODES.DOCKERFILE;
@@ -13,11 +15,11 @@ function normalizeMode(mode) {
   return BUILD_MODES.AUTO;
 }
 
-function hasDockerfile(files = {}, dockerfilePath = 'Dockerfile') {
+function hasDockerfile(files: AnyRecord = {}, dockerfilePath = 'Dockerfile') {
   return Object.prototype.hasOwnProperty.call(files, dockerfilePath) || Object.prototype.hasOwnProperty.call(files, './Dockerfile') || Object.prototype.hasOwnProperty.call(files, 'Dockerfile');
 }
 
-export function resolveBuildStrategy(service = {}, files = {}) {
+export function resolveBuildStrategy(service: AnyRecord = {}, files: AnyRecord = {}) {
   const sourceType = service.sourceType || SOURCE_TYPES.GITHUB;
   const requestedMode = normalizeMode(service.buildMode);
   const name = slugify(service.name || 'service');
@@ -118,14 +120,14 @@ export function resolveBuildStrategy(service = {}, files = {}) {
   });
 }
 
-function imageFor(name, service) {
+function imageFor(name: string, service: AnyRecord) {
   const registry = service.registry || DEFAULT_REGISTRY;
   const project = slugify(service.projectSlug || service.project || 'project');
   const tag = slugify(service.revision || service.commitHash || 'latest');
   return `${registry}/${project}/${name}:${tag}`;
 }
 
-function buildPlan({ mode, name, sourceType, image, reason, buildSteps, runtime, framework = null }) {
+function buildPlan({ mode, name, sourceType, image, reason, buildSteps, runtime, framework = null }: AnyRecord) {
   const [registry, project = 'project'] = image.includes('/') ? image.split('/') : [DEFAULT_REGISTRY, 'project'];
   return {
     service: name,

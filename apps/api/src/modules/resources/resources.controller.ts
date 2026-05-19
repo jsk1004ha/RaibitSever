@@ -1,4 +1,5 @@
-import { Body, Controller, Param, Post } from '@nestjs/common';
+import { Body, Controller, Param, Post, Req } from '@nestjs/common';
+import { RequirePermission } from '../../auth/permissions.decorator';
 import { RAIBITSERVERService } from '../../raibitserver.service';
 import type { ResourceSpec } from '@raibitserver/schemas';
 
@@ -6,8 +7,9 @@ import type { ResourceSpec } from '@raibitserver/schemas';
 export class ResourcesController {
   constructor(private readonly raibitServer: RAIBITSERVERService) {}
 
+  @RequirePermission('db:create')
   @Post()
-  create(@Param('projectId') projectId: string, @Body() resource: ResourceSpec) {
-    return this.raibitServer.addResource(projectId, resource);
+  create(@Param('projectId') projectId: string, @Body() resource: ResourceSpec, @Req() req: any) {
+    return this.raibitServer.addResource(projectId, resource, req.raibitSubject);
   }
 }

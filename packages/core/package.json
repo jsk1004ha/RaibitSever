@@ -13,6 +13,19 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "typescript": "latest"
+    "typescript": "latest",
+    "@types/node": "latest"
+  },
+  "peerDependencies": {
+    "@prisma/client": "^6.19.0"
+  },
+  "peerDependenciesMeta": {
+    "@prisma/client": {
+      "optional": true
+    }
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./execution": "./src/execution.ts"
   }
 }
