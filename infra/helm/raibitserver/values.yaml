@@ -1,0 +1,13 @@
+image:
+  registry: registry.raibitserver.local
+  tag: latest
+api:
+  replicas: 2
+orchestrator:
+  replicas: 1
+builder:
+  replicas: 2
+provisioner:
+  replicas: 1
+ingress:
+  host: api.raibitserver.app

@@ -1,0 +1,16 @@
+{
+  "name": "@raibitserver/cli",
+  "version": "0.1.0",
+  "private": true,
+  "bin": {
+    "raibitserver": "src/index.ts"
+  },
+  "dependencies": {
+    "@raibitserver/api-client": "workspace:*",
+    "@raibitserver/schemas": "workspace:*",
+    "@raibitserver/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "latest"
+  }
+}

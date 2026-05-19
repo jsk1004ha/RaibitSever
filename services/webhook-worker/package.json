@@ -1,0 +1,12 @@
+{
+  "name": "@raibitserver/webhook-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@raibitserver/schemas": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "latest"
+  }
+}

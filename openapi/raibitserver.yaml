@@ -1,0 +1,101 @@
+openapi: 3.1.0
+info:
+  title: RAIBITSERVER API
+  version: 0.1.0
+  description: Desired-state API contract for the RAIBITSERVER PaaS + DBaaS control plane.
+servers:
+  - url: https://api.raibitserver.app
+paths:
+  /orgs:
+    post:
+      summary: Create an organization workspace.
+      operationId: createOrganization
+      responses:
+        '201': { description: Created }
+  /orgs/{orgId}/projects:
+    get:
+      summary: List organization projects.
+      parameters:
+        - name: orgId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Project list }
+  /projects:
+    post:
+      summary: Store desired state for a new project.
+      responses:
+        '201': { description: Created }
+  /projects/{projectId}/services:
+    post:
+      summary: Add an app service desired state.
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '201': { description: Created }
+  /services/{serviceId}/deployments:
+    post:
+      summary: Queue a deployment workflow for a service.
+      parameters:
+        - name: serviceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '202': { description: Deployment queued }
+  /projects/{projectId}/resources:
+    post:
+      summary: Add a managed database/storage/cache resource desired state.
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '201': { description: Created }
+  /deployments/{deploymentId}/logs:
+    get:
+      summary: Stream or page build/runtime logs.
+      parameters:
+        - name: deploymentId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Logs }
+  /domains:
+    post:
+      summary: Attach and verify a custom domain.
+      responses:
+        '202': { description: Domain verification started }
+components:
+  schemas:
+    Project:
+      type: object
+      required: [id, organizationId, name, slug]
+      properties:
+        id: { type: string }
+        organizationId: { type: string }
+        name: { type: string }
+        slug: { type: string }
+    Service:
+      type: object
+      required: [id, projectId, name, type, sourceType]
+      properties:
+        id: { type: string }
+        projectId: { type: string }
+        name: { type: string }
+        type: { enum: [web, private, worker, cron, job] }
+        sourceType: { enum: [github, gitlab, zip, image, local] }
+    Resource:
+      type: object
+      required: [id, projectId, name, engine]
+      properties:
+        id: { type: string }
+        projectId: { type: string }
+        name: { type: string }
+        engine: { enum: [postgresql, mysql, mariadb, mongodb, redis, object-storage, vector-db, message-queue] }

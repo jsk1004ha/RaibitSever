@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: raibitserver-orchestrator
+spec:
+  replicas: {{ .Values.orchestrator.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: raibitserver-orchestrator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: raibitserver-orchestrator
+    spec:
+      serviceAccountName: raibitserver-orchestrator
+      containers:
+        - name: orchestrator
+          image: "{{ .Values.image.registry }}/raibitserver/orchestrator:{{ .Values.image.tag }}"
+          env:
+            - name: RAIBITSERVER_DRY_RUN
+              value: "0"

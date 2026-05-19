@@ -1,0 +1,27 @@
+{
+  "name": "@raibitserver/api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "nest start --watch",
+    "build": "nest build",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@raibitserver/schemas": "workspace:*",
+    "@nestjs/common": "latest",
+    "@nestjs/core": "latest",
+    "@nestjs/platform-express": "latest",
+    "@prisma/client": "latest",
+    "bullmq": "latest",
+    "zod": "latest",
+    "@raibitserver/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "latest",
+    "prisma": "latest",
+    "typescript": "latest"
+  }
+}

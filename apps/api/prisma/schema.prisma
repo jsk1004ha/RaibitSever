@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id        String   @id
+  name      String
+  slug      String   @unique
+  plan      String
+  createdAt DateTime @default(now())
+  projects  Project[]
+}
+
+model Project {
+  id             String       @id
+  organizationId String
+  name           String
+  slug           String
+  status         String       @default("active")
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  services       Service[]
+  resources      Resource[]
+  deployments    Deployment[]
+  createdAt      DateTime     @default(now())
+}
+
+model Service {
+  id          String       @id
+  projectId   String
+  name        String
+  type        String
+  sourceType  String
+  desiredSpec Json
+  status      String       @default("created")
+  project     Project      @relation(fields: [projectId], references: [id])
+  deployments Deployment[]
+  createdAt   DateTime     @default(now())
+}
+
+model Deployment {
+  id        String   @id
+  projectId String
+  serviceId String
+  imageUrl  String?
+  status    String
+  project   Project  @relation(fields: [projectId], references: [id])
+  service   Service  @relation(fields: [serviceId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model Resource {
+  id          String   @id
+  projectId   String
+  name        String
+  type        String
+  engine      String
+  desiredSpec Json
+  status      String
+  project     Project  @relation(fields: [projectId], references: [id])
+  createdAt   DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id
+  actorId   String?
+  action    String
+  target    String
+  metadata  Json
+  createdAt DateTime @default(now())
+}

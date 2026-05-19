@@ -1,0 +1,99 @@
+{
+  "organization": {
+    "name": "GDG Hongik",
+    "slug": "gdg-hongik",
+    "plan": "club"
+  },
+  "project": {
+    "name": "festival-2026",
+    "slug": "festival-2026",
+    "description": "RAIBITSERVER festival reservation platform"
+  },
+  "registry": "registry.raibitserver.local",
+  "services": [
+    {
+      "name": "web",
+      "type": "web",
+      "sourceType": "github",
+      "repoUrl": "https://github.com/club/festival-web",
+      "branch": "main",
+      "rootDirectory": "apps/web",
+      "buildMode": "auto",
+      "port": 3000,
+      "healthCheck": { "path": "/api/health" },
+      "scaling": { "minReplicas": 1, "maxReplicas": 5 },
+      "resources": {
+        "requests": { "cpu": "100m", "memory": "128Mi" },
+        "limits": { "cpu": "500m", "memory": "512Mi" }
+      },
+      "attachedResources": ["festival-postgres", "festival-redis", "assets"]
+    },
+    {
+      "name": "api",
+      "type": "private",
+      "sourceType": "github",
+      "repoUrl": "https://github.com/club/festival-api",
+      "branch": "main",
+      "rootDirectory": "apps/api",
+      "dockerfilePath": "apps/api/Dockerfile",
+      "buildContext": ".",
+      "port": 8080,
+      "healthCheck": { "path": "/health" },
+      "attachedResources": ["festival-postgres", "festival-redis"]
+    },
+    {
+      "name": "worker",
+      "type": "worker",
+      "sourceType": "github",
+      "repoUrl": "https://github.com/club/festival-api",
+      "rootDirectory": "apps/api",
+      "buildCommand": "pnpm build",
+      "startCommand": "node dist/worker.js",
+      "attachedResources": ["festival-postgres", "festival-redis"]
+    },
+    {
+      "name": "cleanup-cron",
+      "type": "cron",
+      "sourceType": "image",
+      "image": "registry.example.com/festival/cleanup:2026",
+      "schedule": "0 * * * *",
+      "attachedResources": ["festival-postgres"]
+    },
+    {
+      "name": "seed-job",
+      "type": "job",
+      "sourceType": "image",
+      "image": "registry.example.com/festival/seed:2026",
+      "attachedResources": ["festival-postgres"]
+    }
+  ],
+  "resources": [
+    {
+      "name": "festival-postgres",
+      "engine": "postgresql",
+      "type": "database",
+      "plan": "shared-small",
+      "storageGb": 10,
+      "databaseName": "festival",
+      "username": "festival_app"
+    },
+    {
+      "name": "festival-redis",
+      "engine": "redis",
+      "type": "cache",
+      "plan": "shared-small"
+    },
+    {
+      "name": "assets",
+      "engine": "object-storage",
+      "type": "storage",
+      "plan": "shared-medium",
+      "bucket": "festival-assets"
+    }
+  ],
+  "filesByService": {
+    "web": {
+      "package.json": "{\"dependencies\":{\"next\":\"latest\"},\"scripts\":{\"build\":\"next build\",\"start\":\"next start\"}}"
+    }
+  }
+}

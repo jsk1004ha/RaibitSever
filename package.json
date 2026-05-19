@@ -1,0 +1,43 @@
+{
+  "name": "raibitserver",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript-first monorepo plus Go infrastructure services for a container-first PaaS + DBaaS platform.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/webhook-worker"
+  ],
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "test": "node --test",
+    "check:structure": "node scripts/check-structure.js",
+    "start:prototype-api": "node src/server.js",
+    "cli": "node src/cli.js"
+  },
+  "bin": {
+    "raibitserver-prototype": "src/cli.js"
+  },
+  "devDependencies": {
+    "turbo": "latest",
+    "typescript": "latest"
+  },
+  "keywords": [
+    "paas",
+    "dbaas",
+    "kubernetes",
+    "buildpacks",
+    "dockerfile",
+    "raibitserver",
+    "monorepo",
+    "go-controller"
+  ],
+  "license": "Apache-2.0"
+}

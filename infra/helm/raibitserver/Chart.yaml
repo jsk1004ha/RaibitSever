@@ -1,0 +1,6 @@
+apiVersion: v2
+name: raibitserver
+version: 0.1.0
+appVersion: "0.1.0"
+description: Helm chart skeleton for RAIBITSERVER control plane and Go infra services.
+type: application

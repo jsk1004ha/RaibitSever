@@ -1,0 +1,23 @@
+services:
+  web:
+    build: ./web
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+  worker:
+    image: ghcr.io/example/festival-worker:latest
+    environment:
+      QUEUE_NAME: reservations
+  postgres:
+    image: postgres:16
+  redis:
+    image: redis:7
+  assets:
+    image: minio/minio:latest
