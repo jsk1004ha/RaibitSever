@@ -2,6 +2,8 @@ import { ControlPlaneStore } from './store.ts';
 import { deepClone } from './ids.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
 import { sealSecret } from './secret-vault.ts';
+import { browseDbConsole, runDbConsoleQuery } from './db-console.ts';
+import { secretEncryptionConfigured } from './config.ts';
 
 export class InMemoryControlPlaneRepository {
   store: ControlPlaneStore;
@@ -31,7 +33,13 @@ export class InMemoryControlPlaneRepository {
     });
     return { deployment, workflowJob };
   }
-  async getService(serviceId: string) { return this.store.services.get(serviceId) || null; }
+  async getProject(projectId: string) { return deepClone(this.store.projects.get(projectId) || null); }
+  async getService(serviceId: string) { return deepClone(this.store.services.get(serviceId) || null); }
+  async getResource(resourceId: string) { return deepClone(this.store.resources.get(resourceId) || null); }
+  async getDeployment(deploymentId: string) { return deepClone(this.store.deployments.get(deploymentId) || null); }
+  async listServicesForProject(projectId: string) { return deepClone([...this.store.services.values()].filter((service) => String(service.projectId) === String(projectId))); }
+  async listResourcesForProject(projectId: string) { return deepClone([...this.store.resources.values()].filter((resource) => String(resource.projectId) === String(projectId))); }
+  async listDeploymentsForService(serviceId: string) { return deepClone([...this.store.deployments.values()].filter((deployment) => String(deployment.serviceId) === String(serviceId))); }
   async upsertServiceEnvironment(input: Record<string, any>) { return this.store.upsertServiceEnvironment(input); }
   async importServiceEnvFile(input: Record<string, any>) { return this.store.importServiceEnvFile(input); }
   async listServiceEnvironment(input: Record<string, any>) { return this.store.listServiceEnvironment(input); }
@@ -154,8 +162,32 @@ export class PrismaControlPlaneRepository {
     });
   }
 
+  async getProject(projectId: string) {
+    return this.prisma.project.findUnique({ where: { id: projectId } });
+  }
+
   async getService(serviceId: string) {
     return this.prisma.service.findUnique({ where: { id: serviceId } });
+  }
+
+  async getResource(resourceId: string) {
+    return this.prisma.resource.findUnique({ where: { id: resourceId } });
+  }
+
+  async getDeployment(deploymentId: string) {
+    return this.prisma.deployment.findUnique({ where: { id: deploymentId } });
+  }
+
+  async listServicesForProject(projectId: string) {
+    return this.prisma.service.findMany({ where: { projectId }, orderBy: { createdAt: 'asc' } });
+  }
+
+  async listResourcesForProject(projectId: string) {
+    return this.prisma.resource.findMany({ where: { projectId }, orderBy: { createdAt: 'asc' } });
+  }
+
+  async listDeploymentsForService(serviceId: string) {
+    return this.prisma.deployment.findMany({ where: { serviceId }, orderBy: { createdAt: 'desc' } });
   }
 
   async upsertServiceEnvironment(input: Record<string, any>) {
@@ -275,9 +307,43 @@ export class PrismaControlPlaneRepository {
     return true;
   }
 
+  async appendBuildLog(input: Record<string, any>) {
+    return this.prisma.buildLog.create({ data: { deploymentId: input.deploymentId, step: input.step || 'build', line: String(input.line ?? ''), level: input.level || 'info' } });
+  }
+
+  async appendRuntimeLog(input: Record<string, any>) {
+    return this.prisma.runtimeLog.create({ data: { serviceId: input.serviceId, deploymentId: input.deploymentId || null, podName: input.podName || 'local-pod', containerName: input.containerName || 'app', line: String(input.line ?? ''), level: input.level || 'info' } });
+  }
+
+  async appendDeploymentEvent(input: Record<string, any>) {
+    return this.prisma.deploymentEvent.create({ data: { deploymentId: input.deploymentId, type: input.type, message: input.message, metadata: maskSecrets(input.metadata || {}) } });
+  }
+
   async listDeploymentLogs(deploymentId: string) { return this.prisma.buildLog.findMany({ where: { deploymentId }, orderBy: { timestamp: 'asc' } }); }
   async listRuntimeLogs(serviceId: string) { return this.prisma.runtimeLog.findMany({ where: { serviceId }, orderBy: { timestamp: 'asc' } }); }
   async listDeploymentEvents(deploymentId: string) { return this.prisma.deploymentEvent.findMany({ where: { deploymentId }, orderBy: { timestamp: 'asc' } }); }
+
+  async runResourceConsoleQuery(resourceId: string, query: string, options: Record<string, any> = {}) {
+    const resource = await this.getResource(resourceId);
+    if (!resource) {
+      const error = new Error(`resource not found: ${resourceId}`);
+      (error as any).statusCode = 404;
+      throw error;
+    }
+    const result = await runDbConsoleQuery(resource, query, options);
+    await this.prisma.auditLog.create({ data: { actorUserId: options.actorUserId || 'system', action: 'resource.console:query', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ query, resultRows: (result as any).rowCount || result.rows?.length || 0 }) } });
+    return result;
+  }
+
+  async browseResourceConsole(resourceId: string, options: Record<string, any> = {}) {
+    const resource = await this.getResource(resourceId);
+    if (!resource) {
+      const error = new Error(`resource not found: ${resourceId}`);
+      (error as any).statusCode = 404;
+      throw error;
+    }
+    return browseDbConsole(resource, options);
+  }
 
   async writeDesiredProject(projectSpec: Record<string, any>) {
     const orgInput = projectSpec.organization || { name: projectSpec.organizationSlug || 'default', slug: projectSpec.organizationSlug || 'default', plan: 'free' };
@@ -313,7 +379,7 @@ export class PrismaControlPlaneRepository {
   }
 
   async snapshot() {
-    const [organizations, users, members, projects, services, resources, deployments, auditLogs, usageRecords, workflowJobs] = await Promise.all([
+    const [organizations, users, members, projects, services, resources, deployments, auditLogs, usageRecords, workflowJobs, quotas, domains, resourceAttachments, buildLogs, runtimeLogs, deploymentEvents, resourceBackups] = await Promise.all([
       this.prisma.organization.findMany(),
       this.prisma.user.findMany(),
       this.prisma.membership.findMany(),
@@ -324,17 +390,41 @@ export class PrismaControlPlaneRepository {
       this.prisma.auditLog.findMany(),
       this.prisma.usageRecord.findMany(),
       this.prisma.workflowJob.findMany(),
+      this.prisma.quota.findMany(),
+      this.prisma.domain.findMany(),
+      this.prisma.resourceAttachment.findMany(),
+      this.prisma.buildLog.findMany(),
+      this.prisma.runtimeLog.findMany(),
+      this.prisma.deploymentEvent.findMany(),
+      this.prisma.resourceBackup.findMany(),
     ]);
     const [environmentVariables, githubIntegrations] = await Promise.all([
       this.prisma.environmentVariable.findMany(),
       this.prisma.githubIntegration.findMany(),
     ]);
-    return deepClone({ organizations, users: users.map(redactUser), members, projects, services, resources, deployments, auditLogs, usageRecords, workflowJobs, environmentVariables: environmentVariables.map(maskEnvRow), githubIntegrations });
+    return deepClone({ organizations, users: users.map(redactUser), members, projects, services, resources, deployments, auditLogs, usageRecords, workflowJobs, quotas, domains, resourceAttachments, resourceBackups, buildLogs, runtimeLogs, deploymentEvents, environmentVariables: environmentVariables.map(maskEnvRow), githubIntegrations });
   }
 }
 
+export function resolveControlPlaneRepositoryConfig(options: Record<string, any> = {}, env: Record<string, any> = process.env) {
+  const rawKind = String(options.kind || env.RAIBITSERVER_PERSISTENCE || '').trim().toLowerCase();
+  const production = env.NODE_ENV === 'production';
+  const kind = rawKind || (production ? 'prisma' : 'memory');
+  if (!['memory', 'prisma'].includes(kind)) throw new Error(`unsupported RAIBITSERVER_PERSISTENCE kind: ${kind}`);
+  if (production && kind === 'memory' && env.RAIBITSERVER_ALLOW_MEMORY_PERSISTENCE !== '1') {
+    throw new Error('in-memory persistence is disabled in production; set RAIBITSERVER_PERSISTENCE=prisma with DATABASE_URL');
+  }
+  if (production && kind === 'prisma') {
+    if (!env.DATABASE_URL) throw new Error('DATABASE_URL is required for production Prisma persistence');
+    if (!secretEncryptionConfigured(env)) throw new Error('RAIBITSERVER_SECRET_ENCRYPTION_KEY must be at least 32 characters for production Prisma persistence');
+  }
+  return { kind, production };
+}
+
 export async function createControlPlaneRepository(options: Record<string, any> = {}) {
-  if ((options.kind || process.env.RAIBITSERVER_PERSISTENCE) === 'prisma') {
+  const env = options.env || process.env;
+  const { kind } = resolveControlPlaneRepositoryConfig(options, env);
+  if (kind === 'prisma') {
     return PrismaControlPlaneRepository.connect(options);
   }
   return new InMemoryControlPlaneRepository(options.store);
