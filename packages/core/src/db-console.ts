@@ -1,8 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { guardDatabaseQuery } from './security.ts';
-import fs from 'node:fs/promises';
-import path from 'node:path';
 
 export async function runDbConsoleQuery(resource: Record<string, any>, query: string, options: Record<string, any> = {}) {
   const guard = guardDatabaseQuery(query, { role: options.role || 'developer', confirmed: options.confirmed === true });

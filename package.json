@@ -32,7 +32,10 @@
     "e2e:dry": "node scripts/dev-e2e.mjs --mode dry",
     "e2e:live": "node scripts/dev-e2e.mjs --mode live --execute",
     "dev:e2e:dry": "node scripts/dev-e2e.mjs --mode dry",
-    "dev:e2e:live": "node scripts/dev-e2e.mjs --mode live --execute"
+    "dev:e2e:live": "node scripts/dev-e2e.mjs --mode live --execute",
+    "dev-up": "pnpm dev:up",
+    "dev-e2e": "pnpm dev:e2e",
+    "dev-down": "pnpm dev:down"
   },
   "bin": {
     "raibitserver-prototype": "src/cli.js"
