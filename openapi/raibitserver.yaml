@@ -84,4 +84,4 @@ components:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
   schemas:
     ServiceType: { enum: [web, private, worker, cron, job] }
-    ResourceEngine: { enum: [postgresql, mysql, mariadb, mongodb, redis, valkey, sqlite, object-storage, qdrant, weaviate, milvus, nats, rabbitmq, kafka, redpanda] }
+    ResourceEngine: { enum: [postgresql, mysql, mariadb, mongodb, redis, valkey, sqlite, object-storage, qdrant, weaviate, milvus, nats, rabbitmq, kafka, redpanda, vector-db, message-queue] }

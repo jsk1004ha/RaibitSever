@@ -2,6 +2,8 @@ import { ControlPlaneStore } from './store.ts';
 import { deepClone } from './ids.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
 import { sealSecret } from './secret-vault.ts';
+import { secretEncryptionConfigured } from './config.ts';
+import { runDbConsoleQuery, browseDbConsole } from './db-console.ts';
 import { completeWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
 
 export class InMemoryControlPlaneRepository {

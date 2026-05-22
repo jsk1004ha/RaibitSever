@@ -1,3 +1,5 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { guardDatabaseQuery } from './security.ts';
 
 export async function runDbConsoleQuery(resource: Record<string, any>, query: string, options: Record<string, any> = {}) {
@@ -23,6 +25,7 @@ export async function runDbConsoleQuery(resource: Record<string, any>, query: st
 async function runSqlite(resource: Record<string, any>, query: string, options: Record<string, any>) {
   const sqlite = await import('node:sqlite');
   const dbPath = resource.sqlitePath || resource.desiredSpec?.sqlitePath || options.sqlitePath || ':memory:';
+  await ensureSqliteDirectory(dbPath);
   const db = new (sqlite as any).DatabaseSync(dbPath);
   try {
     db.exec('PRAGMA busy_timeout=1000');
@@ -50,6 +53,7 @@ export async function browseDbConsole(resource: Record<string, any>, options: Re
   if (engine !== 'sqlite') return { engine, tables: [], collections: [], keys: [], warning: 'live provider browser is available when the provider connection is configured' };
   const sqlite = await import('node:sqlite');
   const dbPath = resource.sqlitePath || resource.desiredSpec?.sqlitePath || options.sqlitePath || ':memory:';
+  await ensureSqliteDirectory(dbPath);
   const db = new (sqlite as any).DatabaseSync(dbPath);
   try {
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map((row: any) => row.name);
@@ -57,4 +61,9 @@ export async function browseDbConsole(resource: Record<string, any>, options: Re
   } finally {
     db.close();
   }
+}
+
+async function ensureSqliteDirectory(dbPath: string) {
+  if (!dbPath || dbPath === ':memory:' || dbPath.startsWith('file:')) return;
+  await fs.mkdir(path.dirname(path.resolve(dbPath)), { recursive: true });
 }

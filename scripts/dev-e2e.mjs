@@ -83,12 +83,16 @@ try {
   const preview = await request('POST', `/services/${service.body.id}/deployments`, { deploymentType: 'preview', triggerType: 'pull_request', pullRequestNumber: 42, branch: 'feature/local-e2e', previewUrl: `http://pr-42--${urlHost.replace(/^express-api--/, '')}` }, pending.body.token);
   assertStatus(preview, 202, 'PR preview deployment enqueue');
 
-  const club = await request('POST', '/auth/signup', { email: 'club@example.com', password: 'correct-horse-battery', organizationSlug: 'club-org', accountType: 'CLUB_MEMBER', approvalStatus: 'APPROVED' });
+  const club = await request('POST', '/auth/signup', { email: 'club@example.com', password: 'correct-horse-battery', organizationSlug: 'club-org' });
   assertStatus(club, 201, 'club signup');
-  const clubProject = await request('POST', '/projects', { name: 'club-paas', slug: 'club-paas' }, club.body.token);
+  const clubApproval = await request('POST', `/admin/users/${club.body.user.id}/approve`, { accountType: 'CLUB_MEMBER' }, adminToken);
+  assertStatus(clubApproval, 200, 'admin approve club member');
+  const clubLogin = await request('POST', '/auth/login', { email: 'club@example.com', password: 'correct-horse-battery' });
+  assertStatus(clubLogin, 200, 'club login after approval');
+  const clubProject = await request('POST', '/projects', { name: 'club-paas', slug: 'club-paas' }, clubLogin.body.token);
   assertStatus(clubProject, 201, 'club project create');
   for (let i = 0; i < 6; i += 1) {
-    const row = await request('POST', `/projects/${clubProject.body.id}/services`, { name: `svc-${i}`, type: 'worker', sourceType: 'image', image: `localhost:5000/club/svc-${i}:latest` }, club.body.token);
+    const row = await request('POST', `/projects/${clubProject.body.id}/services`, { name: `svc-${i}`, type: 'worker', sourceType: 'image', image: `localhost:5000/club/svc-${i}:latest` }, clubLogin.body.token);
     assertStatus(row, 201, `club unlimited service ${i}`);
   }
 
