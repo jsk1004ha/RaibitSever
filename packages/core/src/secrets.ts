@@ -55,8 +55,17 @@ export function unsealSecretValue(sealedValue, env = process.env) {
   return Buffer.concat([decipher.update(Buffer.from(encryptedText, 'base64url')), decipher.final()]).toString('utf8');
 }
 
+export function secretKeySource(env = process.env) {
+  const configured = env?.ENCRYPTION_KEY || env?.RAIBITSERVER_SECRET_ENCRYPTION_KEY;
+  if (configured && String(configured).length >= 32) return 'runtime';
+  if (String(env?.NODE_ENV || '').toLowerCase() === 'production') {
+    throw new Error('RAIBITSERVER_SECRET_ENCRYPTION_KEY or ENCRYPTION_KEY with at least 32 characters is required in production');
+  }
+  return 'local-dev';
+}
+
 function secretCipherKey(env) {
   const configured = env?.ENCRYPTION_KEY || env?.RAIBITSERVER_SECRET_ENCRYPTION_KEY;
-  const material = configured && String(configured).length >= 32 ? String(configured) : LOCAL_DEV_SECRET_KEY;
+  const material = secretKeySource(env) === 'runtime' ? String(configured) : LOCAL_DEV_SECRET_KEY;
   return crypto.createHash('sha256').update(material).digest();
 }
