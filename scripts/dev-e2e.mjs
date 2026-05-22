@@ -85,8 +85,8 @@ try {
 
   const club = await request('POST', '/auth/signup', { email: 'club@example.com', password: 'correct-horse-battery', organizationSlug: 'club-org' });
   assertStatus(club, 201, 'club signup');
-  const clubApproval = await request('POST', `/admin/users/${club.body.user.id}/approve`, { accountType: 'CLUB_MEMBER' }, adminToken);
-  assertStatus(clubApproval, 200, 'admin approve club member');
+  const approvedClub = await request('POST', `/admin/users/${club.body.user.id}/approve`, { accountType: 'CLUB_MEMBER' }, adminToken);
+  assertStatus(approvedClub, 200, 'admin approve club');
   const clubLogin = await request('POST', '/auth/login', { email: 'club@example.com', password: 'correct-horse-battery' });
   assertStatus(clubLogin, 200, 'club login after approval');
   const clubProject = await request('POST', '/projects', { name: 'club-paas', slug: 'club-paas' }, clubLogin.body.token);

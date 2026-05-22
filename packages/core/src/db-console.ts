@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { guardDatabaseQuery } from './security.ts';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 export async function runDbConsoleQuery(resource: Record<string, any>, query: string, options: Record<string, any> = {}) {
   const guard = guardDatabaseQuery(query, { role: options.role || 'developer', confirmed: options.confirmed === true });
@@ -64,6 +66,6 @@ export async function browseDbConsole(resource: Record<string, any>, options: Re
 }
 
 async function ensureSqliteDirectory(dbPath: string) {
-  if (!dbPath || dbPath === ':memory:' || dbPath.startsWith('file:')) return;
-  await fs.mkdir(path.dirname(path.resolve(dbPath)), { recursive: true });
+  if (!dbPath || dbPath === ':memory:') return;
+  await fs.mkdir(path.dirname(dbPath), { recursive: true });
 }
