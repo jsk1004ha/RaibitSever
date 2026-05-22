@@ -39,8 +39,8 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       email,
       passwordHash: hashPassword(input.password),
       role: adminEmails.includes(email) ? 'ADMIN' : 'USER',
-      accountType: input.accountType || (input.plan === 'club' ? 'CLUB_MEMBER' : 'NON_CLUB'),
-      approvalStatus: input.approvalStatus || (adminEmails.includes(email) || input.accountType === 'CLUB_MEMBER' || input.plan === 'club' ? 'APPROVED' : 'PENDING'),
+      accountType: adminEmails.includes(email) ? (input.accountType || (input.plan === 'club' ? 'CLUB_MEMBER' : 'NON_CLUB')) : 'NON_CLUB',
+      approvalStatus: adminEmails.includes(email) ? (input.approvalStatus || 'APPROVED') : 'PENDING',
     });
     const membership = await repository.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
     const token = createSessionToken({ ...user, email }, [membership], jwtSecret, { issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', expiresInSeconds: input.expiresInSeconds || 3600 });

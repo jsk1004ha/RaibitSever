@@ -2,8 +2,7 @@ import { ControlPlaneStore } from './store.ts';
 import { deepClone } from './ids.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
 import { sealSecret } from './secret-vault.ts';
-import { browseDbConsole, runDbConsoleQuery } from './db-console.ts';
-import { secretEncryptionConfigured } from './config.ts';
+import { completeWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
 
 export class InMemoryControlPlaneRepository {
   store: ControlPlaneStore;
@@ -47,6 +46,10 @@ export class InMemoryControlPlaneRepository {
   async listGitHubIntegrations(input: Record<string, any>) { return this.store.listGitHubIntegrations(input); }
   async attachGitHubRepositoryToService(input: Record<string, any>) { return this.store.attachGitHubRepositoryToService(input); }
   async enqueueWorkflowJob(input: Record<string, any>) { return this.store.enqueueWorkflowJob(input); }
+  async claimNextWorkflowJob(input: Record<string, any> = {}) { return this.store.claimNextWorkflowJob(input); }
+  async completeWorkflowJob(jobId: string, result: any = {}, options: Record<string, any> = {}) { return this.store.completeWorkflowJob(jobId, result, options); }
+  async failWorkflowJob(jobId: string, error: any, options: Record<string, any> = {}) { return this.store.failWorkflowJob(jobId, error, options); }
+  async processNextWorkflowJob(handlers: Record<string, any>, options: Record<string, any> = {}) { return this.store.processNextWorkflowJob(handlers, options); }
   async approveUser(userId: string, input: Record<string, any> = {}) { return this.store.approveUser(userId, input); }
   async rejectUser(userId: string) { return this.store.rejectUser(userId); }
   async setQuota(input: Record<string, any>) { return this.store.setQuota(input); }
@@ -273,6 +276,63 @@ export class PrismaControlPlaneRepository {
     return this.prisma.workflowJob.create({ data: workflowJobData(input) });
   }
 
+  async claimNextWorkflowJob(options: Record<string, any> = {}) {
+    const now = new Date(options.now || Date.now());
+    const leaseMs = Number(options.leaseMs ?? (Number(options.leaseSeconds || 300) * 1000));
+    const expiredBefore = new Date(now.getTime() - leaseMs);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const job = await this.prisma.workflowJob.findFirst({
+        where: {
+          status: 'queued',
+          runAfter: { lte: now },
+          OR: [{ lockedAt: null }, { lockedAt: { lte: expiredBefore } }],
+        },
+        orderBy: [{ runAfter: 'asc' }, { createdAt: 'asc' }],
+      });
+      if (!job) return null;
+      const updated = await this.prisma.workflowJob.updateMany({
+        where: {
+          id: job.id,
+          status: 'queued',
+          runAfter: { lte: now },
+          OR: [{ lockedAt: null }, { lockedAt: { lte: expiredBefore } }],
+        },
+        data: {
+          status: 'running',
+          attempts: { increment: 1 },
+          lockedBy: options.workerId || options.worker || 'workflow-worker',
+          lockedAt: now,
+        },
+      });
+      if (updated.count === 1) return this.prisma.workflowJob.findUnique({ where: { id: job.id } });
+    }
+    return null;
+  }
+
+  async completeWorkflowJob(jobId: string, result: any = {}, options: Record<string, any> = {}) {
+    const current = await this.prisma.workflowJob.findUnique({ where: { id: jobId } });
+    if (!current) throw new Error(`workflow job not found: ${jobId}`);
+    const next = options.record || completeWorkflowJobRecord(current, result, options);
+    return this.prisma.workflowJob.update({
+      where: { id: jobId },
+      data: prismaWorkflowJobUpdateData(next),
+    });
+  }
+
+  async failWorkflowJob(jobId: string, error: any, options: Record<string, any> = {}) {
+    const current = await this.prisma.workflowJob.findUnique({ where: { id: jobId } });
+    if (!current) throw new Error(`workflow job not found: ${jobId}`);
+    const next = options.record || failWorkflowJobRecord(current, error, options);
+    return this.prisma.workflowJob.update({
+      where: { id: jobId },
+      data: prismaWorkflowJobUpdateData(next),
+    });
+  }
+
+  async processNextWorkflowJob(handlers: Record<string, any>, options: Record<string, any> = {}) {
+    return processNextWorkflowJob(this, handlers, options);
+  }
+
 
   async approveUser(userId: string, input: Record<string, any> = {}) {
     const user = await this.prisma.user.update({ where: { id: userId }, data: { approvalStatus: 'APPROVED', accountType: input.accountType || 'NON_CLUB', role: input.role || undefined } });
@@ -304,19 +364,45 @@ export class PrismaControlPlaneRepository {
       (error as any).statusCode = 403;
       throw error;
     }
+    const quota = await this.prisma.quota.findFirst({ where: { userId: input.userId, accountType: user.accountType || 'NON_CLUB' } })
+      || await this.setQuota({ userId: input.userId, accountType: user.accountType || 'NON_CLUB' });
+    if (input.metric && quota[input.metric] !== undefined) {
+      const current = (await this.quotaUsageForUser(input.userId))[input.metric] || 0;
+      const requested = current + Number(input.increment || 0);
+      if (requested > Number(quota[input.metric])) {
+        await this.prisma.auditLog.create({ data: { actorUserId: input.userId, action: 'quota:block', targetType: input.action || 'action', targetId: input.metric, metadata: { current, increment: Number(input.increment || 0), limit: quota[input.metric] } } });
+        const error = new Error(`quota exceeded: ${input.metric} (${requested}/${quota[input.metric]})`);
+        (error as any).statusCode = 403;
+        throw error;
+      }
+    }
     return true;
   }
 
-  async appendBuildLog(input: Record<string, any>) {
-    return this.prisma.buildLog.create({ data: { deploymentId: input.deploymentId, step: input.step || 'build', line: String(input.line ?? ''), level: input.level || 'info' } });
-  }
-
-  async appendRuntimeLog(input: Record<string, any>) {
-    return this.prisma.runtimeLog.create({ data: { serviceId: input.serviceId, deploymentId: input.deploymentId || null, podName: input.podName || 'local-pod', containerName: input.containerName || 'app', line: String(input.line ?? ''), level: input.level || 'info' } });
-  }
-
-  async appendDeploymentEvent(input: Record<string, any>) {
-    return this.prisma.deploymentEvent.create({ data: { deploymentId: input.deploymentId, type: input.type, message: input.message, metadata: maskSecrets(input.metadata || {}) } });
+  async quotaUsageForUser(userId: string) {
+    const memberships = await this.prisma.membership.findMany({ where: { userId }, select: { organizationId: true } });
+    const organizationIds = memberships.map((membership: Record<string, any>) => membership.organizationId);
+    if (organizationIds.length === 0) return {};
+    const projects = await this.prisma.project.findMany({ where: { organizationId: { in: organizationIds } }, select: { id: true } });
+    const projectIds = projects.map((project: Record<string, any>) => project.id);
+    if (projectIds.length === 0) {
+      return { maxProjects: 0, maxServices: 0, maxDeploymentsPerDay: 0, maxPreviewDeployments: 0, maxDbStorageMb: 0, maxObjectStorageMb: 0 };
+    }
+    const serviceIds = (await this.prisma.service.findMany({ where: { projectId: { in: projectIds } }, select: { id: true } })).map((service: Record<string, any>) => service.id);
+    const resources = await this.prisma.resource.findMany({ where: { projectId: { in: projectIds } }, select: { type: true, engine: true, desiredSpec: true, desiredState: true } });
+    const start = new Date();
+    start.setUTCHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 1);
+    const deployments = serviceIds.length === 0 ? [] : await this.prisma.deployment.findMany({ where: { serviceId: { in: serviceIds }, createdAt: { gte: start, lt: end } }, select: { deploymentType: true } });
+    return {
+      maxProjects: projects.length,
+      maxServices: serviceIds.length,
+      maxDeploymentsPerDay: deployments.length,
+      maxPreviewDeployments: deployments.filter((deployment: Record<string, any>) => deployment.deploymentType === 'preview').length,
+      maxDbStorageMb: resources.filter((resource: Record<string, any>) => resourceQuotaMetric(resource) === 'maxDbStorageMb').reduce((sum: number, resource: Record<string, any>) => sum + resourceStorageMb(resource), 0),
+      maxObjectStorageMb: resources.filter((resource: Record<string, any>) => resourceQuotaMetric(resource) === 'maxObjectStorageMb').reduce((sum: number, resource: Record<string, any>) => sum + resourceStorageMb(resource), 0),
+    };
   }
 
   async listDeploymentLogs(deploymentId: string) { return this.prisma.buildLog.findMany({ where: { deploymentId }, orderBy: { timestamp: 'asc' } }); }
@@ -511,6 +597,18 @@ function workflowJobData(input: Record<string, any>) {
   };
 }
 
+function prismaWorkflowJobUpdateData(input: Record<string, any>) {
+  return {
+    status: input.status,
+    payload: sanitizeJson(input.payload || {}),
+    attempts: Number(input.attempts || 0),
+    maxAttempts: Number(input.maxAttempts || 3),
+    runAfter: input.runAfter ? new Date(input.runAfter) : new Date(),
+    lockedBy: input.lockedBy || null,
+    lockedAt: input.lockedAt ? new Date(input.lockedAt) : null,
+  };
+}
+
 function sanitizeJson(value: Record<string, any>) {
   return JSON.parse(JSON.stringify(maskSecrets(value)));
 }
@@ -543,6 +641,17 @@ function maskEnvRow(row: Record<string, any>) {
 function redactUser(user: Record<string, any>) {
   const { passwordHash, ...rest } = user;
   return rest;
+}
+
+function resourceQuotaMetric(resource: Record<string, any>) {
+  return String(resource?.type || '').toLowerCase() === 'storage' || String(resource?.engine || '').toLowerCase().includes('object') ? 'maxObjectStorageMb' : 'maxDbStorageMb';
+}
+
+function resourceStorageMb(resource: Record<string, any>) {
+  const spec = { ...(resource.desiredSpec || {}), ...(resource.desiredState || {}), ...resource };
+  if (spec.storageMb !== undefined) return Number(spec.storageMb || 0);
+  if (spec.storageGb !== undefined) return Number(spec.storageGb || 0) * 1024;
+  return 1;
 }
 
 function quotaData(input: Record<string, any>) {

@@ -61,6 +61,26 @@ function request(port, method, path, body) {
   });
 }
 
+function requestWithStatus(port, method, path, body) {
+  return new Promise((resolve, reject) => {
+    const payload = body ? JSON.stringify(body) : null;
+    const req = http.request({ port, path, method, headers: payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {} }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        try {
+          resolve({ statusCode: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) });
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
 
 test('repository creates deployment and workflow job as one operation', async () => {
   const repository = new InMemoryControlPlaneRepository();
@@ -69,4 +89,24 @@ test('repository creates deployment and workflow job as one operation', async ()
   const { deployment, workflowJob } = await repository.createDeploymentWorkflow({ deployment: { serviceId: service.id }, workflow: { payload: { serviceId: service.id } } });
   assert.equal(workflowJob.targetId, deployment.id);
   assert.equal((await repository.snapshot()).workflowJobs.length, 1);
+});
+
+test('HTTP deployment queue rejects workloads blocked by security policy', async () => {
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'disabled', allowDisabled: true } }));
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  try {
+    const org = controlPlane.store.createOrganization({ name: 'Security Org', slug: 'security-org' });
+    const project = controlPlane.store.createProject({ organizationId: org.id, name: 'demo', slug: 'demo' });
+    const service = controlPlane.store.createService({ projectId: project.id, name: 'unsafe', desiredSpec: { privileged: true } });
+
+    const response = await requestWithStatus(port, 'POST', `/services/${service.id}/deployments`, {});
+    assert.equal(response.statusCode, 403);
+    assert.equal(response.body.error, 'security_policy_violation');
+    assert.equal(controlPlane.store.snapshot().workflowJobs.length, 0);
+  } finally {
+    server.close();
+  }
 });

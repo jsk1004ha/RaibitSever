@@ -22,6 +22,8 @@ test('.env upload parser separates plain values from important secrets', () => {
 
 test('signup/login tokens isolate hosted projects, service env upload, and GitHub integration', async () => {
   const secret = 'auth-env-github-secret';
+  const previousAdminEmails = process.env.ADMIN_EMAILS;
+  process.env.ADMIN_EMAILS = 'alice@example.com';
   const controlPlane = new RAIBITSERVERControlPlane();
   const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'jwt', jwtSecret: secret } }));
   server.listen(0);
@@ -35,6 +37,11 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
 
     const bobSignup = await request(port, 'POST', '/auth/signup', { email: 'bob@example.com', password: 'correct-horse', organizationSlug: 'bob-org' });
     assert.equal(bobSignup.statusCode, 201);
+
+    const eveSignup = await request(port, 'POST', '/auth/signup', { email: 'eve@example.com', password: 'correct-horse', organizationSlug: 'eve-org', plan: 'club', accountType: 'CLUB_MEMBER', approvalStatus: 'APPROVED' });
+    assert.equal(eveSignup.statusCode, 201);
+    assert.equal(eveSignup.body.user.accountType, 'NON_CLUB');
+    assert.equal(eveSignup.body.user.approvalStatus, 'PENDING');
 
     const duplicateOrg = await request(port, 'POST', '/auth/signup', { email: 'mallory@example.com', password: 'correct-horse', organizationSlug: 'alice-org' });
     assert.equal(duplicateOrg.statusCode, 409);
@@ -80,6 +87,7 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
     assert.equal(controlPlane.store.services.get(aliceService.body.id).repoUrl, 'https://github.com/alice/web.git');
   } finally {
     server.close();
+    if (previousAdminEmails === undefined) delete process.env.ADMIN_EMAILS; else process.env.ADMIN_EMAILS = previousAdminEmails;
   }
 });
 

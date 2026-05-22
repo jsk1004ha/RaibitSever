@@ -5,7 +5,8 @@ const DEV_KEY = 'raibitserver-local-dev-encryption-key-32b';
 
 function keyMaterial(secret = process.env.ENCRYPTION_KEY || process.env.RAIBITSERVER_SECRET_ENCRYPTION_KEY || DEV_KEY) {
   const configured = process.env.ENCRYPTION_KEY || process.env.RAIBITSERVER_SECRET_ENCRYPTION_KEY;
-  if ((secret === DEV_KEY || !secret || (configured && String(configured).length < 32)) && String(process.env.NODE_ENV || '').toLowerCase() === 'production') {
+  const usingRuntimeDefault = !secret || secret === DEV_KEY || secret === configured;
+  if (usingRuntimeDefault && (!configured || String(configured).length < 32) && String(process.env.NODE_ENV || '').toLowerCase() === 'production') {
     throw new Error('RAIBITSERVER_SECRET_ENCRYPTION_KEY or ENCRYPTION_KEY with at least 32 characters is required in production');
   }
   return crypto.createHash('sha256').update(String(secret)).digest();

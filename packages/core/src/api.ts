@@ -6,6 +6,7 @@ import { createSessionToken, hashPassword, normalizeEmail, personalOrganizationS
 import { runtimeConfigStatus } from './config.ts';
 import { normalizeEnvEntries, parseDotEnv } from './env-file.ts';
 import { can } from './rbac.ts';
+import { validateServiceSecurity } from './security.ts';
 
 export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), options: Record<string, any> = {}) {
   const auth = options.auth || authConfigFromEnv();
@@ -34,8 +35,8 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const organization = controlPlane.store.createOrganization({ name: body.organizationName || organizationSlug, slug: organizationSlug, plan: body.plan || 'free' });
         const adminEmails = String(process.env.ADMIN_EMAILS || '').split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
         const isAdmin = adminEmails.includes(email);
-        const accountType = body.accountType || (body.plan === 'club' ? 'CLUB_MEMBER' : 'NON_CLUB');
-        const approvalStatus = body.approvalStatus || (isAdmin || accountType === 'CLUB_MEMBER' ? 'APPROVED' : 'PENDING');
+        const accountType = isAdmin ? (body.accountType || (body.plan === 'club' ? 'CLUB_MEMBER' : 'NON_CLUB')) : 'NON_CLUB';
+        const approvalStatus = isAdmin ? (body.approvalStatus || 'APPROVED') : 'PENDING';
         const user = controlPlane.store.createUser({ name: body.name || email, email, passwordHash: hashPassword(body.password), role: isAdmin ? 'ADMIN' : 'USER', accountType, approvalStatus });
         const membership = controlPlane.store.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
         const token = createSessionToken({ ...user, email }, [membership], auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: body.expiresInSeconds || 3600 });
@@ -212,6 +213,8 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const subject = authorizeAction(req, 'deploy:run', auth);
         await assertProjectAccess(controlPlane.store, service.projectId, subject);
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxDeploymentsPerDay', increment: 1 });
+        const security = validateServiceSecurity(service.desiredState || service.desiredSpec || service);
+        if (!security.ok) return send(res, 403, { error: 'security_policy_violation', findings: security.findings });
         const body = await readJson(req);
         const deployment = controlPlane.store.createDeployment({ ...body, serviceId, deploymentType: body.deploymentType || 'production' });
         const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: body.deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId: service.projectId, deploymentId: deployment.id } });
@@ -223,6 +226,9 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const subject = authorizeAction(req, 'deploy:run', auth);
         await assertServiceAccess(controlPlane.store, projectId, serviceId, subject);
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxDeploymentsPerDay', increment: 1 });
+        const service = controlPlane.store.services.get(serviceId);
+        const security = validateServiceSecurity(service?.desiredState || service?.desiredSpec || service || {});
+        if (!security.ok) return send(res, 403, { error: 'security_policy_violation', findings: security.findings });
         const body = await readJson(req);
         const deployment = controlPlane.store.createDeployment({ ...body, serviceId, deploymentType: body.deploymentType || 'production' });
         const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: body.deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId, deploymentId: deployment.id } });

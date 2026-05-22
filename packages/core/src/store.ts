@@ -1,6 +1,6 @@
 import { deepClone, nowIso, stableId, slugify } from './ids.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
-import { createWorkflowJobRecord } from './workflows.ts';
+import { claimNextWorkflowJobFromList, completeWorkflowJobRecord, createWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
 import { normalizeEnvEntries, parseDotEnv, maskEnvEntries } from './env-file.ts';
 import { githubIntegrationSummary, parseGitHubRepository } from './github-integration.ts';
 import { openSecret, publicSecretRecord, sealSecret, secureRandomSecret } from './secret-vault.ts';
@@ -189,6 +189,34 @@ export class ControlPlaneStore {
     return deepClone(row);
   }
 
+  claimNextWorkflowJob(options: Record<string, any> = {}) {
+    const claimed = claimNextWorkflowJobFromList(this.workflowJobs, options);
+    if (claimed) this.audit(options.workerId || options.worker || 'workflow-worker', 'workflow:claim', claimed.targetType, claimed.targetId, { workflowJobId: claimed.id, type: claimed.type, attempt: claimed.attempts });
+    return claimed;
+  }
+
+  completeWorkflowJob(jobId: string, result: any = {}, options: Record<string, any> = {}) {
+    const current = this.workflowJobs.find((job) => String(job.id) === String(jobId));
+    if (!current) throw notFound(`workflow job not found: ${jobId}`);
+    const next = options.record || completeWorkflowJobRecord(current, result, options);
+    this.replaceWorkflowJob(next);
+    this.audit(options.workerId || options.worker || 'workflow-worker', 'workflow:complete', next.targetType, next.targetId, { workflowJobId: next.id, type: next.type, status: next.status });
+    return deepClone(next);
+  }
+
+  failWorkflowJob(jobId: string, error: any, options: Record<string, any> = {}) {
+    const current = this.workflowJobs.find((job) => String(job.id) === String(jobId));
+    if (!current) throw notFound(`workflow job not found: ${jobId}`);
+    const next = options.record || failWorkflowJobRecord(current, error, options);
+    this.replaceWorkflowJob(next);
+    this.audit(options.workerId || options.worker || 'workflow-worker', 'workflow:fail', next.targetType, next.targetId, { workflowJobId: next.id, type: next.type, status: next.status, retryAt: next.runAfter });
+    return deepClone(next);
+  }
+
+  async processNextWorkflowJob(handlers: Record<string, any>, options: Record<string, any> = {}) {
+    return processNextWorkflowJob(this, handlers, options);
+  }
+
   createSecret({ scopeType = 'service', scopeId, key, value, actorUserId = 'system', metadata = {} }: Record<string, any>) {
     const existing = [...this.secrets.values()].find((secret) => secret.scopeType === scopeType && secret.scopeId === scopeId && secret.key === key);
     const id = existing?.id || `sec_${secureRandomSecret(18)}`;
@@ -324,8 +352,30 @@ export class ControlPlaneStore {
     if (user.role === 'ADMIN' || user.accountType === 'CLUB_MEMBER') return true;
     if (user.approvalStatus !== 'APPROVED') throw forbidden(`user ${userId} is ${user.approvalStatus || 'PENDING'} and cannot ${action}`);
     const quota = [...this.quotas.values()].find((row) => row.userId === userId) || this.setQuota({ userId, accountType: user.accountType || 'NON_CLUB' });
-    if (metric && quota[metric] !== undefined && increment > Number(quota[metric])) throw forbidden(`quota exceeded: ${metric}`);
+    if (metric && quota[metric] !== undefined) {
+      const current = this.quotaUsageForUser(userId)[metric] || 0;
+      const requested = current + Number(increment || 0);
+      if (requested > Number(quota[metric])) throw forbidden(`quota exceeded: ${metric} (${requested}/${quota[metric]})`);
+    }
     return true;
+  }
+
+  quotaUsageForUser(userId: string) {
+    const organizationIds = new Set(this.members.filter((member) => String(member.userId) === String(userId)).map((member) => String(member.organizationId)));
+    const projects = [...this.projects.values()].filter((project) => organizationIds.has(String(project.organizationId)));
+    const projectIds = new Set(projects.map((project) => String(project.id)));
+    const services = [...this.services.values()].filter((service) => projectIds.has(String(service.projectId)));
+    const serviceIds = new Set(services.map((service) => String(service.id)));
+    const resources = [...this.resources.values()].filter((resource) => projectIds.has(String(resource.projectId)));
+    const deployments = [...this.deployments.values()].filter((deployment) => serviceIds.has(String(deployment.serviceId)) && isSameUtcDay(deployment.createdAt || deployment.startedAt, nowIso()));
+    return {
+      maxProjects: projects.length,
+      maxServices: services.length,
+      maxDeploymentsPerDay: deployments.length,
+      maxPreviewDeployments: deployments.filter((deployment) => deployment.deploymentType === 'preview').length,
+      maxDbStorageMb: resources.filter((resource) => resourceQuotaMetric(resource) === 'maxDbStorageMb').reduce((sum, resource) => sum + resourceStorageMb(resource), 0),
+      maxObjectStorageMb: resources.filter((resource) => resourceQuotaMetric(resource) === 'maxObjectStorageMb').reduce((sum, resource) => sum + resourceStorageMb(resource), 0),
+    };
   }
 
   async runResourceConsoleQuery(resourceId: string, query: string, options: Record<string, any> = {}) {
@@ -371,6 +421,13 @@ export class ControlPlaneStore {
       resourceAttachments: this.resourceAttachments,
     });
   }
+
+  private replaceWorkflowJob(next: Record<string, any>) {
+    const index = this.workflowJobs.findIndex((job) => String(job.id) === String(next.id));
+    if (index === -1) throw notFound(`workflow job not found: ${next.id}`);
+    this.workflowJobs[index] = next;
+    return next;
+  }
 }
 
 function publicSecret(row: Record<string, any>) {
@@ -380,6 +437,23 @@ function publicSecret(row: Record<string, any>) {
 function redactUser(user: Record<string, any>) {
   const { passwordHash, ...rest } = user;
   return rest;
+}
+
+function resourceQuotaMetric(resource: Record<string, any>) {
+  return String(resource?.type || '').toLowerCase() === 'storage' || String(resource?.engine || '').toLowerCase().includes('object') ? 'maxObjectStorageMb' : 'maxDbStorageMb';
+}
+
+function resourceStorageMb(resource: Record<string, any>) {
+  if (resource.storageMb !== undefined) return Number(resource.storageMb || 0);
+  if (resource.storageGb !== undefined) return Number(resource.storageGb || 0) * 1024;
+  return 1;
+}
+
+function isSameUtcDay(left: any, right: any) {
+  const a = new Date(left);
+  const b = new Date(right);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return false;
+  return a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() === b.getUTCDate();
 }
 
 function notFound(message: string) {
