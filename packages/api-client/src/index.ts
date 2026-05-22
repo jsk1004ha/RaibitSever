@@ -18,6 +18,14 @@ export class RAIBITSERVERClient {
   signup(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/auth/signup', { method: 'POST', body: input }); }
   login(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/auth/login', { method: 'POST', body: input }); }
   logout(): Promise<Record<string, unknown>> { return this.request('/auth/logout', { method: 'POST' }); }
+  githubLogin(input: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    const query = new URLSearchParams(Object.entries(input).map(([key, value]) => [key, String(value)])).toString();
+    return this.request(`/auth/github/login${query ? `?${query}` : ''}`);
+  }
+  githubCallback(input: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    const query = new URLSearchParams(Object.entries(input).map(([key, value]) => [key, String(value)])).toString();
+    return this.request(`/auth/github/callback${query ? `?${query}` : ''}`);
+  }
 
   listOrganizations(): Promise<Record<string, unknown>> { return this.request('/organizations'); }
   createOrganization(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/organizations', { method: 'POST', body: input }); }
@@ -79,11 +87,20 @@ export class RAIBITSERVERClient {
 
   connectGitHub(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/integrations/github', { method: 'POST', body: input }); }
   listGitHub(organizationId?: string): Promise<Record<string, unknown>> { return this.request(organizationId ? `/integrations/github?organizationId=${encodeURIComponent(organizationId)}` : '/integrations/github'); }
+  listGitHubInstallations(organizationId?: string): Promise<Record<string, unknown>> { return this.request(organizationId ? `/github/installations?organizationId=${encodeURIComponent(organizationId)}` : '/github/installations'); }
+  listGitHubInstallationRepositories(installationId: string): Promise<Record<string, unknown>> { return this.request(`/github/installations/${encodeURIComponent(installationId)}/repositories`); }
   attachGitHub(projectId: string, serviceId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.request(`/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}/github`, { method: 'POST', body: input });
   }
+  importGitHubRepository(input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request('/github/repositories/import', { method: 'POST', body: input }); }
+  syncGitHubRepository(repositoryId: string, input: Record<string, unknown> = {}): Promise<Record<string, unknown>> { return this.request(`/github/repositories/${encodeURIComponent(repositoryId)}/sync`, { method: 'POST', body: input }); }
   queryResource(resourceId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/console/query`, { method: 'POST', body: input }); }
+  commandResource(resourceId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/console/command`, { method: 'POST', body: input }); }
   browseResource(resourceId: string, input: Record<string, unknown> = {}): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/console/browse`, { method: 'POST', body: input }); }
+  resourceSchema(resourceId: string): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/console/schema`); }
+  resourceTables(resourceId: string): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/console/tables`); }
+  resourceCollections(resourceId: string): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/console/collections`); }
+  resourceKeys(resourceId: string): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/console/keys`); }
   usageMe(): Promise<Record<string, unknown>> { return this.request('/usage/me'); }
 
   private async request<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {

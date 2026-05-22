@@ -41,9 +41,22 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
     '/projects/{projectId}/services/{serviceId}/deployments',
     '/projects/{projectId}/services/{serviceId}/env',
     '/projects/{projectId}/services/{serviceId}/env-file',
+    '/auth/github/login',
+    '/auth/github/callback',
+    '/github/installations',
     '/integrations/github',
     '/projects/{projectId}/services/{serviceId}/github',
+    '/github/installations/{installationId}/repositories',
+    '/github/webhooks',
+    '/github/repositories/import',
+    '/github/repositories/{repositoryId}/sync',
+    '/resources/{resourceId}/console/schema',
+    '/resources/{resourceId}/console/tables',
+    '/resources/{resourceId}/console/collections',
+    '/resources/{resourceId}/console/keys',
     '/resources/{resourceId}/console/query',
+    '/resources/{resourceId}/console/command',
+    '/resources/{resourceId}/console/browse',
     '/usage/me',
   ]) {
     assert.ok(openapi.paths[route], `${route} missing from OpenAPI`);
@@ -57,8 +70,23 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
 
   const servicesController = await fs.readFile(new URL('../apps/api/src/modules/services/services.controller.ts', import.meta.url), 'utf8');
   const resourcesController = await fs.readFile(new URL('../apps/api/src/modules/resources/resources.controller.ts', import.meta.url), 'utf8');
+  const resourceConsoleController = await fs.readFile(new URL('../apps/api/src/modules/resources/resource-console.controller.ts', import.meta.url), 'utf8');
+  const githubController = await fs.readFile(new URL('../apps/api/src/modules/integrations/github.controller.ts', import.meta.url), 'utf8');
+  const authController = await fs.readFile(new URL('../apps/api/src/modules/auth/auth.controller.ts', import.meta.url), 'utf8');
+  const apiMain = await fs.readFile(new URL('../apps/api/src/main.ts', import.meta.url), 'utf8');
+  const persistence = await fs.readFile(new URL('../packages/core/src/persistence.ts', import.meta.url), 'utf8');
+  const apiClient = await fs.readFile(new URL('../packages/api-client/src/index.ts', import.meta.url), 'utf8');
   assert.match(servicesController, /@Get\(\)/);
   assert.match(resourcesController, /@Get\(\)/);
+  for (const marker of ["@Get('schema')", "@Get('tables')", "@Get('collections')", "@Get('keys')", "@Post('query')", "@Post('command')", "@Post('browse')"]) assert.ok(resourceConsoleController.includes(marker), `${marker} missing from ResourceConsoleController`);
+  for (const marker of ["@Get('github/installations')", "@Get('github/installations/:installationId/repositories')", "@Post('github/webhooks')", "@Post('github/repositories/import')", "@Post('github/repositories/:repositoryId/sync')"]) assert.ok(githubController.includes(marker), `${marker} missing from GitHub controller`);
+  assert.ok(apiMain.includes('rawBody: true'), 'Nest bootstrap must keep raw webhook bytes for GitHub HMAC verification');
+  assert.ok(githubController.includes('req.rawBody'), 'GitHub webhook controller must verify the original raw payload bytes');
+  assert.ok(persistence.includes('if (integrationIds.length === 0) return { installationId: String(input.installationId), repositories: [] };'), 'Prisma GitHub installation repository listing must not leak all repos when scope filters out integrations');
+  assert.ok(!persistence.includes('integrationIds.length === 0 || integrationIds.includes'), 'Prisma GitHub installation repository listing must not use broad fallback matching');
+  assert.ok(authController.includes("@Get('github/login')"));
+  assert.ok(authController.includes("@Get('github/callback')"));
+  for (const method of ['resourceSchema', 'resourceTables', 'resourceCollections', 'resourceKeys', 'commandResource', 'listGitHubInstallations', 'listGitHubInstallationRepositories', 'importGitHubRepository', 'syncGitHubRepository']) assert.match(apiClient, new RegExp(method));
 });
 
 test('production persistence defaults to Prisma and rejects unsafe memory/secret gaps', () => {

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, Query, Req } from '@nestjs/common';
 import { RequirePermission } from '../../auth/permissions.decorator';
 import { RAIBITSERVERService } from '../../raibitserver.service';
 
@@ -14,6 +14,16 @@ export class AuthController {
   @Post('login')
   login(@Body() input: Record<string, any>) {
     return this.raibitServer.login(input);
+  }
+
+  @Get('github/login')
+  githubLogin(@Query() input: Record<string, any>) {
+    return this.raibitServer.githubLogin(input || {});
+  }
+
+  @Get('github/callback')
+  githubCallback(@Query() input: Record<string, any>) {
+    return this.raibitServer.githubCallback(input || {});
   }
 
   @RequirePermission('project:read')

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseE2EOptions, resolveE2EPlan, hasLiveE2ETools, missingLiveE2EToolGroups } from '../scripts/e2e-mode.mjs';
+import { parseE2EOptions, resolveE2EPlan, hasLiveE2ETools, missingLiveE2EToolGroups, liveE2ESetupPlan } from '../scripts/e2e-mode.mjs';
 
 test('e2e mode defaults to deterministic dry-run without execute side effects', () => {
   const options = parseE2EOptions([], {});
@@ -11,6 +11,7 @@ test('e2e mode defaults to deterministic dry-run without execute side effects', 
   assert.equal(plan.dryRun, true);
   assert.equal(plan.label, 'deterministic-dry-run');
   assert.deepEqual(plan.missingTools, ['docker', 'kubectl', 'kind|k3d']);
+  assert.equal(plan.setup.clusterEngine, 'dry-run');
 });
 
 test('live e2e requires explicit execute plus container and cluster tools', () => {
@@ -25,10 +26,19 @@ test('live e2e requires explicit execute plus container and cluster tools', () =
   assert.equal(plan.mode, 'live');
   assert.equal(plan.dryRun, false);
   assert.equal(plan.label, 'live-container-execute');
+  assert.equal(plan.setup.clusterEngine, 'k3d');
+  assert.equal(plan.setup.commands.some((command) => command.includes('registry:2')), true);
 });
 
 test('auto mode only escalates to live when execute is explicit and tools are ready', () => {
   const tools = { docker: true, kubectl: true, kind: true };
   assert.equal(resolveE2EPlan({ requestedMode: 'auto', execute: false, tools }).mode, 'dry');
   assert.equal(resolveE2EPlan({ requestedMode: 'auto', execute: true, tools }).mode, 'live');
+});
+
+test('live setup plan chooses kind or k3d and includes registry plus ingress steps', () => {
+  const kindPlan = liveE2ESetupPlan({ docker: true, kubectl: true, kind: true });
+  assert.equal(kindPlan.clusterEngine, 'kind');
+  assert.equal(kindPlan.registryPort, 5000);
+  assert.equal(kindPlan.commands.some((command) => command.includes('ingress-nginx')), true);
 });

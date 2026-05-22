@@ -2,8 +2,22 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { guardDatabaseQuery, isReadOnlyDatabaseQuery } from './security.ts';
 import { isProviderOwnedSqlitePath } from './resource-sanitizer.ts';
+import { providerConsoleSurface } from './resource-providers.ts';
 
 export async function runDbConsoleQuery(resource: Record<string, any>, query: string, options: Record<string, any> = {}) {
+  const engine = String(resource.engine || resource.desiredSpec?.engine || '').toLowerCase();
+  if (engine !== 'sqlite' && engine !== 'postgresql' && engine !== 'postgres') {
+    const surface = providerConsoleSurface(resource, options);
+    return {
+      engine,
+      mode: surface.mode || 'connection-info',
+      rows: [],
+      fields: [],
+      warning: surface.warning || `${engine} console requires a live provider connection; local deterministic mode verified the provider command path`,
+      command: surface.command,
+      guard: { allowed: true, readOnly: true, providerCommand: true },
+    };
+  }
   const guard = guardDatabaseQuery(query, { role: options.role || 'developer', confirmed: options.confirmed === true });
   if (!guard.allowed) {
     const error = new Error(guard.reason);
@@ -11,17 +25,8 @@ export async function runDbConsoleQuery(resource: Record<string, any>, query: st
     (error as any).guard = guard;
     throw error;
   }
-  const engine = String(resource.engine || resource.desiredSpec?.engine || '').toLowerCase();
   if (engine === 'sqlite') return runSqlite(resource, query, options);
-  if (engine === 'postgresql' || engine === 'postgres') return runPostgres(resource, query, options, guard);
-  return {
-    engine,
-    mode: 'connection-info',
-    rows: [],
-    fields: [],
-    warning: `${engine} console requires a live provider connection; local deterministic mode verified the query guard and audit path`,
-    guard,
-  };
+  return runPostgres(resource, query, options, guard);
 }
 
 async function runSqlite(resource: Record<string, any>, query: string, options: Record<string, any>) {
@@ -112,7 +117,7 @@ function normalizeSqlForPolicy(query: string) {
 export async function browseDbConsole(resource: Record<string, any>, options: Record<string, any> = {}) {
   const engine = String(resource.engine || '').toLowerCase();
   if (engine === 'postgresql' || engine === 'postgres') return browsePostgres(resource, options);
-  if (engine !== 'sqlite') return { engine, tables: [], collections: [], keys: [], warning: 'live provider browser is available when the provider connection is configured' };
+  if (engine !== 'sqlite') return providerConsoleSurface(resource, options);
   const sqlite = await import('node:sqlite');
   const dbPath = providerSqlitePath(resource);
   await ensureSqliteDirectory(dbPath);
@@ -123,6 +128,31 @@ export async function browseDbConsole(resource: Record<string, any>, options: Re
   } finally {
     db.close();
   }
+}
+
+export async function resourceConsoleView(resource: Record<string, any>, view: string, options: Record<string, any> = {}) {
+  const surface = await browseDbConsole(resource, options) as Record<string, any>;
+  const engine = surface.engine || String(resource.engine || '').toLowerCase();
+  if (view === 'schema') {
+    return {
+      engine,
+      schema: {
+        schemas: surface.schemas || [],
+        tables: surface.tables || [],
+        collections: surface.collections || [],
+        keys: surface.keys || [],
+        buckets: surface.buckets || [],
+        streams: surface.streams || [],
+        subjects: surface.subjects || [],
+      },
+      warning: surface.warning,
+      mode: surface.mode,
+    };
+  }
+  if (view === 'tables') return { engine, schemas: surface.schemas || [], tables: surface.tables || [], warning: surface.warning, mode: surface.mode };
+  if (view === 'collections') return { engine, collections: surface.collections || [], warning: surface.warning, mode: surface.mode };
+  if (view === 'keys') return { engine, keys: surface.keys || [], warning: surface.warning, mode: surface.mode, command: surface.command };
+  return surface;
 }
 
 async function ensureSqliteDirectory(dbPath: string) {

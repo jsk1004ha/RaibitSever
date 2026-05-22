@@ -97,6 +97,22 @@ test('quota enforcement accounts for existing project and service usage', () => 
   assert.throws(() => store.enforceUserCan({ userId: user.id, action: 'service:create', metric: 'maxServices', increment: 1 }), /quota exceeded: maxServices/);
 });
 
+test('quota usage includes build minutes, runtime hours, CPU, and memory', () => {
+  const store = new ControlPlaneStore();
+  const org = store.createOrganization({ name: 'Usage Org', slug: 'usage-org' });
+  const user = store.createUser({ email: 'usage@example.com', name: 'Usage User', approvalStatus: 'APPROVED', accountType: 'NON_CLUB' });
+  store.addMember({ organizationId: org.id, userId: user.id, role: 'owner' });
+  const project = store.createProject({ organizationId: org.id, name: 'usage', slug: 'usage' });
+  const service = store.createService({ projectId: project.id, name: 'web', desiredSpec: { resources: { requests: { cpu: '500m', memory: '512Mi' } } } });
+  store.recordUsage({ userId: user.id, organizationId: org.id, projectId: project.id, serviceId: service.id, metric: 'build-minutes', value: 7 });
+  store.recordUsage({ userId: user.id, organizationId: org.id, projectId: project.id, serviceId: service.id, metric: 'runtime-hours', value: 3 });
+  const usage = store.quotaUsageForUser(user.id);
+  assert.equal(usage.maxBuildMinutesPerMonth, 7);
+  assert.equal(usage.maxRuntimeHoursPerMonth, 3);
+  assert.equal(usage.maxCpuMillicores, 500);
+  assert.equal(usage.maxMemoryMb, 512);
+});
+
 test('production secret sealing requires a runtime encryption key', () => {
   const previousNodeEnv = process.env.NODE_ENV;
   const previousEncryptionKey = process.env.ENCRYPTION_KEY;

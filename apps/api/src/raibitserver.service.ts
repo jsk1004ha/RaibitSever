@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
-import { createControlPlaneRepository, createSessionToken, hashPassword, normalizeEmail, organizationScopeFromProjectInput, personalOrganizationSlug, requireScope, validateServiceSecurity, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
+import { createControlPlaneRepository, createSessionToken, githubOAuthLoginPlan, hashPassword, normalizeEmail, organizationScopeFromProjectInput, personalOrganizationSlug, requireScope, validateServiceSecurity, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 
 /**
  * NestJS-facing desired-state service.
@@ -190,12 +190,28 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     return repository.runResourceConsoleQuery(resourceId, input.query, { ...input, role: subject.role, actorUserId: subject.id });
   }
 
+  async commandResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const resource = repository.getResource ? await repository.getResource(resourceId) : (await repository.snapshot()).resources.find((candidate: Record<string, any>) => String(candidate.id) === String(resourceId));
+    if (!resource) throw new NotFoundException(`resource not found: ${resourceId}`);
+    await assertProjectAccess(repository, resource.projectId, subject);
+    return repository.runResourceConsoleCommand(resourceId, input.command || input.query, { ...input, role: subject.role, actorUserId: subject.id });
+  }
+
   async browseResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     const resource = repository.getResource ? await repository.getResource(resourceId) : (await repository.snapshot()).resources.find((candidate: Record<string, any>) => String(candidate.id) === String(resourceId));
     if (!resource) throw new NotFoundException(`resource not found: ${resourceId}`);
     await assertProjectAccess(repository, resource.projectId, subject);
     return repository.browseResourceConsole(resourceId, input);
+  }
+
+  async resourceConsoleView(resourceId: string, view: string, input: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const resource = repository.getResource ? await repository.getResource(resourceId) : (await repository.snapshot()).resources.find((candidate: Record<string, any>) => String(candidate.id) === String(resourceId));
+    if (!resource) throw new NotFoundException(`resource not found: ${resourceId}`);
+    await assertProjectAccess(repository, resource.projectId, subject);
+    return repository.resourceConsoleView(resourceId, view, { ...input, role: subject.role, actorUserId: subject.id });
   }
 
   async usageMe(subject: Record<string, any>) {
@@ -272,6 +288,42 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     await assertProjectAccess(repository, projectId, subject);
     await assertServiceInProject(repository, projectId, serviceId);
     return repository.attachGitHubRepositoryToService({ projectId, serviceId, integrationId: input.integrationId, repoUrl: input.repoUrl || input.repository, branch: input.branch || 'main', actorUserId: subject.id });
+  }
+
+  githubLogin(input: Record<string, any> = {}) {
+    return githubOAuthLoginPlan(input);
+  }
+
+  githubCallback(input: Record<string, any> = {}) {
+    return { provider: 'github', received: true, codePresent: Boolean(input.code), state: input.state || null, mode: 'deterministic-local-callback' };
+  }
+
+  async listGitHubInstallations(subject: Record<string, any>, organizationId?: string) {
+    const repository: any = await this.repositoryPromise;
+    const scopedOrganizationId = organizationId || subject.organizationId;
+    enforceScope(subject, { organizationId: scopedOrganizationId });
+    return repository.listGitHubInstallations({ organizationId: scopedOrganizationId });
+  }
+
+  async listGitHubInstallationRepositories(installationId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    return repository.listGitHubInstallationRepositories({ installationId, actorUserId: subject.id, organizationId: subject.organizationId, organizationIds: subject.organizationIds });
+  }
+
+  async importGitHubRepository(input: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    await assertProjectAccess(repository, input.projectId, subject);
+    return repository.importGitHubRepository({ ...input, actorUserId: subject.id });
+  }
+
+  async syncGitHubRepository(repositoryId: string, input: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    return repository.syncGitHubRepository({ ...input, repositoryId, actorUserId: subject.id, organizationId: subject.organizationId, organizationIds: subject.organizationIds });
+  }
+
+  async handleGitHubWebhook(input: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    return repository.handleGitHubWebhook(input);
   }
 }
 

@@ -7,6 +7,7 @@ import { runtimeConfigStatus } from './config.ts';
 import { normalizeEnvEntries, parseDotEnv } from './env-file.ts';
 import { can } from './rbac.ts';
 import { validateServiceSecurity } from './security.ts';
+import { githubOAuthLoginPlan } from './github-integration.ts';
 
 export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), options: Record<string, any> = {}) {
   const auth = options.auth || authConfigFromEnv();
@@ -51,6 +52,12 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const token = createSessionToken(user, memberships, auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: body.expiresInSeconds || 3600 });
         const { passwordHash: _passwordHash, ...publicUser } = user;
         return send(res, 200, { user: publicUser, memberships, token });
+      }
+      if (method === 'GET' && url.pathname === '/auth/github/login') {
+        return send(res, 200, githubOAuthLoginPlan(Object.fromEntries(url.searchParams.entries())));
+      }
+      if (method === 'GET' && url.pathname === '/auth/github/callback') {
+        return send(res, 200, { provider: 'github', received: true, codePresent: Boolean(url.searchParams.get('code')), state: url.searchParams.get('state'), mode: 'deterministic-local-callback' });
       }
       if (method === 'GET' && url.pathname === '/auth/me') {
         const subject = subjectFromRequest(req, auth);
@@ -245,7 +252,16 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         authorizeAction(req, 'logs:read', auth);
         return send(res, 200, { logs: controlPlane.store.listRuntimeLogs(decodeURIComponent(runtimeLogsMatch[1])) });
       }
-      const resourceConsoleQueryMatch = url.pathname.match(/^\/resources\/([^/]+)\/console\/(query|browse)$/);
+      const resourceConsoleGetMatch = url.pathname.match(/^\/resources\/([^/]+)\/console\/(schema|tables|collections|keys)$/);
+      if (resourceConsoleGetMatch && method === 'GET') {
+        const subject = authorizeAction(req, 'db:connect-limited', auth);
+        const [resourceId, view] = resourceConsoleGetMatch.slice(1).map(decodeURIComponent);
+        const resource = controlPlane.store.resources.get(resourceId);
+        if (!resource) return send(res, 404, { error: 'resource_not_found' });
+        await assertProjectAccess(controlPlane.store, resource.projectId, subject);
+        return send(res, 200, await controlPlane.store.resourceConsoleView(resourceId, view, { ...Object.fromEntries(url.searchParams.entries()), role: subject.role, actorUserId: subject.id }));
+      }
+      const resourceConsoleQueryMatch = url.pathname.match(/^\/resources\/([^/]+)\/console\/(query|browse|command)$/);
       if (resourceConsoleQueryMatch && method === 'POST') {
         const subject = authorizeAction(req, 'db:connect-limited', auth);
         const [resourceId, action] = resourceConsoleQueryMatch.slice(1).map(decodeURIComponent);
@@ -253,9 +269,9 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const resource = controlPlane.store.resources.get(resourceId);
         if (!resource) return send(res, 404, { error: 'resource_not_found' });
         await assertProjectAccess(controlPlane.store, resource.projectId, subject);
-        return send(res, 200, action === 'query'
-          ? await controlPlane.store.runResourceConsoleQuery(resourceId, body.query, { ...body, role: subject.role, actorUserId: subject.id })
-          : await controlPlane.store.browseResourceConsole(resourceId, body));
+        if (action === 'query') return send(res, 200, await controlPlane.store.runResourceConsoleQuery(resourceId, body.query, { ...body, role: subject.role, actorUserId: subject.id }));
+        if (action === 'command') return send(res, 200, await controlPlane.store.runResourceConsoleCommand(resourceId, body.command || body.query, { ...body, role: subject.role, actorUserId: subject.id }));
+        return send(res, 200, await controlPlane.store.browseResourceConsole(resourceId, body));
       }
       const adminApproveMatch = url.pathname.match(/^\/admin\/users\/([^/]+)\/(approve|reject)$/);
       if (adminApproveMatch && method === 'POST') {
@@ -266,7 +282,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         return send(res, 200, action === 'approve' ? controlPlane.store.approveUser(userId, body) : controlPlane.store.rejectUser(userId));
       }
       const adminQuotaMatch = url.pathname.match(/^\/admin\/users\/([^/]+)\/quota$/);
-      if (adminQuotaMatch && method === 'PATCH') {
+      if (adminQuotaMatch && (method === 'PATCH' || method === 'POST')) {
         const subject = authorizeAction(req, 'audit:read', auth);
         if (subject.userRole !== 'ADMIN' && subject.role !== 'owner' && subject.global !== true) return send(res, 403, { error: 'admin_required' });
         const body = await readJson(req);
@@ -319,6 +335,12 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         requireScope(subject, { organizationId });
         return send(res, 200, { integrations: controlPlane.store.listGitHubIntegrations({ organizationId }) });
       }
+      if (method === 'GET' && url.pathname === '/github/installations') {
+        const subject = authorizeAction(req, 'project:read', auth);
+        const organizationId = url.searchParams.get('organizationId') || subject.organizationId;
+        requireScope(subject, { organizationId });
+        return send(res, 200, controlPlane.store.listGitHubInstallations({ organizationId }));
+      }
       const githubServiceMatch = url.pathname.match(/^\/projects\/([^/]+)\/services\/([^/]+)\/github$/);
       if (githubServiceMatch && method === 'POST') {
         const subject = authorizeAction(req, 'deploy:run', auth);
@@ -326,6 +348,34 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         await assertServiceAccess(controlPlane.store, projectId, serviceId, subject);
         const body = await readJson(req);
         return send(res, 200, controlPlane.store.attachGitHubRepositoryToService({ projectId, serviceId, integrationId: body.integrationId, repoUrl: body.repoUrl || body.repository, branch: body.branch || 'main', actorUserId: subject.id }));
+      }
+      const githubInstallationRepositoriesMatch = url.pathname.match(/^\/github\/installations\/([^/]+)\/repositories$/);
+      if (githubInstallationRepositoriesMatch && method === 'GET') {
+        const subject = authorizeAction(req, 'project:read', auth);
+        return send(res, 200, controlPlane.store.listGitHubInstallationRepositories({ installationId: decodeURIComponent(githubInstallationRepositoriesMatch[1]), organizationId: subject.organizationId, organizationIds: subject.organizationIds }));
+      }
+      if (method === 'POST' && url.pathname === '/github/webhooks') {
+        const bodyText = await readRaw(req);
+        const payload = bodyText.trim() ? JSON.parse(bodyText) : {};
+        return send(res, 202, controlPlane.store.handleGitHubWebhook({
+          event: req.headers['x-github-event'],
+          deliveryId: req.headers['x-github-delivery'],
+          signature: req.headers['x-hub-signature-256'],
+          body: bodyText,
+          payload,
+        }));
+      }
+      if (method === 'POST' && url.pathname === '/github/repositories/import') {
+        const subject = authorizeAction(req, 'deploy:run', auth);
+        const body = await readJson(req);
+        await assertProjectAccess(controlPlane.store, body.projectId, subject);
+        return send(res, 201, controlPlane.store.importGitHubRepository({ ...body, actorUserId: subject.id }));
+      }
+      const githubRepositorySyncMatch = url.pathname.match(/^\/github\/repositories\/([^/]+)\/sync$/);
+      if (githubRepositorySyncMatch && method === 'POST') {
+        const subject = authorizeAction(req, 'deploy:run', auth);
+        const body = await readJson(req);
+        return send(res, 202, controlPlane.store.syncGitHubRepository({ ...body, repositoryId: decodeURIComponent(githubRepositorySyncMatch[1]), actorUserId: subject.id, organizationId: subject.organizationId, organizationIds: subject.organizationIds }));
       }
 
       return send(res, 404, { error: 'not_found', path: url.pathname });
@@ -441,11 +491,17 @@ function projectSpecFromBody(body) {
 }
 
 export async function readJson(req) {
+  const text = await readRaw(req);
+  if (!text.trim()) return {};
+  const contentType = String(req.headers?.['content-type'] || req.headers?.['Content-Type'] || '').toLowerCase();
+  if (contentType.includes('application/x-www-form-urlencoded')) return Object.fromEntries(new URLSearchParams(text).entries());
+  return JSON.parse(text);
+}
+
+export async function readRaw(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
-  const text = Buffer.concat(chunks).toString('utf8');
-  if (!text.trim()) return {};
-  return JSON.parse(text);
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 export function send(res, statusCode, body) {

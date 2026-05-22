@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-const SECRET_KEY_RE = /(secret|password|token|private|credential|api[_-]?key|access[_-]?key|database_url|mongodb_uri|redis_url|mysql_url|postgres_url|dsn)/i;
+const SECRET_KEY_RE = /(secret|password|token|private|credential|api[_-]?key|access[_-]?key|database[_-]?url|connection[_-]?url|mongodb[_-]?uri|redis[_-]?url|mysql[_-]?url|mariadb[_-]?url|postgres[_-]?url|postgresql[_-]?url|dsn)/i;
+const SECRET_VALUE_RE = /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|nats|amqps?|s3):\/\/[^\s'",)]+/gi;
 
 export function isSecretKey(key) {
   const value = String(key || '');
@@ -16,6 +17,7 @@ export function maskSecretValue(value) {
 
 export function maskSecrets(input) {
   if (Array.isArray(input)) return input.map(maskSecrets);
+  if (typeof input === 'string') return maskSecretLikeString(input);
   if (!input || typeof input !== 'object') return input;
   const output = {};
   for (const [key, value] of Object.entries(input)) {
@@ -24,6 +26,11 @@ export function maskSecrets(input) {
       : maskSecrets(value);
   }
   return output;
+}
+
+
+function maskSecretLikeString(value) {
+  return String(value).replace(SECRET_VALUE_RE, (match) => maskSecretValue(match));
 }
 
 const LOCAL_DEV_SECRET_KEY = 'raibitserver-local-development-secret-key-for-local-e2e-only';

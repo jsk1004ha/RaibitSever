@@ -3,7 +3,8 @@ import { deepClone, stableId } from './ids.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
 import { openSecret, sealSecret } from './secret-vault.ts';
 import { secretEncryptionConfigured } from './config.ts';
-import { runDbConsoleQuery, browseDbConsole } from './db-console.ts';
+import { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
+import { provisionPostgresProvider } from './resource-providers.ts';
 import { completeWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
 import { providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
 
@@ -24,6 +25,7 @@ export class InMemoryControlPlaneRepository {
   async createService(input: Record<string, any>) { return this.store.createService(input); }
   async createResource(input: Record<string, any>) { return this.store.createResource(input); }
   async attachProviderConnectionSecret(input: Record<string, any>) { return this.store.attachProviderConnectionSecret(input); }
+  async provisionResourceProvider(input: Record<string, any>) { return this.store.provisionResourceProvider(input); }
   async createDeployment(input: Record<string, any>) { return this.store.createDeployment(input); }
   async createSecret(input: Record<string, any>) { return this.store.createSecret(input); }
   async createDeploymentWorkflow(input: Record<string, any>) {
@@ -49,6 +51,11 @@ export class InMemoryControlPlaneRepository {
   async createGitHubIntegration(input: Record<string, any>) { return this.store.createGitHubIntegration(input); }
   async listGitHubIntegrations(input: Record<string, any>) { return this.store.listGitHubIntegrations(input); }
   async attachGitHubRepositoryToService(input: Record<string, any>) { return this.store.attachGitHubRepositoryToService(input); }
+  async listGitHubInstallations(input: Record<string, any>) { return this.store.listGitHubInstallations(input); }
+  async listGitHubInstallationRepositories(input: Record<string, any>) { return this.store.listGitHubInstallationRepositories(input); }
+  async importGitHubRepository(input: Record<string, any>) { return this.store.importGitHubRepository(input); }
+  async syncGitHubRepository(input: Record<string, any>) { return this.store.syncGitHubRepository(input); }
+  async handleGitHubWebhook(input: Record<string, any>) { return this.store.handleGitHubWebhook(input); }
   async enqueueWorkflowJob(input: Record<string, any>) { return this.store.enqueueWorkflowJob(input); }
   async claimNextWorkflowJob(input: Record<string, any> = {}) { return this.store.claimNextWorkflowJob(input); }
   async completeWorkflowJob(jobId: string, result: any = {}, options: Record<string, any> = {}) { return this.store.completeWorkflowJob(jobId, result, options); }
@@ -66,7 +73,9 @@ export class InMemoryControlPlaneRepository {
   async listRuntimeLogs(serviceId: string) { return this.store.listRuntimeLogs(serviceId); }
   async listDeploymentEvents(deploymentId: string) { return this.store.listDeploymentEvents(deploymentId); }
   async runResourceConsoleQuery(resourceId: string, query: string, options: Record<string, any> = {}) { return this.store.runResourceConsoleQuery(resourceId, query, options); }
+  async runResourceConsoleCommand(resourceId: string, command: string, options: Record<string, any> = {}) { return this.store.runResourceConsoleCommand(resourceId, command, options); }
   async browseResourceConsole(resourceId: string, options: Record<string, any> = {}) { return this.store.browseResourceConsole(resourceId, options); }
+  async resourceConsoleView(resourceId: string, view: string, options: Record<string, any> = {}) { return this.store.resourceConsoleView(resourceId, view, options); }
   async snapshot() { return this.store.snapshot(); }
 }
 
@@ -152,6 +161,19 @@ export class PrismaControlPlaneRepository {
       update: resourceData(input, { connectionSecretName: existing?.connectionSecretName || null }),
       create: { projectId: input.projectId, name: input.name, slug: input.slug || slugInput(input.name), ...resourceData(input) },
     });
+  }
+
+
+  async provisionResourceProvider({ resourceId, actorUserId = 'provider', ...options }: Record<string, any>) {
+    const resource = await this.getResource(resourceId);
+    if (!resource) throw new Error(`resource not found: ${resourceId}`);
+    const engine = String(resource.engine || '').toLowerCase();
+    if (engine !== 'postgresql' && engine !== 'postgres') throw new Error(`direct provider is not implemented for ${engine}`);
+    const result = await provisionPostgresProvider(resource, options);
+    const attached = await this.attachProviderConnectionSecret({ resourceId, databaseUrl: result.databaseUrl, actorUserId });
+    const updated = await this.prisma.resource.update({ where: { id: resourceId }, data: { status: 'ready', provider: result.provider, desiredState: maskSecrets({ ...(attached.desiredState || {}), providerResult: result.plan }) } });
+    await this.prisma.auditLog.create({ data: { actorUserId, action: 'resource.provider:provision', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ engine, provider: result.provider, dryRun: result.dryRun, databaseUrl: result.databaseUrlMasked }) } });
+    return { resource: updated, result: maskSecrets({ ...result, databaseUrl: undefined }) };
   }
 
   async attachProviderConnectionSecret({ resourceId, databaseUrl, connectionUrl, actorUserId = 'provider' }: Record<string, any>) {
@@ -285,12 +307,91 @@ export class PrismaControlPlaneRepository {
   async attachGitHubRepositoryToService(input: Record<string, any>) {
     const { parseGitHubRepository } = await import('./github-integration.ts');
     const repo = parseGitHubRepository(input.repoUrl);
+    const serviceRow = await this.prisma.service.findUnique({ where: { id: input.serviceId }, include: { project: true } });
+    const integration = input.integrationId ? await this.prisma.githubIntegration.findUnique({ where: { id: input.integrationId } }) : null;
+    if (integration && serviceRow?.project && String(integration.organizationId) !== String(serviceRow.project.organizationId)) {
+      throw forbiddenError('GitHub integration does not belong to project organization');
+    }
     const service = await this.prisma.service.update({
       where: { id: input.serviceId },
       data: { sourceType: 'github', repoUrl: repo.repoUrl, branch: input.branch || 'main', desiredState: sanitizeJson({ githubIntegrationId: input.integrationId || null, githubRepository: repo.fullName }) },
     });
     await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'github:attach-repository', targetType: 'service', targetId: input.serviceId, metadata: { repository: repo.fullName, integrationId: input.integrationId || null } } });
     return { service, github: { integrationId: input.integrationId || null, repository: repo.fullName, repoUrl: repo.repoUrl, branch: input.branch || 'main' } };
+  }
+
+  async listGitHubInstallations(input: Record<string, any>) {
+    const integrations = await this.prisma.githubIntegration.findMany({ where: { organizationId: input.organizationId, installationId: { not: null } } });
+    return {
+      installations: integrations.map((integration: Record<string, any>) => ({
+        id: String(integration.installationId),
+        installationId: String(integration.installationId),
+        integrationId: integration.id,
+        accountLogin: integration.accountLogin,
+        organizationId: integration.organizationId,
+        repositoryCount: 0,
+      })),
+    };
+  }
+
+  async listGitHubInstallationRepositories(input: Record<string, any>) {
+    const organizationIds = organizationScopeArray(input);
+    const integrations = await this.prisma.githubIntegration.findMany({ where: { installationId: String(input.installationId), ...(organizationIds.length ? { organizationId: { in: organizationIds } } : {}) } });
+    const integrationIds = integrations.map((integration: Record<string, any>) => String(integration.id));
+    if (integrationIds.length === 0) return { installationId: String(input.installationId), repositories: [] };
+    const services = await this.prisma.service.findMany({ where: { repoUrl: { not: null } } });
+    const repositories = uniquePrismaRepositories(services.filter((service: Record<string, any>) => {
+      const desired = service.desiredState || {};
+      return integrationIds.includes(String(desired.githubIntegrationId || desired.github?.integrationId || ''));
+    }));
+    return { installationId: String(input.installationId), repositories };
+  }
+
+  async importGitHubRepository(input: Record<string, any>) {
+    const { parseGitHubRepository } = await import('./github-integration.ts');
+    const repo = parseGitHubRepository(input.repoUrl || input.repository);
+    const project = await this.prisma.project.findUnique({ where: { id: input.projectId } });
+    const integration = input.integrationId ? await this.prisma.githubIntegration.findUnique({ where: { id: input.integrationId } }) : null;
+    if (integration && project && String(integration.organizationId) !== String(project.organizationId)) {
+      throw forbiddenError('GitHub integration does not belong to project organization');
+    }
+    const service = await this.createService({
+      projectId: input.projectId,
+      name: input.serviceName || repo.repo,
+      type: 'web',
+      runtimeType: 'container',
+      sourceType: 'github',
+      repoUrl: repo.repoUrl,
+      branch: input.branch || 'main',
+      desiredState: { github: { repository: repo.fullName, integrationId: input.integrationId || null, imported: true }, githubRepository: repo.fullName, githubIntegrationId: input.integrationId || null },
+    });
+    await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'github:import-repository', targetType: 'project', targetId: input.projectId, metadata: maskSecrets({ repository: repo.fullName, integrationId: input.integrationId || null }) } });
+    return { service, github: { integrationId: input.integrationId || null, repository: repo.fullName, repoUrl: repo.repoUrl, branch: input.branch || 'main' } };
+  }
+
+  async syncGitHubRepository(input: Record<string, any>) {
+    const repository = String(input.repository || input.repositoryId || '');
+    const workflowJob = await this.enqueueWorkflowJob({ type: 'github-repository-sync', targetType: 'github-repository', targetId: repository, payload: { repository } });
+    await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'github:repository-sync', targetType: 'github-repository', targetId: repository, metadata: maskSecrets({ repository }) } });
+    return { repository, services: [], workflowJob };
+  }
+
+  async handleGitHubWebhook(input: Record<string, any>) {
+    const { githubWebhookActionPlan, githubWebhookOutboundPlan, verifyGitHubWebhookSignature } = await import('./github-integration.ts');
+    const rawBody = typeof input.body === 'string' ? input.body : JSON.stringify(input.payload || {});
+    const secret = input.secret || process.env.RAIBITSERVER_GITHUB_WEBHOOK_SECRET || process.env.GITHUB_WEBHOOK_SECRET || '';
+    if (secret && !verifyGitHubWebhookSignature(rawBody, input.signature, secret)) {
+      const error = new Error('invalid GitHub webhook signature');
+      (error as any).statusCode = 401;
+      throw error;
+    }
+    const deliveryId = String(input.deliveryId || stableId('ghdel', input.event, rawBody));
+    const existing = await this.prisma.webhookEvent.findUnique({ where: { deliveryId } }).catch(() => null);
+    if (existing) return { accepted: true, duplicate: true, deliveryId, actions: [] };
+    const actionPlan = githubWebhookActionPlan(input.event, input.payload || {});
+    const row = await this.prisma.webhookEvent.create({ data: { provider: 'github', eventType: String(input.event || 'unknown'), deliveryId, payload: sanitizeJson(maskSecrets(input.payload || {})), handled: true } });
+    const outbound = githubWebhookOutboundPlan(actionPlan, []);
+    return { accepted: true, duplicate: false, deliveryId, event: input.event, repository: actionPlan.repository, action: actionPlan.action, matchedServiceCount: 0, actions: [], outbound, webhookEvent: row };
   }
 
   async enqueueWorkflowJob(input: Record<string, any>) {
@@ -409,13 +510,26 @@ export class PrismaControlPlaneRepository {
     if (projectIds.length === 0) {
       return { maxProjects: 0, maxServices: 0, maxDeploymentsPerDay: 0, maxPreviewDeployments: 0, maxDbStorageMb: 0, maxObjectStorageMb: 0 };
     }
-    const serviceIds = (await this.prisma.service.findMany({ where: { projectId: { in: projectIds } }, select: { id: true } })).map((service: Record<string, any>) => service.id);
+    const services = await this.prisma.service.findMany({ where: { projectId: { in: projectIds } }, select: { id: true, desiredSpec: true, desiredState: true } });
+    const serviceIds = services.map((service: Record<string, any>) => service.id);
     const resources = await this.prisma.resource.findMany({ where: { projectId: { in: projectIds } }, select: { type: true, engine: true, desiredSpec: true, desiredState: true } });
     const start = new Date();
     start.setUTCHours(0, 0, 0, 0);
     const end = new Date(start);
     end.setUTCDate(end.getUTCDate() + 1);
     const deployments = serviceIds.length === 0 ? [] : await this.prisma.deployment.findMany({ where: { serviceId: { in: serviceIds }, createdAt: { gte: start, lt: end } }, select: { deploymentType: true } });
+    const allDeployments = serviceIds.length === 0 ? [] : await this.prisma.deployment.findMany({ where: { serviceId: { in: serviceIds } }, select: { buildStartedAt: true, buildFinishedAt: true, startedAt: true, deployedAt: true, finishedAt: true } });
+    const usageRecords = await this.prisma.usageRecord.findMany({
+      where: {
+        OR: [
+          { userId },
+          { organizationId: { in: organizationIds } },
+          { projectId: { in: projectIds } },
+          ...(serviceIds.length ? [{ serviceId: { in: serviceIds } }] : []),
+        ],
+      },
+      select: { metric: true, value: true },
+    }).catch(() => []);
     return {
       maxProjects: projects.length,
       maxServices: serviceIds.length,
@@ -423,6 +537,10 @@ export class PrismaControlPlaneRepository {
       maxPreviewDeployments: deployments.filter((deployment: Record<string, any>) => deployment.deploymentType === 'preview').length,
       maxDbStorageMb: resources.filter((resource: Record<string, any>) => resourceQuotaMetric(resource) === 'maxDbStorageMb').reduce((sum: number, resource: Record<string, any>) => sum + resourceStorageMb(resource), 0),
       maxObjectStorageMb: resources.filter((resource: Record<string, any>) => resourceQuotaMetric(resource) === 'maxObjectStorageMb').reduce((sum: number, resource: Record<string, any>) => sum + resourceStorageMb(resource), 0),
+      maxBuildMinutesPerMonth: usageMetricSum(usageRecords, ['build-minutes', 'build_minutes', 'buildMinutes', 'maxBuildMinutesPerMonth']) + allDeployments.reduce((sum: number, deployment: Record<string, any>) => sum + deploymentBuildMinutes(deployment), 0),
+      maxRuntimeHoursPerMonth: usageMetricSum(usageRecords, ['runtime-hours', 'runtime_hours', 'runtimeHours', 'app-runtime-hours', 'maxRuntimeHoursPerMonth']) + allDeployments.reduce((sum: number, deployment: Record<string, any>) => sum + deploymentRuntimeHours(deployment), 0),
+      maxCpuMillicores: services.reduce((sum: number, service: Record<string, any>) => sum + serviceCpuMillicores(service), 0),
+      maxMemoryMb: services.reduce((sum: number, service: Record<string, any>) => sum + serviceMemoryMb(service), 0),
     };
   }
 
@@ -442,6 +560,18 @@ export class PrismaControlPlaneRepository {
     return result;
   }
 
+  async runResourceConsoleCommand(resourceId: string, command: string, options: Record<string, any> = {}) {
+    const resource = await this.getResource(resourceId);
+    if (!resource) {
+      const error = new Error(`resource not found: ${resourceId}`);
+      (error as any).statusCode = 404;
+      throw error;
+    }
+    const result = await runDbConsoleQuery(await this.resourceForConsole(resource), command, { ...options, providerCommand: true });
+    await this.prisma.auditLog.create({ data: { actorUserId: options.actorUserId || 'system', action: 'resource.console:command', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ command, mode: (result as any).mode }) } });
+    return result;
+  }
+
   async browseResourceConsole(resourceId: string, options: Record<string, any> = {}) {
     const resource = await this.getResource(resourceId);
     if (!resource) {
@@ -450,6 +580,16 @@ export class PrismaControlPlaneRepository {
       throw error;
     }
     return browseDbConsole(await this.resourceForConsole(resource), options);
+  }
+
+  async resourceConsoleView(resourceId: string, view: string, options: Record<string, any> = {}) {
+    const resource = await this.getResource(resourceId);
+    if (!resource) {
+      const error = new Error(`resource not found: ${resourceId}`);
+      (error as any).statusCode = 404;
+      throw error;
+    }
+    return resourceConsoleView(await this.resourceForConsole(resource), view, options);
   }
 
   async resourceForConsole(resource: Record<string, any>) {
@@ -638,6 +778,33 @@ function deploymentData(input: Record<string, any>) {
   };
 }
 
+function uniquePrismaRepositories(services: Array<Record<string, any>>) {
+  const byRepository = new Map();
+  for (const service of services) {
+    const desired = service.desiredState || {};
+    const repository = desired.githubRepository || desired.github?.repository || service.repoUrl;
+    if (!repository) continue;
+    let parsed: Record<string, any>;
+    try {
+      parsed = parsePrismaRepository(repository);
+    } catch {
+      continue;
+    }
+    const existing = byRepository.get(parsed.fullName);
+    byRepository.set(parsed.fullName, existing
+      ? { ...existing, serviceIds: [...new Set([...(existing.serviceIds || []), service.id])] }
+      : { id: stableId('ghr', parsed.fullName), fullName: parsed.fullName, repoUrl: parsed.repoUrl, defaultBranch: service.branch || 'main', serviceIds: [service.id] });
+  }
+  return [...byRepository.values()];
+}
+
+function parsePrismaRepository(value: any) {
+  const text = String(value || '').replace(/^https:\/\/github\.com\//, '').replace(/\.git$/i, '');
+  const [owner, repo] = text.split('/');
+  if (!owner || !repo) throw new Error('invalid repository');
+  return { fullName: `${owner}/${repo}`, repoUrl: `https://github.com/${owner}/${repo}.git` };
+}
+
 
 function workflowJobData(input: Record<string, any>) {
   return {
@@ -716,6 +883,74 @@ function resourceStorageMb(resource: Record<string, any>) {
   if (spec.storageMb !== undefined) return Number(spec.storageMb || 0);
   if (spec.storageGb !== undefined) return Number(spec.storageGb || 0) * 1024;
   return 1;
+}
+
+function usageMetricSum(records: Array<Record<string, any>>, aliases: string[]) {
+  const names = new Set(aliases.map((alias) => alias.toLowerCase()));
+  return records
+    .filter((record) => names.has(String(record.metric || '').toLowerCase()))
+    .reduce((sum, record) => sum + Number(record.value || 0), 0);
+}
+
+function deploymentBuildMinutes(deployment: Record<string, any>) {
+  const start = dateMs(deployment.buildStartedAt || deployment.startedAt);
+  const end = dateMs(deployment.buildFinishedAt || deployment.finishedAt);
+  return start && end && end > start ? (end - start) / 60_000 : 0;
+}
+
+function deploymentRuntimeHours(deployment: Record<string, any>) {
+  const start = dateMs(deployment.deployedAt);
+  const end = dateMs(deployment.finishedAt) || Date.now();
+  return start && end > start ? (end - start) / 3_600_000 : 0;
+}
+
+function serviceCpuMillicores(service: Record<string, any>) {
+  const spec = service.desiredSpec || service.desiredState || service;
+  return parseCpuMillicores(spec.cpu || spec.cpuRequest || spec.resources?.requests?.cpu || spec.resources?.limits?.cpu);
+}
+
+function serviceMemoryMb(service: Record<string, any>) {
+  const spec = service.desiredSpec || service.desiredState || service;
+  return parseMemoryMb(spec.memory || spec.memoryMb || spec.memoryRequest || spec.resources?.requests?.memory || spec.resources?.limits?.memory);
+}
+
+function parseCpuMillicores(value: any) {
+  if (value === null || value === undefined || value === '') return 0;
+  const text = String(value).trim();
+  if (text.endsWith('m')) return Number(text.slice(0, -1)) || 0;
+  const number = Number(text);
+  return Number.isFinite(number) ? number * 1000 : 0;
+}
+
+function parseMemoryMb(value: any) {
+  if (value === null || value === undefined || value === '') return 0;
+  const text = String(value).trim().toLowerCase();
+  const number = Number(text.replace(/[a-z]+$/, ''));
+  if (!Number.isFinite(number)) return 0;
+  if (text.endsWith('gi') || text.endsWith('gib')) return number * 1024;
+  if (text.endsWith('gb')) return number * 1000;
+  if (text.endsWith('ki') || text.endsWith('kib')) return number / 1024;
+  if (text.endsWith('kb')) return number / 1000;
+  return number;
+}
+
+function dateMs(value: any) {
+  if (!value) return 0;
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function organizationScopeArray(input: Record<string, any> = {}) {
+  return [
+    input.organizationId,
+    ...(Array.isArray(input.organizationIds) ? input.organizationIds : []),
+  ].filter((value) => value !== null && value !== undefined && String(value).trim()).map(String);
+}
+
+function forbiddenError(message: string) {
+  const error = new Error(message);
+  (error as any).statusCode = 403;
+  return error;
 }
 
 function quotaData(input: Record<string, any>) {

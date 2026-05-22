@@ -25,7 +25,13 @@ test('local E2E script verifies approval, quota, logs, preview, and SQLite conso
   const report = JSON.parse(await fs.readFile('.raibitserver-work/e2e-report.json', 'utf8'));
   assert.match(report.previewDeploymentId, /^dep[-_]/);
   assert.equal(report.checks.includes('SQLite DB console query works'), true);
+  assert.equal(report.checks.includes('PostgreSQL provider dry-run and env injection works'), true);
+  assert.equal(report.checks.includes('preview cleanup workflow enqueued'), true);
   assert.equal(report.checks.includes('build/Kubernetes/provisioning dry-run artifacts generated'), true);
+  assert.equal(report.postgresProviderDryRun, true);
+  assert.equal(report.postgresEnvInjected, true);
+  assert.equal(report.previewCleanupAction, 'preview-cleanup-enqueued');
+  assert.equal(report.liveSetup.clusterEngine, 'dry-run');
 });
 
 test('api-client matches prototype API project/service/resource contract', async () => {

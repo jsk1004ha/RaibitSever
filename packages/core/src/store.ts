@@ -2,9 +2,10 @@ import { deepClone, nowIso, stableId, slugify } from './ids.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
 import { claimNextWorkflowJobFromList, completeWorkflowJobRecord, createWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
 import { normalizeEnvEntries, parseDotEnv, maskEnvEntries } from './env-file.ts';
-import { githubIntegrationSummary, parseGitHubRepository } from './github-integration.ts';
+import { githubIntegrationSummary, githubWebhookActionPlan, githubWebhookOutboundPlan, parseGitHubRepository, verifyGitHubWebhookSignature } from './github-integration.ts';
 import { openSecret, publicSecretRecord, sealSecret, secureRandomSecret } from './secret-vault.ts';
-import { runDbConsoleQuery, browseDbConsole } from './db-console.ts';
+import { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
+import { provisionPostgresProvider } from './resource-providers.ts';
 import { providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
 
 export class ControlPlaneStore {
@@ -22,6 +23,7 @@ export class ControlPlaneStore {
   secrets: Map<string, any>;
   environmentVariables: Map<string, any>;
   githubIntegrations: Map<string, any>;
+  webhookEvents: Map<string, any>;
   buildLogs: any[];
   runtimeLogs: any[];
   deploymentEvents: any[];
@@ -43,6 +45,7 @@ export class ControlPlaneStore {
     this.secrets = new Map();
     this.environmentVariables = new Map();
     this.githubIntegrations = new Map();
+    this.webhookEvents = new Map();
     this.buildLogs = [];
     this.runtimeLogs = [];
     this.deploymentEvents = [];
@@ -148,9 +151,10 @@ export class ControlPlaneStore {
     return deepClone(row);
   }
 
-  createDeployment({ serviceId, commitHash = null, imageUrl, status = 'queued', deploymentType = 'production', branch = 'main', previewUrl = null }: Record<string, any>) {
+  createDeployment({ serviceId, commitHash = null, commitSha = null, imageUrl, imageDigest = null, status = 'queued', deploymentType = 'production', branch = 'main', previewUrl = null, triggerType = 'manual', pullRequestNumber = null, errorCode = null, errorMessage = null }: Record<string, any>) {
     const service = this.services.get(serviceId);
-    const deployment = { id: stableId('dep', serviceId, commitHash || imageUrl || Date.now()), serviceId, projectId: service?.projectId || null, commitHash, commitSha: commitHash, imageUrl, status, deploymentType, branch, previewUrl, triggerType: 'manual', startedAt: nowIso(), createdAt: nowIso(), updatedAt: nowIso(), finishedAt: null };
+    const sha = commitSha || commitHash || null;
+    const deployment = { id: stableId('dep', serviceId, sha || imageUrl || Date.now()), serviceId, projectId: service?.projectId || null, commitHash: commitHash || sha, commitSha: sha, imageUrl, imageDigest, status, deploymentType, branch, previewUrl, triggerType, pullRequestNumber: pullRequestNumber ? Number(pullRequestNumber) : null, errorCode, errorMessage, startedAt: nowIso(), createdAt: nowIso(), updatedAt: nowIso(), finishedAt: null };
     this.deployments.set(deployment.id, deployment);
     this.audit('system', 'deployment:create', 'deployment', deployment.id, { serviceId, status });
     this.appendDeploymentEvent({ deploymentId: deployment.id, type: 'deployment.queued', message: `Deployment queued for ${serviceId}` });
@@ -236,6 +240,20 @@ export class ControlPlaneStore {
     return secret?.sealedValue ? openSecret(secret.sealedValue) : null;
   }
 
+
+  async provisionResourceProvider({ resourceId, actorUserId = 'provider', ...options }: Record<string, any>) {
+    const resource = this.resources.get(resourceId);
+    if (!resource) throw notFound(`resource not found: ${resourceId}`);
+    const engine = String(resource.engine || '').toLowerCase();
+    if (engine !== 'postgresql' && engine !== 'postgres') throw new Error(`direct provider is not implemented for ${engine}`);
+    const result = await provisionPostgresProvider(resource, options);
+    const attached = this.attachProviderConnectionSecret({ resourceId, databaseUrl: result.databaseUrl, actorUserId });
+    const next = { ...attached, status: 'ready', provider: result.provider, desiredState: { ...(attached.desiredState || {}), providerResult: result.plan }, updatedAt: nowIso() };
+    this.resources.set(resourceId, next);
+    this.audit(actorUserId, 'resource.provider:provision', 'resource', resourceId, { engine, provider: result.provider, dryRun: result.dryRun, databaseUrl: result.databaseUrlMasked });
+    return { resource: deepClone(next), result: maskSecrets({ ...result, databaseUrl: undefined }) };
+  }
+
   attachProviderConnectionSecret({ resourceId, databaseUrl, connectionUrl, actorUserId = 'provider' }: Record<string, any>) {
     const resource = this.resources.get(resourceId);
     if (!resource) throw notFound(`resource not found: ${resourceId}`);
@@ -309,7 +327,10 @@ export class ControlPlaneStore {
     const service = this.services.get(serviceId);
     if (!service) throw notFound(`service not found: ${serviceId}`);
     if (String(service.projectId) !== String(projectId)) throw forbidden('service does not belong to project');
+    const project = this.projects.get(projectId);
+    if (!project) throw notFound(`project not found: ${projectId}`);
     const integration = integrationId ? this.githubIntegrations.get(integrationId) : null;
+    if (integration && String(integration.organizationId) !== String(project.organizationId)) throw forbidden('GitHub integration does not belong to project organization');
     const repo = parseGitHubRepository(repoUrl);
     const updated = this.updateService(serviceId, {
       sourceType: 'github',
@@ -320,6 +341,109 @@ export class ControlPlaneStore {
     });
     this.audit(actorUserId, 'github:attach-repository', 'service', serviceId, { integrationId: integration?.id || integrationId || null, repository: repo.fullName, branch });
     return { service: updated, github: { integrationId: integration?.id || integrationId || null, repository: repo.fullName, repoUrl: repo.repoUrl, branch } };
+  }
+
+  listGitHubInstallations({ organizationId }: Record<string, any>) {
+    const integrations = this.listGitHubIntegrations({ organizationId });
+    const installations = integrations
+      .filter((integration: Record<string, any>) => integration.installationId)
+      .map((integration: Record<string, any>) => {
+        const repositories = this.githubRepositoriesForIntegration(integration.id);
+        return { id: String(integration.installationId), installationId: String(integration.installationId), integrationId: integration.id, accountLogin: integration.accountLogin, organizationId: integration.organizationId, repositoryCount: repositories.length };
+      });
+    return { installations };
+  }
+
+  listGitHubInstallationRepositories({ installationId, organizationId = null, organizationIds = null }: Record<string, any>) {
+    const allowedOrganizationIds = organizationScopeSet({ organizationId, organizationIds });
+    const integrations = [...this.githubIntegrations.values()]
+      .filter((integration) => String(integration.installationId) === String(installationId))
+      .filter((integration) => allowedOrganizationIds.size === 0 || allowedOrganizationIds.has(String(integration.organizationId)));
+    const repositories = uniqueRepositories(integrations.flatMap((integration) => this.githubRepositoriesForIntegration(integration.id)));
+    return { installationId: String(installationId), repositories };
+  }
+
+  importGitHubRepository({ projectId, integrationId = null, repository, repoUrl, branch = 'main', serviceName = null, actorUserId = 'system' }: Record<string, any>) {
+    const project = this.projects.get(projectId);
+    if (!project) throw notFound(`project not found: ${projectId}`);
+    const repo = parseGitHubRepository(repoUrl || repository);
+    const integration = integrationId ? this.githubIntegrations.get(integrationId) : null;
+    if (integration && String(integration.organizationId) !== String(project.organizationId)) throw forbidden('GitHub integration does not belong to project organization');
+    const service = this.createService({
+      projectId,
+      name: serviceName || repo.repo,
+      type: 'web',
+      runtimeType: 'container',
+      sourceType: 'github',
+      repoUrl: repo.repoUrl,
+      branch,
+      githubIntegrationId: integration?.id || integrationId || null,
+      githubRepository: repo.fullName,
+      desiredState: { github: { repository: repo.fullName, integrationId: integration?.id || integrationId || null, imported: true } },
+    });
+    this.audit(actorUserId, 'github:import-repository', 'project', projectId, { repository: repo.fullName, integrationId: integration?.id || integrationId || null });
+    return { service, github: { integrationId: integration?.id || integrationId || null, repository: repo.fullName, repoUrl: repo.repoUrl, branch } };
+  }
+
+  syncGitHubRepository({ repositoryId, repository, actorUserId = 'system', organizationId = null, organizationIds = null }: Record<string, any>) {
+    const normalized = normalizeRepositoryId(repository || repositoryId);
+    const services = this.servicesForGitHubRepository(normalized, { organizationId, organizationIds });
+    const workflowJob = this.enqueueWorkflowJob({ type: 'github-repository-sync', targetType: 'github-repository', targetId: normalized, payload: { repository: normalized, serviceIds: services.map((service) => service.id) } });
+    this.audit(actorUserId, 'github:repository-sync', 'github-repository', normalized, { serviceIds: services.map((service) => service.id) });
+    return { repository: normalized, services: deepClone(services), workflowJob };
+  }
+
+  handleGitHubWebhook({ event, deliveryId, signature, body, payload, secret = process.env.RAIBITSERVER_GITHUB_WEBHOOK_SECRET || process.env.GITHUB_WEBHOOK_SECRET || '' }: Record<string, any>) {
+    const rawBody = typeof body === 'string' ? body : JSON.stringify(payload || {});
+    if (secret && !verifyGitHubWebhookSignature(rawBody, signature, secret)) throw unauthorized('invalid GitHub webhook signature');
+    const id = String(deliveryId || stableId('ghdel', event, rawBody));
+    if (this.webhookEvents.has(id)) return { accepted: true, duplicate: true, deliveryId: id, actions: [] };
+    const actionPlan = githubWebhookActionPlan(event, payload || {});
+    const row = { id: stableId('whe', 'github', id), provider: 'github', eventType: String(event || 'unknown'), deliveryId: id, payload: maskSecrets(payload || {}), handled: true, createdAt: nowIso() };
+    this.webhookEvents.set(id, row);
+    const services = this.servicesForGitHubRepository(actionPlan.repository);
+    const actions: any[] = [];
+    for (const service of services) {
+      if (actionPlan.kind === 'production-deploy') {
+        const deployment = this.createDeployment({ serviceId: service.id, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'production', triggerType: 'github_push', branch: actionPlan.branch });
+        const workflowJob = this.enqueueWorkflowJob({ type: 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook' } });
+        actions.push({ type: 'production-deployment-enqueued', serviceId: service.id, deploymentId: deployment.id, workflowJobId: workflowJob.id });
+      } else if (actionPlan.kind === 'preview-deploy') {
+        const deployment = this.createDeployment({ serviceId: service.id, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: actionPlan.branch, pullRequestNumber: actionPlan.pullRequestNumber, previewUrl: previewUrlFor(service, actionPlan.pullRequestNumber) });
+        const workflowJob = this.enqueueWorkflowJob({ type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, pullRequestNumber: actionPlan.pullRequestNumber, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook' } });
+        actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, deploymentId: deployment.id, workflowJobId: workflowJob.id, pullRequestNumber: actionPlan.pullRequestNumber });
+      } else if (actionPlan.kind === 'preview-cleanup') {
+        const workflowJob = this.enqueueWorkflowJob({ type: 'preview-cleanup', targetType: 'service', targetId: service.id, payload: { serviceId: service.id, projectId: service.projectId, repository: actionPlan.repository, pullRequestNumber: actionPlan.pullRequestNumber, branch: actionPlan.branch, source: 'github-webhook' } });
+        const deployments = [...this.deployments.values()].filter((deployment) => deployment.serviceId === service.id && deployment.deploymentType === 'preview' && Number(deployment.pullRequestNumber) === Number(actionPlan.pullRequestNumber));
+        for (const deployment of deployments) {
+          this.deployments.set(deployment.id, { ...deployment, status: 'PREVIEW_CLEANUP_REQUESTED', updatedAt: nowIso() });
+          this.appendDeploymentEvent({ deploymentId: deployment.id, type: 'preview.cleanup.requested', message: `Preview cleanup requested for PR #${actionPlan.pullRequestNumber}`, metadata: { repository: actionPlan.repository } });
+        }
+        actions.push({ type: 'preview-cleanup-enqueued', serviceId: service.id, workflowJobId: workflowJob.id, pullRequestNumber: actionPlan.pullRequestNumber, deploymentIds: deployments.map((deployment) => deployment.id) });
+      }
+    }
+    const outbound = githubWebhookOutboundPlan(actionPlan, actions);
+    this.audit('github-webhook', 'github:webhook', 'github-delivery', id, { event, repository: actionPlan.repository, action: actionPlan.action, actions: actions.map((action) => action.type) });
+    return { accepted: true, duplicate: false, deliveryId: id, event, action: actionPlan.action, repository: actionPlan.repository, matchedServiceCount: services.length, actions, outbound };
+  }
+
+  githubRepositoriesForIntegration(integrationId: string) {
+    return [...this.services.values()]
+      .filter((service) => String(service.githubIntegrationId || service.desiredState?.github?.integrationId || '') === String(integrationId))
+      .map((service) => repositorySummaryFromService(service))
+      .filter(Boolean);
+  }
+
+  servicesForGitHubRepository(repository: any, scope: Record<string, any> = {}) {
+    const normalized = normalizeRepositoryId(repository);
+    const allowedOrganizationIds = organizationScopeSet(scope);
+    return [...this.services.values()]
+      .filter((service) => normalizeRepositoryId(service.githubRepository || service.desiredState?.github?.repository || service.repoUrl || '') === normalized)
+      .filter((service) => {
+        if (allowedOrganizationIds.size === 0) return true;
+        const project = this.projects.get(service.projectId);
+        return project ? allowedOrganizationIds.has(String(project.organizationId)) : false;
+      });
   }
 
   attachDomain({ projectId, serviceId, domain, verified = false, tlsStatus = 'pending' }: Record<string, any>) {
@@ -385,6 +509,8 @@ export class ControlPlaneStore {
     const serviceIds = new Set(services.map((service) => String(service.id)));
     const resources = [...this.resources.values()].filter((resource) => projectIds.has(String(resource.projectId)));
     const deployments = [...this.deployments.values()].filter((deployment) => serviceIds.has(String(deployment.serviceId)) && isSameUtcDay(deployment.createdAt || deployment.startedAt, nowIso()));
+    const scopedUsage = this.usageRecords.filter((record) => String(record.userId || '') === String(userId) || organizationIds.has(String(record.organizationId)) || projectIds.has(String(record.projectId)) || serviceIds.has(String(record.serviceId)) || resources.some((resource) => String(resource.id) === String(record.resourceId)));
+    const allDeployments = [...this.deployments.values()].filter((deployment) => serviceIds.has(String(deployment.serviceId)));
     return {
       maxProjects: projects.length,
       maxServices: services.length,
@@ -392,6 +518,10 @@ export class ControlPlaneStore {
       maxPreviewDeployments: deployments.filter((deployment) => deployment.deploymentType === 'preview').length,
       maxDbStorageMb: resources.filter((resource) => resourceQuotaMetric(resource) === 'maxDbStorageMb').reduce((sum, resource) => sum + resourceStorageMb(resource), 0),
       maxObjectStorageMb: resources.filter((resource) => resourceQuotaMetric(resource) === 'maxObjectStorageMb').reduce((sum, resource) => sum + resourceStorageMb(resource), 0),
+      maxBuildMinutesPerMonth: usageMetricSum(scopedUsage, ['build-minutes', 'build_minutes', 'buildMinutes', 'maxBuildMinutesPerMonth']) + allDeployments.reduce((sum, deployment) => sum + deploymentBuildMinutes(deployment), 0),
+      maxRuntimeHoursPerMonth: usageMetricSum(scopedUsage, ['runtime-hours', 'runtime_hours', 'runtimeHours', 'app-runtime-hours', 'maxRuntimeHoursPerMonth']) + allDeployments.reduce((sum, deployment) => sum + deploymentRuntimeHours(deployment), 0),
+      maxCpuMillicores: services.reduce((sum, service) => sum + serviceCpuMillicores(service), 0),
+      maxMemoryMb: services.reduce((sum, service) => sum + serviceMemoryMb(service), 0),
     };
   }
 
@@ -403,10 +533,24 @@ export class ControlPlaneStore {
     return result;
   }
 
+  async runResourceConsoleCommand(resourceId: string, command: string, options: Record<string, any> = {}) {
+    const resource = this.resources.get(resourceId);
+    if (!resource) throw notFound(`resource not found: ${resourceId}`);
+    const result = await runDbConsoleQuery(this.resourceForConsole(resource), command, { ...options, providerCommand: true });
+    this.audit(options.actorUserId || 'system', 'resource.console:command', 'resource', resourceId, { command, mode: (result as any).mode, rowCount: (result as any).rowCount || result.rows?.length || 0 });
+    return result;
+  }
+
   async browseResourceConsole(resourceId: string, options: Record<string, any> = {}) {
     const resource = this.resources.get(resourceId);
     if (!resource) throw notFound(`resource not found: ${resourceId}`);
     return browseDbConsole(this.resourceForConsole(resource), options);
+  }
+
+  async resourceConsoleView(resourceId: string, view: string, options: Record<string, any> = {}) {
+    const resource = this.resources.get(resourceId);
+    if (!resource) throw notFound(`resource not found: ${resourceId}`);
+    return resourceConsoleView(this.resourceForConsole(resource), view, options);
   }
 
   resourceForConsole(resource: Record<string, any>) {
@@ -440,6 +584,7 @@ export class ControlPlaneStore {
       secrets: [...this.secrets.values()].map(publicSecret),
       environmentVariables: maskEnvEntries([...this.environmentVariables.values()]),
       githubIntegrations: [...this.githubIntegrations.values()],
+      webhookEvents: [...this.webhookEvents.values()],
       buildLogs: this.buildLogs,
       runtimeLogs: this.runtimeLogs,
       deploymentEvents: this.deploymentEvents,
@@ -482,6 +627,61 @@ function resourceStorageMb(resource: Record<string, any>) {
   return 1;
 }
 
+function usageMetricSum(records: Array<Record<string, any>>, aliases: string[]) {
+  const names = new Set(aliases.map((alias) => alias.toLowerCase()));
+  return records
+    .filter((record) => names.has(String(record.metric || '').toLowerCase()))
+    .reduce((sum, record) => sum + Number(record.value || 0), 0);
+}
+
+function deploymentBuildMinutes(deployment: Record<string, any>) {
+  const start = dateMs(deployment.buildStartedAt || deployment.startedAt);
+  const end = dateMs(deployment.buildFinishedAt || deployment.finishedAt);
+  return start && end && end > start ? (end - start) / 60_000 : 0;
+}
+
+function deploymentRuntimeHours(deployment: Record<string, any>) {
+  const start = dateMs(deployment.deployedAt);
+  const end = dateMs(deployment.finishedAt) || Date.now();
+  return start && end > start ? (end - start) / 3_600_000 : 0;
+}
+
+function serviceCpuMillicores(service: Record<string, any>) {
+  const spec = service.desiredSpec || service.desiredState || service;
+  return parseCpuMillicores(spec.cpu || spec.cpuRequest || spec.resources?.requests?.cpu || spec.resources?.limits?.cpu);
+}
+
+function serviceMemoryMb(service: Record<string, any>) {
+  const spec = service.desiredSpec || service.desiredState || service;
+  return parseMemoryMb(spec.memory || spec.memoryMb || spec.memoryRequest || spec.resources?.requests?.memory || spec.resources?.limits?.memory);
+}
+
+function parseCpuMillicores(value: any) {
+  if (value === null || value === undefined || value === '') return 0;
+  const text = String(value).trim();
+  if (text.endsWith('m')) return Number(text.slice(0, -1)) || 0;
+  const number = Number(text);
+  return Number.isFinite(number) ? number * 1000 : 0;
+}
+
+function parseMemoryMb(value: any) {
+  if (value === null || value === undefined || value === '') return 0;
+  const text = String(value).trim().toLowerCase();
+  const number = Number(text.replace(/[a-z]+$/, ''));
+  if (!Number.isFinite(number)) return 0;
+  if (text.endsWith('gi') || text.endsWith('gib')) return number * 1024;
+  if (text.endsWith('gb')) return number * 1000;
+  if (text.endsWith('ki') || text.endsWith('kib')) return number / 1024;
+  if (text.endsWith('kb')) return number / 1000;
+  return number;
+}
+
+function dateMs(value: any) {
+  if (!value) return 0;
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
 function isSameUtcDay(left: any, right: any) {
   const a = new Date(left);
   const b = new Date(right);
@@ -499,4 +699,52 @@ function forbidden(message: string) {
   const error = new Error(message);
   (error as any).statusCode = 403;
   return error;
+}
+
+function unauthorized(message: string) {
+  const error = new Error(message);
+  (error as any).statusCode = 401;
+  return error;
+}
+
+function normalizeRepositoryId(value: any) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  try {
+    return parseGitHubRepository(text).fullName.toLowerCase();
+  } catch {
+    return text.toLowerCase().replace(/^github:/, '');
+  }
+}
+
+function organizationScopeSet(scope: Record<string, any> = {}) {
+  const ids = [
+    scope.organizationId,
+    ...(Array.isArray(scope.organizationIds) ? scope.organizationIds : []),
+  ].filter((value) => value !== null && value !== undefined && String(value).trim());
+  return new Set(ids.map((value) => String(value)));
+}
+
+function repositorySummaryFromService(service: Record<string, any>) {
+  const repository = normalizeRepositoryId(service.githubRepository || service.desiredState?.github?.repository || service.repoUrl || '');
+  if (!repository) return null;
+  const parsed = parseGitHubRepository(repository);
+  return { id: stableId('ghr', parsed.fullName), fullName: parsed.fullName, repoUrl: parsed.repoUrl, defaultBranch: service.branch || 'main', serviceIds: [service.id] };
+}
+
+function uniqueRepositories(repositories: Array<Record<string, any> | null>) {
+  const byName = new Map();
+  for (const repository of repositories) {
+    if (!repository) continue;
+    const key = normalizeRepositoryId(repository.fullName || repository.repoUrl);
+    const existing = byName.get(key);
+    byName.set(key, existing ? { ...existing, serviceIds: [...new Set([...(existing.serviceIds || []), ...(repository.serviceIds || [])])] } : repository);
+  }
+  return [...byName.values()];
+}
+
+function previewUrlFor(service: Record<string, any>, pullRequestNumber: any) {
+  const project = String(service.projectId || 'project').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+  const name = String(service.slug || service.name || service.id).replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+  return `https://pr-${Number(pullRequestNumber || 0)}--${name}--${project}.preview.raibitserver.app`;
 }

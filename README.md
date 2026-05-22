@@ -22,7 +22,7 @@ Product invariants implemented in code:
 
 ## Prerequisites
 
-- Node.js 24+
+- Node.js 24+ (required by the built-in `node:sqlite` DB console path; Node 22 LTS can be revisited by replacing it with an external SQLite adapter such as `better-sqlite3`/`sqlite3`.)
 - pnpm 11.1.2 (`corepack enable`)
 - Optional for execute-mode local cluster: Docker, kind or k3d, kubectl, Go 1.22+
 
@@ -120,20 +120,20 @@ The root `src/cli.js` remains the deterministic no-server planner/executor CLI f
 - PR preview deployment fixture,
 - build/Kubernetes/provisioning dry-run artifacts.
 
-Dry mode reports `deterministic-dry-run` or `dry-run-container-ready` and always keeps build, Kubernetes, and provisioning worker actions non-side-effecting. Live mode is separate: `pnpm e2e:live` requires Docker, kubectl, kind/k3d, and the explicit `--execute` script contract before it runs build/Kubernetes/provisioning commands against the local environment.
+Dry mode reports `deterministic-dry-run` or `dry-run-container-ready` and always keeps build, Kubernetes, and provisioning worker actions non-side-effecting. Live mode is separate: `pnpm e2e:live` requires Docker, kubectl, kind/k3d, and the explicit `--execute` script contract before it runs local registry, kind/k3d cluster, ingress, build, Kubernetes apply, and provisioning commands against the local environment. Auto/dry mode records a deterministic fallback plan when those tools are missing.
 
 ## Account and quota model
 
 - `ADMIN` can manage all users/projects/resources.
 - `CLUB_MEMBER` is approved and user-facing unlimited, with hard abuse caps still enforced.
 - `NON_CLUB` defaults to `PENDING` and cannot create/deploy/provision until admin approval.
-- `NON_CLUB + APPROVED` is limited by `Quota` rows.
+- `NON_CLUB + APPROVED` is limited by `Quota` rows. Runtime accounting includes project/service/deployment counts, preview count, DB/object storage MB, build minutes, runtime hours, aggregate CPU requests, and aggregate memory requests.
 
 ## DB support matrix
 
 | Engine | Local proof | Provider contract |
 | --- | --- | --- |
-| PostgreSQL | env/provision plan | DB/user/password/backup |
+| PostgreSQL | direct provider dry-run + env injection + console contract | CREATE USER/DATABASE/GRANT, DATABASE_URL secret, connection test, pg_dump/restore |
 | MySQL/MariaDB | env/provision plan | DB/user/password |
 | MongoDB | env/provision plan | database/user/URI |
 | Redis/Valkey | env/provision plan | URL/key browser |
@@ -156,9 +156,18 @@ Dry mode reports `deterministic-dry-run` or `dry-run-container-ready` and always
 - `docs/provisioning.md`
 - `docs/troubleshooting.md`
 
-## Production notes and current limitations
+## Production runbook and current limitations
 
-- Real GitHub OAuth/App actions require configured GitHub credentials.
-- Execute-mode Docker/BuildKit build, registry push, and Kubernetes apply require local Docker/kind/kubectl or production infrastructure.
+1. Configure production persistence: `DATABASE_URL` for the control-plane PostgreSQL DB plus `RAIBITSERVER_SECRET_ENCRYPTION_KEY`/`ENCRYPTION_KEY` with at least 32 characters. The in-memory store is only for tests/dev fallback.
+2. Configure auth and admin bootstrap: `RAIBITSERVER_AUTH_JWT_SECRET`, `ADMIN_EMAILS`, and hosted domain settings (`BASE_DOMAIN`, DNS, TLS/ingress).
+3. Configure GitHub App/OAuth if repository import and previews are needed: `GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_PRIVATE_KEY`, and `GITHUB_WEBHOOK_SECRET`.
+4. Configure build/runtime infrastructure: registry (`REGISTRY_URL`), Docker/BuildKit or builder service access, Kubernetes credentials (`KUBECONFIG`/in-cluster config), ingress controller, and resource limits.
+5. Configure DB/resource providers: PostgreSQL provider admin URL for direct PostgreSQL provisioning first, then MySQL/Mongo/Redis/MinIO/Qdrant/NATS provider adapters as they become live.
+6. Run verification before go-live: `pnpm test`, `pnpm typecheck`, `pnpm prisma:validate`, CLI validate/manifest/compose, Go service tests/builds, `pnpm e2e:dry`, and a prepared `pnpm e2e:live` against disposable local infrastructure.
+
+Current limitations:
+
+- Real GitHub OAuth/App network calls require configured GitHub credentials; local tests use deterministic webhook/status/check-run plans.
+- Execute-mode Docker/BuildKit build, registry push, Kubernetes apply, and ingress setup require local Docker/kind-or-k3d/kubectl or production infrastructure.
 - Dry E2E proves the full control-plane contract and dry-run worker artifacts without those tools; live E2E is reserved for explicit local-cluster execution.
-- Use PostgreSQL for production API persistence; the in-memory store is for tests/dev fallback only.
+- Node.js 24+ remains required until the `node:sqlite` console path is replaced with a Node 22-compatible SQLite dependency.

@@ -4,6 +4,7 @@ import { slugify } from './ids.ts';
 import { applyManifests } from './kubernetes.ts';
 import { splitEnvForSecret } from './security.ts';
 import { maskSecrets } from './secrets.ts';
+import { buildPostgresProviderPlan, provisionPostgresProvider, providerConsoleSurface, publicProviderPlan } from './resource-providers.ts';
 
 export function compileResourceProvisioningPlan(resource: Record<string, any>, { namespace = 'default', projectSlug = 'project', organizationSlug = 'org' } = {}) {
   const engine = normalizeResourceEngine(resource.engine || resource.type);
@@ -60,8 +61,10 @@ export function compileResourceProvisioningPlan(resource: Record<string, any>, {
     resourceKind: kind,
     operator: entry.operator,
     provider: resource.provider || 'kubernetes-operator',
-    lifecycle: ['desired-state-write', 'kubectl-apply', 'operator-reconcile', 'credentials-secret', 'backup-policy', 'metrics'],
+    lifecycle: providerLifecycle(entry.key, resource.provider),
     envKeys: entry.env,
+    providerPlan: providerPlanForResource(entry.key, resource),
+    consoleSurface: providerConsoleSurface(resource),
     manifests,
   };
 }
@@ -85,7 +88,15 @@ export function compileProjectProvisioning(projectSpec: Record<string, any>) {
 export async function provisionProjectResources(projectSpec: Record<string, any>, options: Record<string, any> = {}) {
   const provisioning = compileProjectProvisioning(projectSpec);
   const apply = await applyManifests(provisioning.manifests, options);
-  return { provisioning: maskSecrets(provisioning), apply };
+  const providerResults = [];
+  if (options.providerMode === 'direct' || options.directProviders === true) {
+    for (const resource of projectSpec.resources || []) {
+      if (normalizeResourceEngine(resource.engine || resource.type) === 'postgresql') {
+        providerResults.push(await provisionPostgresProvider({ ...resource, projectSlug: provisioning.projectSlug }, options.postgres || options));
+      }
+    }
+  }
+  return { provisioning: maskSecrets(provisioning), apply, providerResults: maskSecrets(providerResults) };
 }
 
 function managedKindFor(type: string, key: string) {
@@ -114,4 +125,14 @@ function defaultStorageGb(engine: string) {
   if (['postgresql', 'mysql', 'mariadb', 'mongodb'].includes(engine)) return 10;
   if (engine === 'redis') return 1;
   return 5;
+}
+
+function providerLifecycle(engine: string, provider: any) {
+  if (engine === 'postgresql' && String(provider || '').includes('direct')) return ['desired-state-write', 'create-user', 'create-database', 'grant-privileges', 'provider-secret', 'connection-test', 'backup-plan', 'metrics'];
+  return ['desired-state-write', 'kubectl-apply', 'operator-reconcile', 'credentials-secret', 'backup-policy', 'metrics'];
+}
+
+function providerPlanForResource(engine: string, resource: Record<string, any>) {
+  if (engine === 'postgresql') return publicProviderPlan(buildPostgresProviderPlan(resource));
+  return providerConsoleSurface(resource);
 }

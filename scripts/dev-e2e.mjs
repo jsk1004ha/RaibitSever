@@ -5,7 +5,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
-import { applyProject, commandExists, executeBuildWorkflow, provisionProjectResources } from '../packages/core/src/execution.ts';
+import { applyProject, commandExists, executeBuildWorkflow, provisionProjectResources, runCommand } from '../packages/core/src/execution.ts';
+import { injectResourceEnv } from '../packages/core/src/env-injection.ts';
 import { parseE2EOptions, resolveE2EPlan } from './e2e-mode.mjs';
 import { signJwtHs256 } from '../packages/core/src/auth.ts';
 import { serviceHostname } from '../packages/core/src/domain-router.ts';
@@ -36,6 +37,8 @@ try {
   evidence.dryRun = e2ePlan.dryRun;
   evidence.liveToolsReady = e2ePlan.liveToolsReady;
   evidence.missingLiveTools = e2ePlan.missingTools;
+  evidence.liveSetup = e2ePlan.setup;
+  evidence.liveSetupResults = e2ePlan.mode === 'live' ? await runLiveSetup(e2ePlan.setup) : [];
 
   const pending = await request('POST', '/auth/signup', { email: 'student@example.com', password: 'correct-horse-battery', organizationSlug: 'student-org' });
   assertStatus(pending, 201, 'non-club signup');
@@ -65,6 +68,11 @@ try {
   assertStatus(consoleRows, 200, 'sqlite console select');
   if (!consoleRows.body.rows.some((row) => row.status === 'ok')) throw new Error('sqlite console did not return inserted row');
 
+  const postgresResource = controlPlane.store.createResource({ projectId: project.body.id, name: 'local-postgres', type: 'database', engine: 'postgresql', provider: 'postgresql-direct', databaseName: 'locale2e', username: 'locale2e_app' });
+  const postgresProvision = await controlPlane.store.provisionResourceProvider({ resourceId: postgresResource.id, dryRun: true, actorUserId: pending.body.user.id, password: 'local-e2e-postgres-secret' });
+  const postgresEnv = injectResourceEnv({ ...service.body, attachedResources: ['local-postgres'] }, [postgresProvision.resource], 'local-e2e');
+  if (!String(postgresEnv.DATABASE_URL || '').startsWith('postgresql://')) throw new Error('PostgreSQL DATABASE_URL was not injected');
+
   const urlHost = serviceHostname({ serviceName: 'express-api', projectSlug: 'local-e2e', organizationSlug: 'student-org', baseDomain });
   const localHttp = await getLocalApp(urlHost, appPort);
   if (localHttp.statusCode !== 200) throw new Error(`local app http check failed: ${localHttp.statusCode}`);
@@ -82,6 +90,14 @@ try {
 
   const preview = await request('POST', `/services/${service.body.id}/deployments`, { deploymentType: 'preview', triggerType: 'pull_request', pullRequestNumber: 42, branch: 'feature/local-e2e', previewUrl: `http://pr-42--${urlHost.replace(/^express-api--/, '')}` }, pending.body.token);
   assertStatus(preview, 202, 'PR preview deployment enqueue');
+  controlPlane.store.updateService(service.body.id, { githubRepository: 'student-org/local-e2e', repoUrl: 'https://github.com/student-org/local-e2e.git', githubIntegrationId: 'local-e2e' });
+  const previewCleanup = controlPlane.store.handleGitHubWebhook({
+    event: 'pull_request',
+    deliveryId: 'local-e2e-pr-closed',
+    body: JSON.stringify({ action: 'closed', number: 42, repository: { full_name: 'student-org/local-e2e' }, pull_request: { number: 42, head: { ref: 'feature/local-e2e', sha: 'local-e2e' } } }),
+    payload: { action: 'closed', number: 42, repository: { full_name: 'student-org/local-e2e' }, pull_request: { number: 42, head: { ref: 'feature/local-e2e', sha: 'local-e2e' } } },
+  });
+  if (!previewCleanup.actions.some((action) => action.type === 'preview-cleanup-enqueued')) throw new Error('preview cleanup webhook did not enqueue cleanup');
 
   const club = await request('POST', '/auth/signup', { email: 'club@example.com', password: 'correct-horse-battery', organizationSlug: 'club-org' });
   assertStatus(club, 201, 'club signup');
@@ -124,7 +140,10 @@ try {
   evidence.provisionManifestCount = provision.provisioning.manifests.length;
   evidence.provisionDryRun = provision.apply.dryRun;
   evidence.sqlitePath = resource.body.sqlitePath || resource.body.desiredSpec?.sqlitePath || sqlitePath;
-  evidence.checks.push('non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'preview deployment fixture created', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed');
+  evidence.postgresProviderDryRun = postgresProvision.result.dryRun;
+  evidence.postgresEnvInjected = Boolean(postgresEnv.DATABASE_URL && postgresEnv.PGUSER);
+  evidence.previewCleanupAction = previewCleanup.actions[0]?.type || null;
+  evidence.checks.push('non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'PostgreSQL provider dry-run and env injection works', 'preview deployment fixture created', 'preview cleanup workflow enqueued', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed');
   await fs.mkdir('.raibitserver-work', { recursive: true });
   await fs.writeFile('.raibitserver-work/e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);
   console.log(JSON.stringify({ ok: true, ...evidence }, null, 2));
@@ -168,6 +187,14 @@ function getLocalApp(host, port) {
     });
     req.end();
   });
+}
+
+async function runLiveSetup(setup) {
+  const results = [];
+  for (const command of setup.commands || []) {
+    results.push(await runCommand({ executable: 'sh', args: ['-lc', command], redacted: command }, { dryRun: false, timeoutMs: 180_000 }));
+  }
+  return results;
 }
 
 function assertStatus(response, expected, label) {

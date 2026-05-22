@@ -23,4 +23,10 @@ export class AdminController {
   quota(@Param('userId') userId: string, @Body() input: Record<string, any>, @Req() req: any) {
     return this.raibitServer.setUserQuota(userId, input || {}, req.raibitSubject);
   }
+
+  @RequirePermission('audit:read')
+  @Post(':userId/quota')
+  quotaPost(@Param('userId') userId: string, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.raibitServer.setUserQuota(userId, input || {}, req.raibitSubject);
+  }
 }

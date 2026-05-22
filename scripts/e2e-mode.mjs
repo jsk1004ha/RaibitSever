@@ -70,6 +70,7 @@ export function resolveE2EPlan({ requestedMode = E2E_MODES.DRY, execute = false,
       execute: true,
       liveToolsReady,
       missingTools,
+      setup: liveE2ESetupPlan(tools),
     };
   }
 
@@ -82,6 +83,7 @@ export function resolveE2EPlan({ requestedMode = E2E_MODES.DRY, execute = false,
       execute: true,
       liveToolsReady,
       missingTools,
+      setup: liveE2ESetupPlan(tools),
     };
   }
 
@@ -93,5 +95,32 @@ export function resolveE2EPlan({ requestedMode = E2E_MODES.DRY, execute = false,
     execute: false,
     liveToolsReady,
     missingTools,
+    setup: deterministicE2EFallbackPlan(missingTools),
+  };
+}
+
+export function liveE2ESetupPlan(tools = {}, options = {}) {
+  const clusterName = options.clusterName || 'raibitserver-e2e';
+  const registryName = options.registryName || 'raibitserver-registry';
+  const registryPort = Number(options.registryPort || 5000);
+  const clusterEngine = tools.kind ? 'kind' : tools.k3d ? 'k3d' : 'unavailable';
+  const commands = [
+    `docker inspect ${registryName} || docker run -d -p ${registryPort}:5000 --restart=always --name ${registryName} registry:2`,
+    clusterEngine === 'kind'
+      ? `kind get clusters | grep -qx ${clusterName} || kind create cluster --name ${clusterName}`
+      : `k3d cluster list ${clusterName} >/dev/null 2>&1 || k3d cluster create ${clusterName} --registry-use ${registryName}:5000`,
+    'kubectl get namespace ingress-nginx || kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml',
+    `kubectl get nodes -o wide && kubectl get pods -A`,
+  ];
+  return { clusterEngine, clusterName, registryName, registryPort, ingress: 'ingress-nginx', commands };
+}
+
+export function deterministicE2EFallbackPlan(missingTools = []) {
+  return {
+    clusterEngine: 'dry-run',
+    registryName: 'dry-run-registry',
+    ingress: 'dry-run-ingress',
+    reason: missingTools.length ? `missing live tool group(s): ${missingTools.join(', ')}` : 'execute flag not set',
+    commands: [],
   };
 }
