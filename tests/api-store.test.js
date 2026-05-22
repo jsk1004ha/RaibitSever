@@ -110,3 +110,29 @@ test('HTTP deployment queue rejects workloads blocked by security policy', async
     server.close();
   }
 });
+
+test('HTTP resource create strips tenant-supplied provider connection fields', async () => {
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'disabled', allowDisabled: true } }));
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  try {
+    const org = controlPlane.store.createOrganization({ name: 'Resource Org', slug: 'resource-org' });
+    const project = controlPlane.store.createProject({ organizationId: org.id, name: 'demo', slug: 'demo' });
+    const response = await requestWithStatus(port, 'POST', `/projects/${project.id}/resources`, {
+      name: 'pg',
+      engine: 'postgresql',
+      providerConnection: { databaseUrl: 'postgresql://attacker:secret@127.0.0.1:1/evil' },
+      connectionUrl: 'postgresql://attacker:secret@127.0.0.1:1/evil',
+      desiredSpec: { providerConnection: { databaseUrl: 'postgresql://attacker:secret@127.0.0.1:1/evil' }, storageGb: 1 },
+    });
+    assert.equal(response.statusCode, 201);
+    assert.equal(response.body.providerConnection, undefined);
+    assert.equal(response.body.connectionUrl, undefined);
+    assert.equal(response.body.desiredSpec.providerConnection, undefined);
+    assert.equal(response.body.desiredSpec.storageGb, 1);
+  } finally {
+    server.close();
+  }
+});

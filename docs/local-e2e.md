@@ -20,3 +20,11 @@ pnpm dev:down
 8. compiles build/Kubernetes/provisioning dry-run artifacts.
 
 Evidence is written to `.raibitserver-work/e2e-report.json`. Use `pnpm e2e:live` only when Docker, kubectl, and kind/k3d are available and you intentionally want `--execute` build/Kubernetes/provisioning commands against the local cluster.
+
+Equivalent aliases are kept for CI scripts and older operator notes:
+
+- `pnpm dev-up` → `pnpm dev:up`
+- `pnpm dev-e2e` → `pnpm dev:e2e`
+- `pnpm dev-down` → `pnpm dev:down`
+- `pnpm dev:e2e:dry` → deterministic dry proof
+- `pnpm dev:e2e:live` → live execute-mode proof

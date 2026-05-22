@@ -250,6 +250,9 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const subject = authorizeAction(req, 'db:connect-limited', auth);
         const [resourceId, action] = resourceConsoleQueryMatch.slice(1).map(decodeURIComponent);
         const body = await readJson(req);
+        const resource = controlPlane.store.resources.get(resourceId);
+        if (!resource) return send(res, 404, { error: 'resource_not_found' });
+        await assertProjectAccess(controlPlane.store, resource.projectId, subject);
         return send(res, 200, action === 'query'
           ? await controlPlane.store.runResourceConsoleQuery(resourceId, body.query, { ...body, role: subject.role, actorUserId: subject.id })
           : await controlPlane.store.browseResourceConsole(resourceId, body));

@@ -100,7 +100,8 @@ test('kubectl apply and DB provisioning paths create executable dry-run artifact
 
 test('HS256 JWT auth enforces RBAC on protected API routes', async () => {
   const secret = 'unit-test-secret';
-  const server = http.createServer(createApiHandler(new RAIBITSERVERControlPlane(), { auth: { mode: 'jwt', jwtSecret: secret } }));
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'jwt', jwtSecret: secret } }));
   server.listen(0);
   await once(server, 'listening');
   const { port } = server.address();
@@ -122,6 +123,23 @@ test('HS256 JWT auth enforces RBAC on protected API routes', async () => {
     const developerToken = signJwtHs256({ sub: 'dev-1', role: 'developer', projectIds: ['project-1'] }, secret);
     const deniedScope = await request(port, 'POST', '/services', { projectId: 'project-2', name: 'api' }, developerToken);
     assert.equal(deniedScope.statusCode, 403);
+
+    const orgA = controlPlane.store.createOrganization({ name: 'Org A', slug: 'org-a' });
+    const orgB = controlPlane.store.createOrganization({ name: 'Org B', slug: 'org-b' });
+    const projectA = controlPlane.store.createProject({ organizationId: orgA.id, name: 'alpha', slug: 'alpha' });
+    const projectB = controlPlane.store.createProject({ organizationId: orgB.id, name: 'beta', slug: 'beta' });
+    const ownResource = controlPlane.store.createResource({ projectId: projectA.id, name: 'pg', engine: 'postgresql' });
+    const otherResource = controlPlane.store.createResource({ projectId: projectB.id, name: 'pg', engine: 'postgresql' });
+    const scopedViewer = signJwtHs256({ sub: 'viewer-a', role: 'viewer', organizationId: orgA.id }, secret);
+    const viewerConsole = await request(port, 'POST', `/resources/${ownResource.id}/console/query`, { query: 'SELECT 1' }, scopedViewer);
+    assert.equal(viewerConsole.statusCode, 403);
+    const scopedDeveloper = signJwtHs256({ sub: 'dev-a', role: 'developer', organizationId: orgA.id }, secret);
+    const ownConsole = await request(port, 'POST', `/resources/${ownResource.id}/console/query`, { query: 'SELECT 1', connectionUrl: 'postgresql://attacker:secret@127.0.0.1:1/evil' }, scopedDeveloper);
+    assert.equal(ownConsole.statusCode, 200);
+    assert.equal(ownConsole.body.mode, 'connection-info');
+    assert.match(ownConsole.body.warning, /provider-owned connection URL/);
+    const deniedConsole = await request(port, 'POST', `/resources/${otherResource.id}/console/query`, { query: 'SELECT 1' }, scopedDeveloper);
+    assert.equal(deniedConsole.statusCode, 403);
 
     const executeRemoved = await request(port, 'POST', '/execute/kubernetes-apply', project, ownerToken);
     assert.equal(executeRemoved.statusCode, 404);

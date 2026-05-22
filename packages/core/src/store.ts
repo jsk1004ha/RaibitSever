@@ -5,6 +5,7 @@ import { normalizeEnvEntries, parseDotEnv, maskEnvEntries } from './env-file.ts'
 import { githubIntegrationSummary, parseGitHubRepository } from './github-integration.ts';
 import { openSecret, publicSecretRecord, sealSecret, secureRandomSecret } from './secret-vault.ts';
 import { runDbConsoleQuery, browseDbConsole } from './db-console.ts';
+import { providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
 
 export class ControlPlaneStore {
   organizations: Map<string, any>;
@@ -125,9 +126,13 @@ export class ControlPlaneStore {
   }
 
   createResource({ projectId, name, type = 'database', engine, provider = 'kubernetes-operator', plan = 'shared-small', region = 'local', status = 'provisioning', ...rest }: Record<string, any>) {
-    const resource = { id: stableId('res', projectId, name), projectId, type, name, slug: slugify(name), engine, provider, status, plan, region, createdAt: nowIso(), ...rest };
+    const safe = sanitizeTenantResourceInput({ projectId, name, type, engine, provider, plan, region, status, ...rest });
+    const id = stableId('res', safe.projectId, safe.name);
+    const sqlitePath = String(safe.engine || '').toLowerCase() === 'sqlite' ? providerOwnedSqlitePath(id) : null;
+    const desiredSpec = sqlitePath ? { ...(safe.desiredSpec || {}), sqlitePath } : safe.desiredSpec;
+    const resource = { id, projectId: safe.projectId, type: safe.type || 'database', name: safe.name, slug: slugify(safe.name), engine: safe.engine, provider: safe.provider || 'kubernetes-operator', status: safe.status || 'provisioning', plan: safe.plan || 'shared-small', region: safe.region || 'local', createdAt: nowIso(), ...safe, desiredSpec, sqlitePath: sqlitePath || undefined };
     this.resources.set(resource.id, resource);
-    this.audit('system', 'resource:create', 'resource', resource.id, { projectId, engine, provider });
+    this.audit('system', 'resource:create', 'resource', resource.id, { projectId: resource.projectId, engine: resource.engine, provider: resource.provider });
     return deepClone(resource);
   }
 
@@ -229,6 +234,18 @@ export class ControlPlaneStore {
   getSecretValue(secretId: string) {
     const secret = this.secrets.get(secretId);
     return secret?.sealedValue ? openSecret(secret.sealedValue) : null;
+  }
+
+  attachProviderConnectionSecret({ resourceId, databaseUrl, connectionUrl, actorUserId = 'provider' }: Record<string, any>) {
+    const resource = this.resources.get(resourceId);
+    if (!resource) throw notFound(`resource not found: ${resourceId}`);
+    const value = databaseUrl || connectionUrl;
+    if (!value) throw new Error('provider connection URL is required');
+    const secret = this.createSecret({ scopeType: 'resource-provider-connection', scopeId: resourceId, key: 'DATABASE_URL', value, actorUserId });
+    const next = { ...resource, connectionSecretName: secret.id, updatedAt: nowIso() };
+    this.resources.set(resourceId, next);
+    this.audit(actorUserId, 'resource.provider-connection:attach', 'resource', resourceId, { connectionSecretName: secret.id });
+    return deepClone(next);
   }
 
   upsertServiceEnvironment({ projectId, serviceId, entries, actorUserId = 'system', source = 'api' }: Record<string, any>) {
@@ -381,7 +398,7 @@ export class ControlPlaneStore {
   async runResourceConsoleQuery(resourceId: string, query: string, options: Record<string, any> = {}) {
     const resource = this.resources.get(resourceId);
     if (!resource) throw notFound(`resource not found: ${resourceId}`);
-    const result = await runDbConsoleQuery(resource, query, options);
+    const result = await runDbConsoleQuery(this.resourceForConsole(resource), query, options);
     this.audit(options.actorUserId || 'system', 'resource.console:query', 'resource', resourceId, { query, resultRows: (result as any).rowCount || result.rows?.length || 0 });
     return result;
   }
@@ -389,7 +406,16 @@ export class ControlPlaneStore {
   async browseResourceConsole(resourceId: string, options: Record<string, any> = {}) {
     const resource = this.resources.get(resourceId);
     if (!resource) throw notFound(`resource not found: ${resourceId}`);
-    return browseDbConsole(resource, options);
+    return browseDbConsole(this.resourceForConsole(resource), options);
+  }
+
+  resourceForConsole(resource: Record<string, any>) {
+    if (!resource.connectionSecretName) return resource;
+    const secret = this.secrets.get(resource.connectionSecretName);
+    if (!isProviderConnectionSecret(secret, resource.id)) return resource;
+    const databaseUrl = secret.sealedValue ? openSecret(secret.sealedValue) : null;
+    if (!databaseUrl) return resource;
+    return { ...resource, providerConnection: { databaseUrl } };
   }
 
   audit(actorUserId: any, action: string, targetType: string, targetId: any, metadata: Record<string, any> = {}) {
@@ -432,6 +458,13 @@ export class ControlPlaneStore {
 
 function publicSecret(row: Record<string, any>) {
   return publicSecretRecord(row);
+}
+
+function isProviderConnectionSecret(secret: any, resourceId: string) {
+  return secret
+    && secret.scopeType === 'resource-provider-connection'
+    && String(secret.scopeId) === String(resourceId)
+    && secret.key === 'DATABASE_URL';
 }
 
 function redactUser(user: Record<string, any>) {

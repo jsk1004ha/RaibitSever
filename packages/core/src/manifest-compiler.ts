@@ -139,6 +139,7 @@ function containerFor(service: AnyRecord, image: string, port: number, plain: An
       requests: { cpu: '100m', memory: '128Mi' },
       limits: { cpu: '500m', memory: '512Mi' },
     },
+    volumeMounts: [{ name: 'tmp', mountPath: '/tmp' }],
     securityContext: secureContainerDefaults(service),
     readinessProbe: service.healthCheck?.path ? httpProbe(service.healthCheck.path, port) : undefined,
     livenessProbe: service.healthCheck?.path ? httpProbe(service.healthCheck.path, port) : undefined,
@@ -150,6 +151,7 @@ function podSpec(service: AnyRecord, image: string, port: number, plain: AnyReco
     securityContext: DEFAULT_POD_SECURITY_CONTEXT,
     restartPolicy,
     containers: [containerFor(service, image, port, plain, secret)],
+    volumes: [{ name: 'tmp', emptyDir: {} }],
     automountServiceAccountToken: false,
   };
 }
@@ -319,13 +321,24 @@ function networkPolicyManifest(namespace: string, services: AnyRecord[], resourc
         { from: [{ namespaceSelector: { matchLabels: { 'raibitserver.io/ingress-gateway': 'true' } } }] },
       ],
       egress: [
+        {
+          to: [
+            {
+              namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } },
+              podSelector: { matchLabels: { 'k8s-app': 'kube-dns' } },
+            },
+          ],
+          ports: [{ protocol: 'UDP', port: 53 }, { protocol: 'TCP', port: 53 }],
+        },
         { to: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': namespace } } }] },
-        { to: [{ ipBlock: { cidr: '0.0.0.0/0', except: ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'] } }] },
+        { to: [{ ipBlock: { cidr: '0.0.0.0/0', except: ['10.0.0.0/8', '100.64.0.0/10', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16'] } }] },
       ],
     },
     raibitserver: {
       allowsOwnServices: serviceNames,
       allowsOwnResources: resourceNames,
+      allowsDnsEgress: true,
+      blocksMetadataEndpoint: true,
       blocksControlPlane: true,
       blocksCrossProject: true,
     },

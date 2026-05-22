@@ -1,10 +1,11 @@
 import { ControlPlaneStore } from './store.ts';
-import { deepClone } from './ids.ts';
+import { deepClone, stableId } from './ids.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
-import { sealSecret } from './secret-vault.ts';
+import { openSecret, sealSecret } from './secret-vault.ts';
 import { secretEncryptionConfigured } from './config.ts';
 import { runDbConsoleQuery, browseDbConsole } from './db-console.ts';
 import { completeWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
+import { providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
 
 export class InMemoryControlPlaneRepository {
   store: ControlPlaneStore;
@@ -22,6 +23,7 @@ export class InMemoryControlPlaneRepository {
   async createProject(input: Record<string, any>) { return this.store.createProject(input); }
   async createService(input: Record<string, any>) { return this.store.createService(input); }
   async createResource(input: Record<string, any>) { return this.store.createResource(input); }
+  async attachProviderConnectionSecret(input: Record<string, any>) { return this.store.attachProviderConnectionSecret(input); }
   async createDeployment(input: Record<string, any>) { return this.store.createDeployment(input); }
   async createSecret(input: Record<string, any>) { return this.store.createSecret(input); }
   async createDeploymentWorkflow(input: Record<string, any>) {
@@ -141,11 +143,28 @@ export class PrismaControlPlaneRepository {
   }
 
   async createResource(input: Record<string, any>) {
+    const existing = await this.prisma.resource.findUnique({
+      where: { projectId_name: { projectId: input.projectId, name: input.name } },
+      select: { connectionSecretName: true },
+    }).catch(() => null);
     return this.prisma.resource.upsert({
       where: { projectId_name: { projectId: input.projectId, name: input.name } },
-      update: resourceData(input),
+      update: resourceData(input, { connectionSecretName: existing?.connectionSecretName || null }),
       create: { projectId: input.projectId, name: input.name, slug: input.slug || slugInput(input.name), ...resourceData(input) },
     });
+  }
+
+  async attachProviderConnectionSecret({ resourceId, databaseUrl, connectionUrl, actorUserId = 'provider' }: Record<string, any>) {
+    const value = databaseUrl || connectionUrl;
+    if (!value) throw new Error('provider connection URL is required');
+    const secret = await this.prisma.secretValue.upsert({
+      where: { scopeType_scopeId_key: { scopeType: 'resource-provider-connection', scopeId: resourceId, key: 'DATABASE_URL' } },
+      update: { sealedValue: sealSecret(value), valueMasked: maskSecretValue(value), metadata: maskSecrets({ providerOwned: true }) },
+      create: { scopeType: 'resource-provider-connection', scopeId: resourceId, key: 'DATABASE_URL', sealedValue: sealSecret(value), valueMasked: maskSecretValue(value), metadata: maskSecrets({ providerOwned: true }) },
+    });
+    const resource = await this.prisma.resource.update({ where: { id: resourceId }, data: { connectionSecretName: secret.id } });
+    await this.prisma.auditLog.create({ data: { actorUserId, action: 'resource.provider-connection:attach', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ connectionSecretName: secret.id }) } });
+    return resource;
   }
 
   async createDeployment(input: Record<string, any>) {
@@ -418,7 +437,7 @@ export class PrismaControlPlaneRepository {
       (error as any).statusCode = 404;
       throw error;
     }
-    const result = await runDbConsoleQuery(resource, query, options);
+    const result = await runDbConsoleQuery(await this.resourceForConsole(resource), query, options);
     await this.prisma.auditLog.create({ data: { actorUserId: options.actorUserId || 'system', action: 'resource.console:query', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ query, resultRows: (result as any).rowCount || result.rows?.length || 0 }) } });
     return result;
   }
@@ -430,7 +449,15 @@ export class PrismaControlPlaneRepository {
       (error as any).statusCode = 404;
       throw error;
     }
-    return browseDbConsole(resource, options);
+    return browseDbConsole(await this.resourceForConsole(resource), options);
+  }
+
+  async resourceForConsole(resource: Record<string, any>) {
+    if (!resource.connectionSecretName) return resource;
+    const secret = await this.prisma.secretValue.findUnique({ where: { id: resource.connectionSecretName } });
+    if (!isProviderConnectionSecret(secret, resource.id)) return resource;
+    if (!secret?.sealedValue) return resource;
+    return { ...resource, providerConnection: { databaseUrl: openSecret(secret.sealedValue) } };
   }
 
   async writeDesiredProject(projectSpec: Record<string, any>) {
@@ -455,9 +482,15 @@ export class PrismaControlPlaneRepository {
       }
       const resources = [];
       for (const resource of projectSpec.resources || []) {
+        const existing = typeof tx.resource.findUnique === 'function'
+          ? await tx.resource.findUnique({
+            where: { projectId_name: { projectId: project.id, name: resource.name } },
+            select: { connectionSecretName: true },
+          }).catch(() => null)
+          : null;
         resources.push(await tx.resource.upsert({
           where: { projectId_name: { projectId: project.id, name: resource.name } },
-          update: resourceData({ ...resource, projectId: project.id }),
+          update: resourceData({ ...resource, projectId: project.id }, { connectionSecretName: existing?.connectionSecretName || null }),
           create: { projectId: project.id, name: resource.name, ...resourceData({ ...resource, projectId: project.id }) },
         }));
       }
@@ -565,19 +598,23 @@ function serviceData(input: Record<string, any>) {
   };
 }
 
-function resourceData(input: Record<string, any>) {
+function resourceData(input: Record<string, any>, options: Record<string, any> = {}) {
+  const safe = sanitizeTenantResourceInput(input);
+  const sqlitePath = String(safe.engine || '').toLowerCase() === 'sqlite' ? providerOwnedSqlitePath(stableId('res', safe.projectId, safe.name)) : null;
+  const desiredSpec = sqlitePath ? { ...(safe.desiredSpec || {}), sqlitePath } : (safe.desiredSpec || safe);
+  const desiredState = sqlitePath ? { ...safe, desiredSpec, sqlitePath } : safe;
   return {
-    slug: input.slug || slugInput(input.name),
-    type: input.type || 'database',
-    engine: input.engine,
-    provider: input.provider || 'kubernetes-operator',
-    plan: input.plan || 'shared-small',
-    region: input.region || 'local',
-    version: input.version || null,
-    status: input.status || 'provisioning',
-    desiredSpec: sanitizeJson(input.desiredSpec || input),
-    desiredState: sanitizeJson(input),
-    connectionSecretName: input.connectionSecretName || null,
+    slug: safe.slug || slugInput(safe.name),
+    type: safe.type || 'database',
+    engine: safe.engine,
+    provider: safe.provider || 'kubernetes-operator',
+    plan: safe.plan || 'shared-small',
+    region: safe.region || 'local',
+    version: safe.version || null,
+    status: safe.status || 'provisioning',
+    desiredSpec: sanitizeJson(desiredSpec),
+    desiredState: sanitizeJson(desiredState),
+    connectionSecretName: options.connectionSecretName || undefined,
   };
 }
 
@@ -661,6 +698,13 @@ function maskEnvRow(row: Record<string, any>) {
 function redactUser(user: Record<string, any>) {
   const { passwordHash, ...rest } = user;
   return rest;
+}
+
+function isProviderConnectionSecret(secret: any, resourceId: string) {
+  return secret
+    && secret.scopeType === 'resource-provider-connection'
+    && String(secret.scopeId) === String(resourceId)
+    && secret.key === 'DATABASE_URL';
 }
 
 function resourceQuotaMetric(resource: Record<string, any>) {

@@ -26,8 +26,25 @@ test('web service uses secret refs and safe container defaults', () => {
   const container = deployment.spec.template.spec.containers[0];
   assert.equal(container.securityContext.runAsNonRoot, true);
   assert.equal(container.securityContext.allowPrivilegeEscalation, false);
+  assert.equal(container.securityContext.readOnlyRootFilesystem, true);
+  assert.deepEqual(container.securityContext.capabilities, { drop: ['ALL'] });
+  assert.deepEqual(container.securityContext.seccompProfile, { type: 'RuntimeDefault' });
+  assert.deepEqual(container.volumeMounts, [{ name: 'tmp', mountPath: '/tmp' }]);
+  assert.deepEqual(deployment.spec.template.spec.volumes, [{ name: 'tmp', emptyDir: {} }]);
+  assert.equal(deployment.spec.template.spec.automountServiceAccountToken, false);
   assert.equal(container.env.some((env) => env.name === 'DATABASE_URL' && env.valueFrom.secretKeyRef.name === 'web-env'), true);
   assert.equal(deployment.spec.strategy.rollingUpdate.maxUnavailable, 0);
+});
+
+test('tenant network policy allows DNS but blocks metadata and private control-plane ranges', () => {
+  const policy = find('NetworkPolicy', 'tenant-isolation');
+  const dnsRule = policy.spec.egress.find((rule) => rule.ports?.some((port) => port.port === 53));
+  assert.ok(dnsRule, 'DNS egress rule exists');
+  const externalRule = policy.spec.egress.find((rule) => rule.to?.[0]?.ipBlock?.cidr === '0.0.0.0/0');
+  assert.ok(externalRule, 'external egress rule exists');
+  assert.deepEqual(externalRule.to[0].ipBlock.except, ['10.0.0.0/8', '100.64.0.0/10', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16']);
+  assert.equal(policy.raibitserver.blocksMetadataEndpoint, true);
+  assert.equal(policy.raibitserver.blocksControlPlane, true);
 });
 
 test('private services do not receive public ingress', () => {

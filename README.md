@@ -39,6 +39,8 @@ pnpm e2e:dry
 pnpm dev:down
 ```
 
+Legacy/script-friendly aliases are also available: `pnpm dev-up`, `pnpm dev-e2e`, `pnpm dev-down`, plus explicit split commands `pnpm dev:e2e:dry` and `pnpm dev:e2e:live`.
+
 Evidence is written to `.raibitserver-work/e2e-report.json`.
 
 ## Verification commands
@@ -144,11 +146,15 @@ Dry mode reports `deterministic-dry-run` or `dry-run-container-ready` and always
 
 - `docs/architecture.md`
 - `docs/local-e2e.md`
+- `docs/live-e2e.md`
 - `docs/github-app.md`
 - `docs/security.md`
 - `docs/quota.md`
 - `docs/db-console.md`
 - `docs/preview-deployments.md`
+- `docs/workflows.md`
+- `docs/provisioning.md`
+- `docs/troubleshooting.md`
 
 ## Production notes and current limitations
 

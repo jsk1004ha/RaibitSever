@@ -123,7 +123,7 @@ try {
   evidence.kubernetesDryRun = apply.apply.dryRun;
   evidence.provisionManifestCount = provision.provisioning.manifests.length;
   evidence.provisionDryRun = provision.apply.dryRun;
-  evidence.sqlitePath = sqlitePath;
+  evidence.sqlitePath = resource.body.sqlitePath || resource.body.desiredSpec?.sqlitePath || sqlitePath;
   evidence.checks.push('non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'preview deployment fixture created', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed');
   await fs.mkdir('.raibitserver-work', { recursive: true });
   await fs.writeFile('.raibitserver-work/e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);
