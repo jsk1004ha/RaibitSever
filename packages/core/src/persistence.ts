@@ -432,35 +432,35 @@ export class PrismaControlPlaneRepository {
   }
 
   async writeDesiredProject(projectSpec: Record<string, any>) {
-    const orgInput = projectSpec.organization || { name: projectSpec.organizationSlug || 'default', slug: projectSpec.organizationSlug || 'default', plan: 'free' };
+    const orgInput = projectSpec.organization || null;
+    const requestedOrganizationId = projectSpec.organizationId || projectSpec.orgId || null;
     return this.prisma.$transaction(async (tx: any) => {
-      const organization = await tx.organization.upsert({
-        where: { slug: orgInput.slug || slugInput(orgInput.name) },
-        update: { name: orgInput.name || orgInput.slug, plan: orgInput.plan || 'free' },
-        create: { name: orgInput.name || orgInput.slug, slug: orgInput.slug || slugInput(orgInput.name), plan: orgInput.plan || 'free' },
-      });
-      const projectInput = projectSpec.project || { name: projectSpec.name || projectSpec.slug || 'project', slug: projectSpec.slug || projectSpec.name || 'project' };
+      const organization = await resolveDesiredOrganization(tx, orgInput, requestedOrganizationId, projectSpec.organizationSlug);
+      const projectInput = projectSpec.project || { name: projectSpec.name || projectSpec.slug || 'project', slug: projectSpec.slug || projectSpec.name || 'project', description: projectSpec.description || '' };
+      const projectSlug = projectInput.slug || slugInput(projectInput.name);
       const project = await tx.project.upsert({
-        where: { organizationId_slug: { organizationId: organization.id, slug: projectInput.slug || slugInput(projectInput.name) } },
-        update: { name: projectInput.name || projectInput.slug, description: projectInput.description || '', status: 'active' },
-        create: { organizationId: organization.id, name: projectInput.name || projectInput.slug, slug: projectInput.slug || slugInput(projectInput.name), description: projectInput.description || '', status: 'active' },
+        where: { organizationId_slug: { organizationId: organization.id, slug: projectSlug } },
+        update: { name: projectInput.name || projectSlug, description: projectInput.description || '', status: projectInput.status || 'active' },
+        create: { organizationId: organization.id, name: projectInput.name || projectSlug, slug: projectSlug, description: projectInput.description || '', status: projectInput.status || 'active' },
       });
+      const services = [];
       for (const service of projectSpec.services || []) {
-        await tx.service.upsert({
+        services.push(await tx.service.upsert({
           where: { projectId_slug: { projectId: project.id, slug: service.slug || slugInput(service.name) } },
           update: serviceData({ ...service, projectId: project.id }),
-          create: { projectId: project.id, name: service.name, slug: service.slug || slugInput(service.name), ...serviceData(service) },
-        });
+          create: { projectId: project.id, name: service.name, slug: service.slug || slugInput(service.name), ...serviceData({ ...service, projectId: project.id }) },
+        }));
       }
+      const resources = [];
       for (const resource of projectSpec.resources || []) {
-        await tx.resource.upsert({
+        resources.push(await tx.resource.upsert({
           where: { projectId_name: { projectId: project.id, name: resource.name } },
           update: resourceData({ ...resource, projectId: project.id }),
-          create: { projectId: project.id, name: resource.name, ...resourceData(resource) },
-        });
+          create: { projectId: project.id, name: resource.name, ...resourceData({ ...resource, projectId: project.id }) },
+        }));
       }
       await tx.auditLog.create({ data: { actorUserId: 'system', action: 'desired-state:write', targetType: 'project', targetId: project.id, metadata: maskSecrets(projectSpec) } });
-      return { organization, project };
+      return { organization, project, services, resources };
     });
   }
 
@@ -518,6 +518,24 @@ export async function createControlPlaneRepository(options: Record<string, any> 
 
 function slugInput(value: any) {
   return String(value || 'item').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'item';
+}
+
+async function resolveDesiredOrganization(tx: any, orgInput: Record<string, any> | null, requestedOrganizationId: any, organizationSlug: any) {
+  if (requestedOrganizationId) {
+    const byId = await tx.organization.findUnique({ where: { id: String(requestedOrganizationId) } });
+    if (byId) return byId;
+    const bySlug = await tx.organization.findUnique({ where: { slug: slugInput(requestedOrganizationId) } });
+    if (bySlug) return bySlug;
+    const error = new Error(`organization not found: ${requestedOrganizationId}`);
+    (error as any).statusCode = 404;
+    throw error;
+  }
+  const desired = orgInput || { name: organizationSlug || 'default', slug: organizationSlug || 'default', plan: 'free' };
+  return tx.organization.upsert({
+    where: { slug: desired.slug || slugInput(desired.name) },
+    update: { name: desired.name || desired.slug, plan: desired.plan || 'free' },
+    create: { name: desired.name || desired.slug, slug: desired.slug || slugInput(desired.name), plan: desired.plan || 'free' },
+  });
 }
 
 function serviceData(input: Record<string, any>) {

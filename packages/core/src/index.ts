@@ -24,5 +24,5 @@ export { runtimeConfigStatus, assertRuntimeKeys, secretEncryptionConfigured } fr
 export { sealSecret, openSecret, secureRandomSecret, publicSecretRecord } from './secret-vault.ts';
 export { runDbConsoleQuery, browseDbConsole } from './db-console.ts';
 export { parseGitHubRepository, githubIntegrationSummary, githubCloneOptionsFromIntegration, verifyGitHubWebhookSignature } from './github-integration.ts';
-export { createControlPlaneRepository, InMemoryControlPlaneRepository, PrismaControlPlaneRepository } from './persistence.ts';
+export { createControlPlaneRepository, resolveControlPlaneRepositoryConfig, InMemoryControlPlaneRepository, PrismaControlPlaneRepository } from './persistence.ts';
 export type * from './types.ts';

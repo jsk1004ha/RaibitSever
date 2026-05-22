@@ -14,7 +14,12 @@ async function main(argv: string[]) {
   if (domain === 'projects' && action === 'list') return print(await client.listProjects(value(args, '--organization-id')));
   if (domain === 'projects' && action === 'create') return print(await client.createProject({ name: value(args, '--name') || args[0], slug: value(args, '--slug') }, value(args, '--organization-id')));
   if (domain === 'services' && action === 'create') return print(await client.createService(required(args, '--project-id'), { name: value(args, '--name') || args[0], type: value(args, '--type') || 'web', sourceType: value(args, '--source-type') || 'image', image: value(args, '--image'), repoUrl: value(args, '--repo-url'), port: numberValue(args, '--port') } as any));
-  if (domain === 'deploy') return print(await client.createDeployment(required(args, '--service-id'), { branch: value(args, '--branch') || 'main', commitSha: value(args, '--commit'), deploymentType: value(args, '--type') || 'manual' } as any));
+  if (domain === 'deploy') {
+    const deployment = { branch: value(args, '--branch') || 'main', commitSha: value(args, '--commit'), deploymentType: value(args, '--type') || 'manual' } as any;
+    const projectId = value(args, '--project-id');
+    const serviceId = required(args, '--service-id');
+    return print(projectId ? await client.createDeployment(projectId, serviceId, deployment) : await client.createDeployment(serviceId, deployment));
+  }
   if (domain === 'deployments' && action === 'logs') return print(await client.listDeploymentLogs(required(args, '--deployment-id')));
   if (domain === 'resources' && action === 'create') return print(await client.createResource(required(args, '--project-id'), { name: value(args, '--name') || args[0], type: value(args, '--type') || 'database', engine: value(args, '--engine') || 'postgresql', plan: value(args, '--plan') || 'shared-small' } as any));
   if (domain === 'resources' && action === 'attach') return print({ error: 'Use API POST /resources/:resourceId/attach; CLI attach is reserved for provider-backed mode.' });
@@ -42,6 +47,6 @@ async function queryText(args: string[]) { const file = value(args, '--file'); i
 function* pairArgs(args: string[]) { for (let i = 0; i < args.length; i += 1) if (args[i].startsWith('--') && args[i] !== '--user-id') yield [args[i].slice(2), coerce(args[i + 1])]; }
 function coerce(v: string) { return /^\d+$/.test(String(v)) ? Number(v) : v; }
 function print(v: unknown) { process.stdout.write(`${JSON.stringify(v, null, 2)}\n`); }
-function help() { console.log(`RAIBITSERVER CLI\n  raibit login --email EMAIL --password PASS\n  raibit whoami\n  raibit projects list|create\n  raibit services create --project-id ID --name web --image IMAGE\n  raibit deploy --service-id ID\n  raibit deployments logs --deployment-id ID\n  raibit resources create --project-id ID --engine postgresql\n  raibit db query --resource-id ID --query "SELECT 1"\n  raibit usage\n  raibit admin approve --user-id ID\n  raibit admin quota --user-id ID --maxProjects 3`); }
+function help() { console.log(`RAIBITSERVER CLI\n  raibit login --email EMAIL --password PASS\n  raibit whoami\n  raibit projects list|create\n  raibit services create --project-id ID --name web --image IMAGE\n  raibit deploy --project-id ID --service-id ID\n  raibit deployments logs --deployment-id ID\n  raibit resources create --project-id ID --engine postgresql\n  raibit db query --resource-id ID --query "SELECT 1"\n  raibit usage\n  raibit admin approve --user-id ID\n  raibit admin quota --user-id ID --maxProjects 3`); }
 
 main(process.argv.slice(2)).catch((error) => { console.error(error.message); process.exit(1); });

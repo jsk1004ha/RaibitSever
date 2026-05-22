@@ -97,12 +97,18 @@ export type SourceType = 'github' | 'gitlab' | 'zip' | 'image' | 'local';
 export type BuildMode = 'auto' | 'dockerfile' | 'buildpack' | 'custom' | 'prebuilt-image' | 'generated' | 'framework';
 export type ResourceType = 'database' | 'cache' | 'storage' | 'vector' | 'queue';
 export type ResourceEngine = 'postgresql' | 'mysql' | 'mariadb' | 'mongodb' | 'redis' | 'valkey' | 'sqlite' | 'object-storage' | 'qdrant' | 'weaviate' | 'milvus' | 'nats' | 'rabbitmq' | 'kafka' | 'redpanda' | 'vector-db' | 'message-queue';
+export type DeploymentStatus = 'queued' | 'building' | 'deploying' | 'ready' | 'failed' | 'cancelled' | string;
 
 export type OrganizationCreate = z.input<typeof OrganizationCreateSchema>;
 export type ServiceSpec = z.input<typeof ServiceCreateSchema> & { id?: string; projectId?: string };
 export type ResourceSpec = z.input<typeof ResourceCreateSchema> & { id?: string; projectId?: string };
 export type ProjectSpec = z.input<typeof ProjectCreateSchema> & { id?: string };
 export type DeploymentRequest = z.input<typeof DeploymentCreateSchema> & { projectId?: string; serviceId?: string };
+export interface DeploymentSpec extends DeploymentRequest { id?: string; projectId?: string; serviceId: string; status?: DeploymentStatus; workflowJob?: Record<string, unknown>; }
+export interface ProjectListResponse { projects: ProjectSpec[]; }
+export interface ServiceListResponse { services: ServiceSpec[]; }
+export interface ResourceListResponse { resources: ResourceSpec[]; }
+export interface DeploymentListResponse { deployments: DeploymentSpec[]; }
 
 export interface ApiEnvelope<T> { data?: T; error?: string; }
 export interface UserSession { user: Record<string, unknown>; memberships: Array<Record<string, unknown>>; token: string; }

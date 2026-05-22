@@ -15,7 +15,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
   private readonly repositoryPromise: Promise<InMemoryControlPlaneRepository | PrismaControlPlaneRepository>;
 
   constructor() {
-    this.repositoryPromise = createControlPlaneRepository({ kind: process.env.RAIBITSERVER_PERSISTENCE || 'memory' });
+    this.repositoryPromise = createControlPlaneRepository();
   }
 
   async onModuleDestroy() {
@@ -64,7 +64,10 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const organizationId = organizationScopeFromProjectInput(projectInput, subject);
     enforceScope(subject, { organizationId });
     if (repository.enforceUserCan) await repository.enforceUserCan({ userId: subject.id, action: 'project:create', metric: 'maxProjects', increment: 1 });
-    if (repository.writeDesiredProject) return repository.writeDesiredProject(projectInput);
+    if (repository.writeDesiredProject) {
+      const result = await repository.writeDesiredProject({ ...projectInput, organizationId });
+      return result.project || result;
+    }
     const organization = repository.store.organizations.get(organizationId)
       ? repository.store.organizations.get(organizationId)
       : await repository.createOrganization({ name: organizationId, slug: organizationId, plan: projectInput.organization?.plan || 'free' });
@@ -83,11 +86,25 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     return snapshot.projects.filter((project: Record<string, any>) => organizationIds.has(String(project.organizationId)));
   }
 
+  async listServices(projectId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    await assertProjectAccess(repository, projectId, subject);
+    const services = repository.listServicesForProject ? await repository.listServicesForProject(projectId) : (await repository.snapshot()).services.filter((service: Record<string, any>) => String(service.projectId) === String(projectId));
+    return { services };
+  }
+
   async addService(projectId: string, service: ServiceSpec, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     await assertProjectAccess(repository, projectId, subject);
     if (repository.enforceUserCan) await repository.enforceUserCan({ userId: subject.id, action: 'service:create', metric: 'maxServices', increment: 1 });
     return repository.createService({ ...service, projectId });
+  }
+
+  async listResources(projectId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    await assertProjectAccess(repository, projectId, subject);
+    const resources = repository.listResourcesForProject ? await repository.listResourcesForProject(projectId) : (await repository.snapshot()).resources.filter((resource: Record<string, any>) => String(resource.projectId) === String(projectId));
+    return { resources };
   }
 
   async addResource(projectId: string, resource: ResourceSpec, subject: Record<string, any>) {
@@ -97,7 +114,15 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     return repository.createResource({ ...resource, projectId });
   }
 
-  async createDeployment(projectId: string, serviceId: string, subject: Record<string, any>) {
+  async listDeployments(projectId: string, serviceId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    await assertServiceInProject(repository, projectId, serviceId);
+    await assertProjectAccess(repository, projectId, subject);
+    const deployments = repository.listDeploymentsForService ? await repository.listDeploymentsForService(serviceId) : (await repository.snapshot()).deployments.filter((deployment: Record<string, any>) => String(deployment.serviceId) === String(serviceId));
+    return { deployments };
+  }
+
+  async createDeployment(projectId: string, serviceId: string, input: Record<string, any>, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     await assertProjectAccess(repository, projectId, subject);
     const service = await repository.getService(serviceId);
@@ -106,9 +131,10 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     if (repository.enforceUserCan) await repository.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxDeploymentsPerDay', increment: 1 });
     const security = validateServiceSecurity(service.desiredState || service.desiredSpec || service);
     if (!security.ok) throw new ForbiddenException(`deployment blocked by security policy: ${security.findings.filter((finding: any) => finding.level === 'block').map((finding: any) => finding.code).join(', ')}`);
+    const deploymentType = input.deploymentType || input.type || 'production';
     const { deployment, workflowJob } = await repository.createDeploymentWorkflow({
-      deployment: { serviceId, projectId, status: 'queued', deploymentType: 'production' },
-      workflow: { type: 'build-and-deploy', payload: { projectId, serviceId } },
+      deployment: { ...input, serviceId, projectId, status: 'queued', deploymentType },
+      workflow: { type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', payload: { projectId, serviceId, branch: input.branch || 'main', commitSha: input.commitSha || input.commitHash || null } },
     });
     return {
       ...deployment,
@@ -116,6 +142,68 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       desiredStateWritten: true,
       workflowJob,
     };
+  }
+
+  async createDeploymentForService(serviceId: string, input: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const service = await repository.getService(serviceId);
+    if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
+    return this.createDeployment(service.projectId, serviceId, input, subject);
+  }
+
+  async listDeploymentsForService(serviceId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const service = await repository.getService(serviceId);
+    if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
+    return this.listDeployments(service.projectId, serviceId, subject);
+  }
+
+  async listDeploymentLogs(deploymentId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const deployment = repository.getDeployment ? await repository.getDeployment(deploymentId) : (await repository.snapshot()).deployments.find((candidate: Record<string, any>) => String(candidate.id) === String(deploymentId));
+    if (!deployment) throw new NotFoundException(`deployment not found: ${deploymentId}`);
+    await assertProjectAccess(repository, deployment.projectId, subject);
+    return { logs: await repository.listDeploymentLogs(deploymentId) };
+  }
+
+  async listDeploymentEvents(deploymentId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const deployment = repository.getDeployment ? await repository.getDeployment(deploymentId) : (await repository.snapshot()).deployments.find((candidate: Record<string, any>) => String(candidate.id) === String(deploymentId));
+    if (!deployment) throw new NotFoundException(`deployment not found: ${deploymentId}`);
+    await assertProjectAccess(repository, deployment.projectId, subject);
+    return { events: await repository.listDeploymentEvents(deploymentId) };
+  }
+
+  async listRuntimeLogs(serviceId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const service = await repository.getService(serviceId);
+    if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
+    await assertProjectAccess(repository, service.projectId, subject);
+    return { logs: await repository.listRuntimeLogs(serviceId) };
+  }
+
+  async queryResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const resource = repository.getResource ? await repository.getResource(resourceId) : (await repository.snapshot()).resources.find((candidate: Record<string, any>) => String(candidate.id) === String(resourceId));
+    if (!resource) throw new NotFoundException(`resource not found: ${resourceId}`);
+    await assertProjectAccess(repository, resource.projectId, subject);
+    return repository.runResourceConsoleQuery(resourceId, input.query, { ...input, role: subject.role, actorUserId: subject.id });
+  }
+
+  async browseResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const resource = repository.getResource ? await repository.getResource(resourceId) : (await repository.snapshot()).resources.find((candidate: Record<string, any>) => String(candidate.id) === String(resourceId));
+    if (!resource) throw new NotFoundException(`resource not found: ${resourceId}`);
+    await assertProjectAccess(repository, resource.projectId, subject);
+    return repository.browseResourceConsole(resourceId, input);
+  }
+
+  async usageMe(subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const snapshot = await repository.snapshot();
+    const usage = (snapshot.usageRecords || []).filter((row: Record<string, any>) => String(row.userId) === String(subject.id));
+    const quota = (snapshot.quotas || []).find((row: Record<string, any>) => String(row.userId) === String(subject.id)) || null;
+    return { accountType: subject.accountType, approvalStatus: subject.approvalStatus, unlimited: subject.accountType === 'CLUB_MEMBER', quota, usage };
   }
 
   async listEnvironment(projectId: string, serviceId: string, subject: Record<string, any>) {

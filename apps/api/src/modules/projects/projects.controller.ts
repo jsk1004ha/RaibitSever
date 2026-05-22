@@ -9,8 +9,8 @@ export class ProjectsController {
 
   @RequirePermission('project:read')
   @Get()
-  list(@Req() req: any) {
-    return this.raibitServer.listProjects(req.raibitSubject);
+  async list(@Req() req: any) {
+    return { projects: await this.raibitServer.listProjects(req.raibitSubject) };
   }
 
   @RequirePermission('project:create')
