@@ -6,9 +6,11 @@ import path from 'node:path';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 import { applyProject, commandExists, executeBuildWorkflow, provisionProjectResources } from '../packages/core/src/execution.ts';
+import { parseE2EOptions, resolveE2EPlan } from './e2e-mode.mjs';
 import { signJwtHs256 } from '../packages/core/src/auth.ts';
 import { serviceHostname } from '../packages/core/src/domain-router.ts';
 
+const e2eOptions = parseE2EOptions(process.argv.slice(2), process.env);
 const jwtSecret = process.env.RAIBITSERVER_AUTH_JWT_SECRET || 'local-e2e-secret-at-least-32-chars';
 const baseDomain = process.env.BASE_DOMAIN || '127.0.0.1.sslip.io';
 const controlPlane = new RAIBITSERVERControlPlane();
@@ -25,10 +27,15 @@ app.listen(0, '127.0.0.1');
 await once(app, 'listening');
 const appPort = app.address().port;
 
-const evidence = { apiPort, appPort, checks: [], tools: {}, mode: 'deterministic-local-fallback' };
+const evidence = { apiPort, appPort, checks: [], tools: {}, mode: 'deterministic-dry-run' };
 try {
-  for (const tool of ['docker', 'kubectl', 'kind', 'k3d', 'git']) evidence.tools[tool] = await commandExists(tool);
-  if (evidence.tools.docker && evidence.tools.kubectl && (evidence.tools.kind || evidence.tools.k3d)) evidence.mode = 'container-stack-ready';
+  for (const tool of ['docker', 'kubectl', 'kind', 'k3d', 'git', 'go']) evidence.tools[tool] = await commandExists(tool);
+  const e2ePlan = resolveE2EPlan({ ...e2eOptions, tools: evidence.tools });
+  evidence.mode = e2ePlan.label;
+  evidence.requestedMode = e2ePlan.requestedMode;
+  evidence.dryRun = e2ePlan.dryRun;
+  evidence.liveToolsReady = e2ePlan.liveToolsReady;
+  evidence.missingLiveTools = e2ePlan.missingTools;
 
   const pending = await request('POST', '/auth/signup', { email: 'student@example.com', password: 'correct-horse-battery', organizationSlug: 'student-org' });
   assertStatus(pending, 201, 'non-club signup');
@@ -86,19 +93,34 @@ try {
   }
 
   const sampleProject = JSON.parse(await fs.readFile('examples/project.json', 'utf8'));
-  const build = await executeBuildWorkflow({ ...sampleProject.services[0], projectSlug: 'local-e2e', registry: 'localhost:5000', sourceType: 'local', localPath: 'examples/express-api' }, {}, { sourceDir: 'examples/express-api', dryRun: true, push: true });
-  const apply = await applyProject(sampleProject, sampleProject.filesByService || {}, { dryRun: true, outputDir: '.raibitserver-work' });
-  const provision = await provisionProjectResources({ ...sampleProject, resources: [...sampleProject.resources, { name: 'local-sqlite', engine: 'sqlite', type: 'database' }] }, { dryRun: true, outputDir: '.raibitserver-work' });
+  const localBuildService = {
+    name: 'express-api',
+    type: 'web',
+    sourceType: 'local',
+    buildMode: 'dockerfile',
+    dockerfilePath: 'Dockerfile',
+    buildContext: '.',
+    projectSlug: 'local-e2e',
+    registry: process.env.REGISTRY_URL || 'localhost:5000',
+    localPath: 'examples/express-api',
+    port: 3000,
+  };
+  const build = await executeBuildWorkflow(localBuildService, { Dockerfile: 'FROM node:24-alpine' }, { sourceDir: 'examples/express-api', dryRun: e2ePlan.dryRun, push: e2ePlan.mode === 'live' });
+  const apply = await applyProject(sampleProject, sampleProject.filesByService || {}, { dryRun: e2ePlan.dryRun, outputDir: '.raibitserver-work', keepManifest: e2ePlan.dryRun });
+  const provision = await provisionProjectResources({ ...sampleProject, resources: [...sampleProject.resources, { name: 'local-sqlite', engine: 'sqlite', type: 'database' }] }, { dryRun: e2ePlan.dryRun, outputDir: '.raibitserver-work', keepManifest: e2ePlan.dryRun });
 
   evidence.url = `http://${urlHost}:${appPort}`;
   evidence.deploymentStatus = 'READY';
   evidence.deploymentId = deployment.body.id;
   evidence.previewDeploymentId = preview.body.id;
   evidence.buildSteps = build.steps.map((step) => step.type);
+  evidence.buildDryRun = build.dryRun;
   evidence.kubernetesManifestCount = apply.compiled.manifests.length;
+  evidence.kubernetesDryRun = apply.apply.dryRun;
   evidence.provisionManifestCount = provision.provisioning.manifests.length;
+  evidence.provisionDryRun = provision.apply.dryRun;
   evidence.sqlitePath = sqlitePath;
-  evidence.checks.push('non-club pending blocked', 'admin approval/quota works', 'club member bypasses user quota', 'build/runtime logs readable', 'SQLite DB console query works', 'preview deployment fixture created', 'manifest/provision/build dry-run artifacts generated');
+  evidence.checks.push('non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'preview deployment fixture created', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed');
   await fs.mkdir('.raibitserver-work', { recursive: true });
   await fs.writeFile('.raibitserver-work/e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);
   console.log(JSON.stringify({ ok: true, ...evidence }, null, 2));

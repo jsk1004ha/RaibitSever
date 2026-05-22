@@ -8,4 +8,4 @@ RAIBITSERVER is a TypeScript-centered control plane with Go infrastructure recon
 - **Runtime:** every service resolves to a container image and Kubernetes desired state. Dockerfile wins over detection; generated Dockerfile/buildpack fallback is available.
 - **Security:** non-root, no privileged/hostPath/host networking, read-only root FS, dropped capabilities, seccomp, resource limits, masked logs, encrypted secrets.
 
-Local verification is intentionally credential-free: `pnpm dev:e2e` runs the control-plane/API/DB-console/log/preview/quota flow and emits dry-run build/Kubernetes/provisioning artifacts when Docker/Kubernetes are unavailable.
+Local verification is intentionally credential-free: `pnpm e2e:dry` runs the control-plane/API/DB-console/log/preview/quota flow and emits dry-run build/Kubernetes/provisioning artifacts while live execution is isolated behind `pnpm e2e:live -- --execute` semantics.

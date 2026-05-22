@@ -23,12 +23,14 @@
     "cli": "node src/cli.js",
     "dev:up": "node scripts/dev-up.mjs",
     "dev:seed": "node scripts/dev-seed.mjs",
-    "dev:e2e": "node scripts/dev-e2e.mjs",
+    "dev:e2e": "node scripts/dev-e2e.mjs --mode dry",
     "dev:down": "node scripts/dev-down.mjs",
-    "e2e": "node scripts/dev-e2e.mjs",
-    "e2e:local": "node scripts/dev-e2e.mjs",
+    "e2e": "pnpm e2e:dry",
+    "e2e:local": "pnpm e2e:dry",
     "prisma:validate": "sh -c 'DATABASE_URL=${DATABASE_URL:-postgresql://raibitserver:raibitserver@localhost:5432/raibitserver} prisma validate --schema prisma/schema.prisma'",
-    "prisma:generate": "sh -c 'DATABASE_URL=${DATABASE_URL:-postgresql://raibitserver:raibitserver@localhost:5432/raibitserver} prisma generate --schema prisma/schema.prisma'"
+    "prisma:generate": "sh -c 'DATABASE_URL=${DATABASE_URL:-postgresql://raibitserver:raibitserver@localhost:5432/raibitserver} prisma generate --schema prisma/schema.prisma'",
+    "e2e:dry": "node scripts/dev-e2e.mjs --mode dry",
+    "e2e:live": "node scripts/dev-e2e.mjs --mode live --execute"
   },
   "bin": {
     "raibitserver-prototype": "src/cli.js"

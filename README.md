@@ -26,7 +26,7 @@ Product invariants implemented in code:
 - pnpm 11.1.2 (`corepack enable`)
 - Optional for execute-mode local cluster: Docker, kind or k3d, kubectl, Go 1.22+
 
-Local verification does **not** require real cloud credentials, registry, Kubernetes, or GitHub secrets. When Docker/Kubernetes are unavailable, `dev:e2e` runs deterministic local proof and writes dry-run artifacts.
+Local verification does **not** require real cloud credentials, registry, Kubernetes, or GitHub secrets. `pnpm e2e:dry` is the default deterministic proof and writes dry-run artifacts. `pnpm e2e:live` is an explicit `--execute` path for local Docker/kind-or-k3d/kubectl environments.
 
 ## Quick start
 
@@ -35,7 +35,7 @@ corepack enable
 pnpm install --frozen-lockfile
 pnpm dev:up
 pnpm dev:seed
-pnpm dev:e2e
+pnpm e2e:dry
 pnpm dev:down
 ```
 
@@ -105,7 +105,7 @@ The root `src/cli.js` remains the deterministic no-server planner/executor CLI f
 
 ## Local E2E behavior
 
-`pnpm dev:e2e` verifies:
+`pnpm e2e:dry` verifies:
 
 - example app HTTP 200 through a generated RAIBITSERVER-style host,
 - non-club pending user is blocked,
@@ -118,7 +118,7 @@ The root `src/cli.js` remains the deterministic no-server planner/executor CLI f
 - PR preview deployment fixture,
 - build/Kubernetes/provisioning dry-run artifacts.
 
-If Docker/kind/kubectl are installed, the same command reports `container-stack-ready`; otherwise it reports `deterministic-local-fallback` and still succeeds without external side effects.
+Dry mode reports `deterministic-dry-run` or `dry-run-container-ready` and always keeps build, Kubernetes, and provisioning worker actions non-side-effecting. Live mode is separate: `pnpm e2e:live` requires Docker, kubectl, kind/k3d, and the explicit `--execute` script contract before it runs build/Kubernetes/provisioning commands against the local environment.
 
 ## Account and quota model
 
@@ -154,5 +154,5 @@ If Docker/kind/kubectl are installed, the same command reports `container-stack-
 
 - Real GitHub OAuth/App actions require configured GitHub credentials.
 - Execute-mode Docker/BuildKit build, registry push, and Kubernetes apply require local Docker/kind/kubectl or production infrastructure.
-- Local E2E proves the full control-plane contract and dry-run worker artifacts when those tools are absent.
+- Dry E2E proves the full control-plane contract and dry-run worker artifacts without those tools; live E2E is reserved for explicit local-cluster execution.
 - Use PostgreSQL for production API persistence; the in-memory store is for tests/dev fallback only.

@@ -11,15 +11,21 @@ import { sealSecretValue, unsealSecretValue, maskSecrets } from '../packages/cor
 
 
 test('local E2E script verifies approval, quota, logs, preview, and SQLite console', async () => {
-  const result = await runNode(['scripts/dev-e2e.mjs'], { RAIBITSERVER_AUTH_JWT_SECRET: 'test-local-e2e-secret-32-bytes' });
+  const result = await runNode(['scripts/dev-e2e.mjs', '--mode', 'dry'], { RAIBITSERVER_AUTH_JWT_SECRET: 'test-local-e2e-secret-32-bytes' });
   assert.equal(result.code, 0, result.stderr);
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.ok, true);
   assert.equal(parsed.deploymentStatus, 'READY');
+  assert.equal(parsed.requestedMode, 'dry');
+  assert.equal(parsed.dryRun, true);
+  assert.equal(parsed.buildDryRun, true);
+  assert.equal(parsed.kubernetesDryRun, true);
+  assert.equal(parsed.provisionDryRun, true);
   assert.equal(parsed.checks.some((check) => check.includes('non-club pending blocked')), true);
   const report = JSON.parse(await fs.readFile('.raibitserver-work/e2e-report.json', 'utf8'));
   assert.match(report.previewDeploymentId, /^dep[-_]/);
   assert.equal(report.checks.includes('SQLite DB console query works'), true);
+  assert.equal(report.checks.includes('build/Kubernetes/provisioning dry-run artifacts generated'), true);
 });
 
 test('api-client matches prototype API project/service/resource contract', async () => {

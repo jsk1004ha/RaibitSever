@@ -41,7 +41,7 @@ test('CI workflow keeps local smoke checks and Prisma validation environment', a
     'node src/cli.js k8s-apply examples/project.json',
     'pnpm prisma:validate',
     'pnpm prisma:generate',
-    'pnpm dev:e2e',
+    'pnpm e2e:dry',
   ]) {
     assert.match(ci, new RegExp(escapeRegExp(command)));
   }
