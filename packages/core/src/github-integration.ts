@@ -95,6 +95,7 @@ export function githubWebhookActionPlan(event: any, payload: Record<string, any>
 
 export function githubWebhookOutboundPlan(actionPlan: Record<string, any>, actions: Array<Record<string, any>> = []) {
   const state = actions.length ? 'queued' : 'skipped';
+  const previewUrl = actions.find((action) => action.previewUrl)?.previewUrl || null;
   const description = actions.length
     ? `${actions.length} RAIBITSERVER workflow action(s) queued`
     : 'No RAIBITSERVER service is attached to this repository';
@@ -103,7 +104,7 @@ export function githubWebhookOutboundPlan(actionPlan: Record<string, any>, actio
       state: state === 'queued' ? 'pending' : 'success',
       context: actionPlan.kind === 'preview-cleanup' ? 'raibitserver/preview-cleanup' : 'raibitserver/deploy',
       description,
-      targetUrl: null,
+      targetUrl: previewUrl,
     },
     checkRun: {
       name: actionPlan.kind === 'preview-cleanup' ? 'RAIBITSERVER preview cleanup' : 'RAIBITSERVER deployment',
@@ -112,7 +113,7 @@ export function githubWebhookOutboundPlan(actionPlan: Record<string, any>, actio
       output: { title: 'RAIBITSERVER', summary: description },
     },
     pullRequestComment: actionPlan.pullRequestNumber
-      ? { pullRequestNumber: actionPlan.pullRequestNumber, body: actions.length ? `RAIBITSERVER queued ${actions.map((action) => action.type).join(', ')}.` : 'RAIBITSERVER found no attached service for this repository.' }
+      ? { pullRequestNumber: actionPlan.pullRequestNumber, body: actions.length ? `RAIBITSERVER queued ${actions.map((action) => action.type).join(', ')}.${previewUrl ? ` Preview: ${previewUrl}` : ''}` : 'RAIBITSERVER found no attached service for this repository.' }
       : null,
   };
 }

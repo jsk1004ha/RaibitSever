@@ -87,6 +87,13 @@ func TestRunOnceCleansPreviewDeployment(t *testing.T) {
 	if result.Status != store.DeploymentStatusCleanedUp || !strings.Contains(strings.Join(result.Commands, "\n"), "kubectl delete") {
 		t.Fatalf("unexpected cleanup result: %#v", result)
 	}
+	manifest, err := os.ReadFile(result.ManifestFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(manifest), "pr-42-web") || !strings.Contains(string(manifest), "raibitserver.io/preview") {
+		t.Fatalf("preview cleanup manifest must target isolated preview workload: %s", string(manifest))
+	}
 	deployment := firstByID(t, readState(t, stateFile), "deployments", "dep_1")
 	if deployment["status"] != store.DeploymentStatusCleanedUp {
 		t.Fatalf("deployment not cleaned up: %#v", deployment)

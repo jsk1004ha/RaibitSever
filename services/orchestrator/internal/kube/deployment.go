@@ -21,6 +21,9 @@ type AppServiceSpec struct {
 	OrganizationSlug string            `json:"organizationSlug"`
 	ServiceType      string            `json:"serviceType"`
 	DeploymentID     string            `json:"deploymentId"`
+	Preview          bool              `json:"preview"`
+	PullRequestNumber int              `json:"pullRequestNumber,omitempty"`
+	BaseServiceName  string            `json:"baseServiceName,omitempty"`
 }
 
 type DeploymentPlan struct {
@@ -48,16 +51,26 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 	projectSlug := slug(firstNonEmpty(project.Slug, project.Name, project.ID, "project"))
 	organizationSlug := slug(firstNonEmpty(project.OrganizationID, "org"))
 	serviceName := slug(firstNonEmpty(service.Slug, service.Name, service.ID, "service"))
+	baseServiceName := serviceName
 	domain := firstNonEmpty(baseDomain, service.BaseDomain, "apps.raibitserver.local")
 	host := serviceName + "--" + projectSlug + "--" + organizationSlug + "." + domain
+	preview := false
 	if deployment.DeploymentType == "preview" && deployment.PullRequestNumber > 0 {
-		host = "pr-" + strconv.Itoa(deployment.PullRequestNumber) + "--" + serviceName + "--" + projectSlug + "--" + organizationSlug + ".preview." + domain
+		preview = true
+		previewKey := "pr-" + strconv.Itoa(deployment.PullRequestNumber)
+		host = previewKey + "--" + baseServiceName + "--" + projectSlug + "--" + organizationSlug + ".preview." + domain
+		serviceName = previewKey + "-" + baseServiceName
 	}
-	return AppServiceSpec{Name: serviceName, Namespace: organizationSlug + "-" + projectSlug, Image: firstNonEmpty(deployment.ImageURL, service.ImageURL), Port: service.Port, Replicas: service.Replicas, Host: host, ProjectSlug: projectSlug, OrganizationSlug: organizationSlug, ServiceType: firstNonEmpty(service.Type, "web"), DeploymentID: deployment.ID}
+	return AppServiceSpec{Name: serviceName, Namespace: organizationSlug + "-" + projectSlug, Image: firstNonEmpty(deployment.ImageURL, service.ImageURL), Port: service.Port, Replicas: service.Replicas, Host: host, ProjectSlug: projectSlug, OrganizationSlug: organizationSlug, ServiceType: firstNonEmpty(service.Type, "web"), DeploymentID: deployment.ID, Preview: preview, PullRequestNumber: deployment.PullRequestNumber, BaseServiceName: baseServiceName}
 }
 
 func CompileServiceManifests(spec AppServiceSpec) []map[string]any {
 	labels := map[string]any{"app.kubernetes.io/name": spec.Name, "app.kubernetes.io/managed-by": "raibitserver", "raibitserver.io/project": spec.ProjectSlug, "raibitserver.io/service": spec.Name, "raibitserver.io/deployment": spec.DeploymentID}
+	if spec.Preview {
+		labels["raibitserver.io/preview"] = "true"
+		labels["raibitserver.io/pull-request"] = strconv.Itoa(spec.PullRequestNumber)
+		labels["raibitserver.io/base-service"] = spec.BaseServiceName
+	}
 	items := []map[string]any{
 		{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": spec.Namespace, "labels": map[string]any{"raibitserver.io/project": spec.ProjectSlug, "pod-security.kubernetes.io/enforce": "restricted"}}},
 		deploymentManifest(spec, labels),

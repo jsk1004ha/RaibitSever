@@ -10,6 +10,7 @@ import { providerConnectionEnvForResource, provisionResourceProvider as provisio
 import { providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
 import { normalizeResourceEngine } from './catalog.ts';
 import { assertDeploymentTransition, normalizeDeploymentStatus } from './deployments.ts';
+import { previewRuntimePlan } from './preview-deployments.ts';
 
 export class ControlPlaneStore {
   organizations: Map<string, any>;
@@ -697,15 +698,24 @@ export class ControlPlaneStore {
         const workflowJob = this.enqueueWorkflowJob({ type: 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook' } });
         actions.push({ type: 'production-deployment-enqueued', serviceId: service.id, deploymentId: deployment.id, workflowJobId: workflowJob.id });
       } else if (actionPlan.kind === 'preview-deploy') {
-        const deployment = this.createDeployment({ serviceId: service.id, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: actionPlan.branch, pullRequestNumber: actionPlan.pullRequestNumber, previewUrl: previewUrlFor(service, actionPlan.pullRequestNumber) });
-        const workflowJob = this.enqueueWorkflowJob({ type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, pullRequestNumber: actionPlan.pullRequestNumber, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook' } });
-        actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, deploymentId: deployment.id, workflowJobId: workflowJob.id, pullRequestNumber: actionPlan.pullRequestNumber });
+        const project = this.projects.get(service.projectId);
+        const organization = project ? this.organizations.get(project.organizationId) : null;
+        const previewPlan = previewRuntimePlan({ service, project, organization, pullRequestNumber: actionPlan.pullRequestNumber });
+        const deployment = this.createDeployment({ serviceId: service.id, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: actionPlan.branch, pullRequestNumber: actionPlan.pullRequestNumber, previewUrl: previewPlan.url });
+        const preview = previewRuntimePlan({ service, project, organization, pullRequestNumber: actionPlan.pullRequestNumber, deploymentId: deployment.id });
+        const workflowJob = this.enqueueWorkflowJob({ type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, pullRequestNumber: actionPlan.pullRequestNumber, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook', preview, kubernetes: preview.kubernetes } });
+        this.appendDeploymentEvent({ deploymentId: deployment.id, type: 'preview.workload.queued', message: `Preview Kubernetes workload queued for PR #${actionPlan.pullRequestNumber}`, metadata: { previewUrl: preview.url, workloadName: preview.kubernetes.workloadName, namespace: preview.kubernetes.namespace } });
+        actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, deploymentId: deployment.id, workflowJobId: workflowJob.id, pullRequestNumber: actionPlan.pullRequestNumber, previewUrl: preview.url, previewWorkloadName: preview.kubernetes.workloadName });
       } else if (actionPlan.kind === 'preview-cleanup') {
-        const workflowJob = this.enqueueWorkflowJob({ type: 'preview-cleanup', targetType: 'service', targetId: service.id, payload: { serviceId: service.id, projectId: service.projectId, repository: actionPlan.repository, pullRequestNumber: actionPlan.pullRequestNumber, branch: actionPlan.branch, source: 'github-webhook' } });
+        const project = this.projects.get(service.projectId);
+        const organization = project ? this.organizations.get(project.organizationId) : null;
+        const preview = previewRuntimePlan({ service, project, organization, pullRequestNumber: actionPlan.pullRequestNumber, action: 'delete' });
+        const workflowJob = this.enqueueWorkflowJob({ type: 'preview-cleanup', targetType: 'service', targetId: service.id, payload: { serviceId: service.id, projectId: service.projectId, repository: actionPlan.repository, pullRequestNumber: actionPlan.pullRequestNumber, branch: actionPlan.branch, source: 'github-webhook', preview, kubernetes: preview.kubernetes } });
         const deployments = [...this.deployments.values()].filter((deployment) => deployment.serviceId === service.id && deployment.deploymentType === 'preview' && Number(deployment.pullRequestNumber) === Number(actionPlan.pullRequestNumber));
         for (const deployment of deployments) {
+          const cleanupPlan = previewRuntimePlan({ service, project, organization, pullRequestNumber: actionPlan.pullRequestNumber, deploymentId: deployment.id, action: 'delete' });
           this.deployments.set(deployment.id, { ...deployment, status: 'PREVIEW_CLEANUP_REQUESTED', updatedAt: nowIso() });
-          this.appendDeploymentEvent({ deploymentId: deployment.id, type: 'preview.cleanup.requested', message: `Preview cleanup requested for PR #${actionPlan.pullRequestNumber}`, metadata: { repository: actionPlan.repository } });
+          this.appendDeploymentEvent({ deploymentId: deployment.id, type: 'preview.cleanup.requested', message: `Preview cleanup requested for PR #${actionPlan.pullRequestNumber}`, metadata: { repository: actionPlan.repository, workloadName: cleanupPlan.kubernetes.workloadName, cleanupSelector: cleanupPlan.kubernetes.cleanupSelector } });
         }
         actions.push({ type: 'preview-cleanup-enqueued', serviceId: service.id, workflowJobId: workflowJob.id, pullRequestNumber: actionPlan.pullRequestNumber, deploymentIds: deployments.map((deployment) => deployment.id) });
       }
@@ -1125,10 +1135,4 @@ function uniqueRepositories(repositories: Array<Record<string, any> | null>) {
     byName.set(key, existing ? { ...existing, serviceIds: [...new Set([...(existing.serviceIds || []), ...(repository.serviceIds || [])])] } : repository);
   }
   return [...byName.values()];
-}
-
-function previewUrlFor(service: Record<string, any>, pullRequestNumber: any) {
-  const project = String(service.projectId || 'project').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
-  const name = String(service.slug || service.name || service.id).replace(/[^a-z0-9-]/gi, '-').toLowerCase();
-  return `https://pr-${Number(pullRequestNumber || 0)}--${name}--${project}.preview.raibitserver.app`;
 }

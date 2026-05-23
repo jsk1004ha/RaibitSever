@@ -107,6 +107,22 @@ try {
   const preview = await request('POST', `/services/${service.body.id}/deployments`, { deploymentType: 'preview', triggerType: 'pull_request', pullRequestNumber: 42, branch: 'feature/local-e2e', previewUrl: `http://pr-42--${urlHost.replace(/^express-api--/, '')}` }, pending.body.token);
   assertStatus(preview, 202, 'PR preview deployment enqueue');
   controlPlane.store.updateService(service.body.id, { githubRepository: 'student-org/local-e2e', repoUrl: 'https://github.com/student-org/local-e2e.git', githubIntegrationId: 'local-e2e' });
+  const githubPush = controlPlane.store.handleGitHubWebhook({
+    event: 'push',
+    deliveryId: 'local-e2e-push-main',
+    body: JSON.stringify({ repository: { full_name: 'student-org/local-e2e' }, ref: 'refs/heads/main', after: 'push-e2e' }),
+    payload: { repository: { full_name: 'student-org/local-e2e' }, ref: 'refs/heads/main', after: 'push-e2e' },
+  });
+  if (!githubPush.actions.some((action) => action.type === 'production-deployment-enqueued')) throw new Error('GitHub push webhook did not enqueue production deployment');
+  const githubPreviewActions = [];
+  for (const action of ['opened', 'synchronize', 'reopened']) {
+    const deliveryId = `local-e2e-pr-${action}`;
+    const payload = { action, number: 42, repository: { full_name: 'student-org/local-e2e' }, pull_request: { number: 42, head: { ref: 'feature/local-e2e', sha: `sha-${action}` } } };
+    const result = controlPlane.store.handleGitHubWebhook({ event: 'pull_request', deliveryId, body: JSON.stringify(payload), payload });
+    const queued = result.actions.find((item) => item.type === 'preview-deployment-enqueued');
+    if (!queued?.previewUrl || queued.previewWorkloadName !== 'pr-42-express-api') throw new Error(`GitHub PR ${action} did not enqueue deterministic preview workload`);
+    githubPreviewActions.push({ action, deliveryId, previewUrl: queued.previewUrl, previewWorkloadName: queued.previewWorkloadName });
+  }
   const previewCleanup = controlPlane.store.handleGitHubWebhook({
     event: 'pull_request',
     deliveryId: 'local-e2e-pr-closed',
@@ -153,8 +169,13 @@ try {
   evidence.postgresProviderDryRun = postgresProvision.result.dryRun;
   evidence.postgresEnvInjected = Boolean(postgresEnv.DATABASE_URL && postgresEnv.PGUSER);
   evidence.betaResourceEvidence = betaResources;
+  evidence.githubWebhookEvidence = {
+    pushAction: githubPush.actions[0]?.type || null,
+    previewActions: githubPreviewActions,
+    previewWorkloadPayloads: controlPlane.store.workflowJobs.filter((job) => job.type === 'preview-deploy').map((job) => job.payload.kubernetes?.workloadName).filter(Boolean),
+  };
   evidence.previewCleanupAction = previewCleanup.actions[0]?.type || null;
-  evidence.checks.push('first-user admin bootstrap works', 'non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'PostgreSQL provider dry-run and env injection works', 'Beta DB/resource consoles and env injection work', 'preview deployment fixture created', 'preview cleanup workflow enqueued', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed', e2ePlan.dryRun ? 'live beta checklist dry contract generated' : 'live beta checklist passed against local cluster');
+  evidence.checks.push('first-user admin bootstrap works', 'non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'PostgreSQL provider dry-run and env injection works', 'Beta DB/resource consoles and env injection work', 'GitHub push webhook fixture enqueues production deployment', 'GitHub PR opened/synchronize/reopened fixtures enqueue preview workloads', 'preview deployment fixture created', 'preview cleanup workflow enqueued', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed', e2ePlan.dryRun ? 'live beta checklist dry contract generated' : 'live beta checklist passed against local cluster');
   await fs.mkdir('.raibitserver-work', { recursive: true });
   await fs.writeFile('.raibitserver-work/e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);
   if (e2ePlan.mode === 'live') await fs.writeFile('.raibitserver-work/live-e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);

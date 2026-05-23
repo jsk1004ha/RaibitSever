@@ -115,5 +115,25 @@ export async function loadGitHubConsole(context = dashboardApiContext()) {
     getJson('/github/installations', { installations: [] }, context),
     getJson('/projects', { projects: [] }, context),
   ]);
-  return { context, integrations: integrations.body?.integrations || [], installations: installations.body?.installations || [], projects: projects.body?.projects || [] };
+  const projectRows = projects.body?.projects || [];
+  const installationRows = installations.body?.installations || [];
+  const [repositoriesByInstallation, servicesByProject] = await Promise.all([
+    Promise.all(installationRows.map(async (installation: any) => {
+      const repositories = await getJson(`/github/installations/${encodeURIComponent(installation.installationId || installation.id)}/repositories`, { repositories: [] }, context);
+      return { installationId: installation.installationId || installation.id, repositories: repositories.body?.repositories || [] };
+    })),
+    Promise.all(projectRows.map(async (project: any) => {
+      const services = await getJson(`/projects/${encodeURIComponent(project.id)}/services`, { services: [] }, context);
+      return { projectId: project.id, projectName: project.name || project.slug, services: services.body?.services || [] };
+    })),
+  ]);
+  return {
+    context,
+    integrations: integrations.body?.integrations || [],
+    installations: installationRows,
+    repositoriesByInstallation,
+    repositories: repositoriesByInstallation.flatMap((row) => row.repositories.map((repository: any) => ({ ...repository, installationId: row.installationId }))),
+    projects: projectRows,
+    services: servicesByProject.flatMap((row) => row.services.map((service: any) => ({ ...service, projectId: row.projectId, projectName: row.projectName }))),
+  };
 }

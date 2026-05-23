@@ -15,18 +15,21 @@ pr-<number>--<service>--<project>--<org>.preview.<BASE_DOMAIN>
 1. GitHub `pull_request` 이벤트가 들어옵니다.
 2. `opened`, `synchronize`, `reopened` 이벤트는 `PREVIEW` deployment를 queue합니다.
 3. RAIBITSERVER는 preview deployment record, workflow job, preview URL을 생성합니다.
-4. Builder/orchestrator가 preview build와 apply를 처리합니다.
-5. Dashboard/API/CLI에서 preview 상태와 로그를 조회합니다.
+4. Workflow payload에는 `pr-<number>-<service>` Kubernetes workload plan, namespace, ingress host, cleanup selector가 들어갑니다.
+5. Builder/orchestrator가 preview build와 apply를 처리합니다.
+6. Dashboard/API/CLI에서 preview 상태와 로그를 조회합니다.
+
+Preview workload는 production workload와 이름이 다릅니다. 예를 들어 service `web`, PR `42`는 `web`이 아니라 `pr-42-web` Deployment/Service/Ingress로 컴파일되어 production rollout과 cleanup을 침범하지 않습니다.
 
 ## Cleanup 흐름
 
 - `closed` 이벤트는 preview cleanup job을 queue합니다.
-- cleanup은 deployment/resource/log/event를 idempotent하게 정리해야 합니다.
+- cleanup은 `pr-<number>-<service>` workload selector로 preview Kubernetes object만 idempotent하게 정리해야 합니다.
 - 이미 정리된 preview에 대해 cleanup이 재실행되어도 성공으로 처리합니다.
 
 ## 로컬 검증
 
-`pnpm e2e:dry`는 실제 GitHub credential 없이 pull request fixture payload로 preview deployment record, workflow job, URL 생성을 확인합니다.
+`pnpm e2e:dry`는 실제 GitHub credential 없이 push fixture, pull request opened/synchronize/reopened fixture, closed cleanup fixture로 preview deployment record, workflow job, URL, workload name 생성을 확인합니다.
 
 ## 관련 문서
 

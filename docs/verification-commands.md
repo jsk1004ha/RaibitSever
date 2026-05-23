@@ -64,10 +64,12 @@ node --test \
   tests/api-store.test.js \
   tests/api-contract-sync.test.js \
   tests/api-contract-github-resource-console.test.js \
+  tests/domain-router.test.js \
   tests/db-resource-beta.test.js \
   tests/auth-env-github.test.js \
   tests/scope-auth.test.js \
   tests/workflow-jobs.test.js
+node --test tests/go-orchestrator-reconciler.test.js
 pnpm --filter @raibitserver/api typecheck
 pnpm --filter @raibitserver/api test
 ```

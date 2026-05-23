@@ -10,6 +10,7 @@ import { providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource
 import { normalizeResourceEngine } from './catalog.ts';
 import { sanitizeLogRecord } from './security.ts';
 import { assertDeploymentTransition, normalizeDeploymentStatus } from './deployments.ts';
+import { previewRuntimePlan } from './preview-deployments.ts';
 
 export class InMemoryControlPlaneRepository {
   store: ControlPlaneStore;
@@ -496,7 +497,7 @@ export class PrismaControlPlaneRepository {
     }
     const service = await this.prisma.service.update({
       where: { id: input.serviceId },
-      data: { sourceType: 'github', repoUrl: repo.repoUrl, branch: input.branch || 'main', desiredState: sanitizeJson({ githubIntegrationId: input.integrationId || null, githubRepository: repo.fullName }) },
+      data: { sourceType: 'github', repoUrl: repo.repoUrl, branch: input.branch || 'main', desiredState: sanitizeJson({ github: { repository: repo.fullName, integrationId: input.integrationId || null, attached: true }, githubIntegrationId: input.integrationId || null, githubRepository: repo.fullName }) },
     });
     await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'github:attach-repository', targetType: 'service', targetId: input.serviceId, metadata: { repository: repo.fullName, integrationId: input.integrationId || null } } });
     return { service, github: { integrationId: input.integrationId || null, repository: repo.fullName, repoUrl: repo.repoUrl, branch: input.branch || 'main' } };
@@ -504,6 +505,7 @@ export class PrismaControlPlaneRepository {
 
   async listGitHubInstallations(input: Record<string, any>) {
     const integrations = await this.prisma.githubIntegration.findMany({ where: { organizationId: input.organizationId, installationId: { not: null } } });
+    const services = await this.prisma.service.findMany({ where: { repoUrl: { not: null } } });
     return {
       installations: integrations.map((integration: Record<string, any>) => ({
         id: String(integration.installationId),
@@ -511,7 +513,10 @@ export class PrismaControlPlaneRepository {
         integrationId: integration.id,
         accountLogin: integration.accountLogin,
         organizationId: integration.organizationId,
-        repositoryCount: 0,
+        repositoryCount: uniquePrismaRepositories(services.filter((service: Record<string, any>) => {
+          const desired = service.desiredState || {};
+          return String(desired.githubIntegrationId || desired.github?.integrationId || '') === String(integration.id);
+        })).length,
       })),
     };
   }
@@ -552,10 +557,11 @@ export class PrismaControlPlaneRepository {
   }
 
   async syncGitHubRepository(input: Record<string, any>) {
-    const repository = String(input.repository || input.repositoryId || '');
-    const workflowJob = await this.enqueueWorkflowJob({ type: 'github-repository-sync', targetType: 'github-repository', targetId: repository, payload: { repository } });
+    const repository = normalizePrismaRepositoryId(input.repository || input.repositoryId || '');
+    const services = await servicesForPrismaGitHubRepository(this.prisma, repository, { organizationId: input.organizationId, organizationIds: input.organizationIds });
+    const workflowJob = await this.enqueueWorkflowJob({ type: 'github-repository-sync', targetType: 'github-repository', targetId: repository, payload: { repository, serviceIds: services.map((service: Record<string, any>) => service.id) } });
     await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'github:repository-sync', targetType: 'github-repository', targetId: repository, metadata: maskSecrets({ repository }) } });
-    return { repository, services: [], workflowJob };
+    return { repository, services, workflowJob };
   }
 
   async handleGitHubWebhook(input: Record<string, any>) {
@@ -572,8 +578,35 @@ export class PrismaControlPlaneRepository {
     if (existing) return { accepted: true, duplicate: true, deliveryId, actions: [] };
     const actionPlan = githubWebhookActionPlan(input.event, input.payload || {});
     const row = await this.prisma.webhookEvent.create({ data: { provider: 'github', eventType: String(input.event || 'unknown'), deliveryId, payload: sanitizeJson(maskSecrets(input.payload || {})), handled: true } });
-    const outbound = githubWebhookOutboundPlan(actionPlan, []);
-    return { accepted: true, duplicate: false, deliveryId, event: input.event, repository: actionPlan.repository, action: actionPlan.action, matchedServiceCount: 0, actions: [], outbound, webhookEvent: row };
+    const services = await servicesForPrismaGitHubRepository(this.prisma, actionPlan.repository);
+    const actions: any[] = [];
+    for (const service of services) {
+      if (actionPlan.kind === 'production-deploy') {
+        const deployment = await this.createDeployment({ serviceId: service.id, projectId: service.projectId, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'production', triggerType: 'github_push', branch: actionPlan.branch });
+        const workflowJob = await this.enqueueWorkflowJob({ type: 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook' } });
+        actions.push({ type: 'production-deployment-enqueued', serviceId: service.id, deploymentId: deployment.id, workflowJobId: workflowJob.id });
+      } else if (actionPlan.kind === 'preview-deploy') {
+        const previewPlan = previewRuntimePlan({ service, project: service.project, organization: service.project?.organization, pullRequestNumber: actionPlan.pullRequestNumber });
+        const deployment = await this.createDeployment({ serviceId: service.id, projectId: service.projectId, commitSha: actionPlan.commitSha, status: 'queued', deploymentType: 'preview', triggerType: 'github_pull_request', branch: actionPlan.branch, pullRequestNumber: actionPlan.pullRequestNumber, previewUrl: previewPlan.url });
+        const preview = previewRuntimePlan({ service, project: service.project, organization: service.project?.organization, pullRequestNumber: actionPlan.pullRequestNumber, deploymentId: deployment.id });
+        const workflowJob = await this.enqueueWorkflowJob({ type: 'preview-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId: service.id, projectId: service.projectId, deploymentId: deployment.id, repository: actionPlan.repository, pullRequestNumber: actionPlan.pullRequestNumber, commitSha: actionPlan.commitSha, branch: actionPlan.branch, source: 'github-webhook', preview, kubernetes: preview.kubernetes } });
+        await this.appendDeploymentEvent({ deploymentId: deployment.id, type: 'preview.workload.queued', message: `Preview Kubernetes workload queued for PR #${actionPlan.pullRequestNumber}`, metadata: { previewUrl: preview.url, workloadName: preview.kubernetes.workloadName, namespace: preview.kubernetes.namespace } });
+        actions.push({ type: 'preview-deployment-enqueued', serviceId: service.id, deploymentId: deployment.id, workflowJobId: workflowJob.id, pullRequestNumber: actionPlan.pullRequestNumber, previewUrl: preview.url, previewWorkloadName: preview.kubernetes.workloadName });
+      } else if (actionPlan.kind === 'preview-cleanup') {
+        const preview = previewRuntimePlan({ service, project: service.project, organization: service.project?.organization, pullRequestNumber: actionPlan.pullRequestNumber, action: 'delete' });
+        const workflowJob = await this.enqueueWorkflowJob({ type: 'preview-cleanup', targetType: 'service', targetId: service.id, payload: { serviceId: service.id, projectId: service.projectId, repository: actionPlan.repository, pullRequestNumber: actionPlan.pullRequestNumber, branch: actionPlan.branch, source: 'github-webhook', preview, kubernetes: preview.kubernetes } });
+        const deployments = await this.prisma.deployment.findMany({ where: { serviceId: service.id, deploymentType: 'preview', pullRequestNumber: Number(actionPlan.pullRequestNumber) } });
+        for (const deployment of deployments) {
+          const cleanupPlan = previewRuntimePlan({ service, project: service.project, organization: service.project?.organization, pullRequestNumber: actionPlan.pullRequestNumber, deploymentId: deployment.id, action: 'delete' });
+          await this.prisma.deployment.update({ where: { id: deployment.id }, data: { status: 'PREVIEW_CLEANUP_REQUESTED' } });
+          await this.appendDeploymentEvent({ deploymentId: deployment.id, type: 'preview.cleanup.requested', message: `Preview cleanup requested for PR #${actionPlan.pullRequestNumber}`, metadata: { repository: actionPlan.repository, workloadName: cleanupPlan.kubernetes.workloadName, cleanupSelector: cleanupPlan.kubernetes.cleanupSelector } });
+        }
+        actions.push({ type: 'preview-cleanup-enqueued', serviceId: service.id, workflowJobId: workflowJob.id, pullRequestNumber: actionPlan.pullRequestNumber, deploymentIds: deployments.map((deployment: Record<string, any>) => deployment.id) });
+      }
+    }
+    const outbound = githubWebhookOutboundPlan(actionPlan, actions);
+    await this.prisma.auditLog.create({ data: { actorUserId: 'github-webhook', action: 'github:webhook', targetType: 'github-delivery', targetId: deliveryId, metadata: maskSecrets({ event: input.event, repository: actionPlan.repository, action: actionPlan.action, actions: actions.map((action) => action.type) }) } }).catch(() => null);
+    return { accepted: true, duplicate: false, deliveryId, event: input.event, repository: actionPlan.repository, action: actionPlan.action, matchedServiceCount: services.length, actions, outbound, webhookEvent: row };
   }
 
   async enqueueWorkflowJob(input: Record<string, any>) {
@@ -1097,6 +1130,31 @@ function uniquePrismaRepositories(services: Array<Record<string, any>>) {
       : { id: stableId('ghr', parsed.fullName), fullName: parsed.fullName, repoUrl: parsed.repoUrl, defaultBranch: service.branch || 'main', serviceIds: [service.id] });
   }
   return [...byRepository.values()];
+}
+
+async function servicesForPrismaGitHubRepository(prisma: any, repository: any, scope: Record<string, any> = {}) {
+  const normalized = normalizePrismaRepositoryId(repository);
+  if (!normalized) return [];
+  const organizationIds = organizationScopeArray(scope);
+  const services = await prisma.service.findMany({
+    where: { repoUrl: { not: null } },
+    include: { project: { include: { organization: true } } },
+  });
+  return services.filter((service: Record<string, any>) => !organizationIds.length || organizationIds.includes(String(service.project?.organizationId))).filter((service: Record<string, any>) => {
+    const desired = service.desiredState || {};
+    const candidate = desired.githubRepository || desired.github?.repository || service.repoUrl || '';
+    return normalizePrismaRepositoryId(candidate) === normalized;
+  });
+}
+
+function normalizePrismaRepositoryId(value: any) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  try {
+    return parsePrismaRepository(text).fullName.toLowerCase();
+  } catch {
+    return text.toLowerCase().replace(/^github:/, '');
+  }
 }
 
 function parsePrismaRepository(value: any) {

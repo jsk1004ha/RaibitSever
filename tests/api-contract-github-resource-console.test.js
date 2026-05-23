@@ -77,11 +77,17 @@ test('GitHub App contract endpoints import/list/sync and webhook push/PR flows',
     const bad = await webhook(server.port, 'push', 'delivery-bad-1', { repository: { full_name: 'alice/web' }, ref: 'refs/heads/main', after: 'bad' }, 'wrong-secret');
     assert.equal(bad.statusCode, 401);
 
-    for (const [action, delivery, sha] of [['opened', 'delivery-pr-opened', 'def456'], ['synchronize', 'delivery-pr-sync', 'fed654']]) {
+    for (const [action, delivery, sha] of [['opened', 'delivery-pr-opened', 'def456'], ['synchronize', 'delivery-pr-sync', 'fed654'], ['reopened', 'delivery-pr-reopened', 'abc789']]) {
       const pr = await webhook(server.port, 'pull_request', delivery, prPayload(action, sha));
       assert.equal(pr.statusCode, 202);
       assert.equal(pr.body.actions[0].type, 'preview-deployment-enqueued');
+      assert.match(pr.body.actions[0].previewUrl, /^https:\/\/pr-7--web--github-project--github-org\.preview\.raibitserver\.app$/);
+      assert.equal(pr.body.actions[0].previewWorkloadName, 'pr-7-web');
+      assert.equal(pr.body.outbound.commitStatus.targetUrl, pr.body.actions[0].previewUrl);
       assert.equal(pr.body.outbound.pullRequestComment.pullRequestNumber, 7);
+      const job = controlPlane.store.workflowJobs.find((item) => item.id === pr.body.actions[0].workflowJobId);
+      assert.equal(job.payload.kubernetes.workloadName, 'pr-7-web');
+      assert.equal(job.payload.kubernetes.labels['raibitserver.io/preview'], 'true');
     }
 
     const closed = await webhook(server.port, 'pull_request', 'delivery-pr-closed', prPayload('closed', 'def456'));
@@ -89,6 +95,9 @@ test('GitHub App contract endpoints import/list/sync and webhook push/PR flows',
     assert.equal(closed.body.actions[0].type, 'preview-cleanup-enqueued');
     assert.equal(controlPlane.store.workflowJobs.some((job) => job.type === 'preview-cleanup'), true);
     assert.equal([...controlPlane.store.deployments.values()].some((deployment) => deployment.status === 'PREVIEW_CLEANUP_REQUESTED'), true);
+    const cleanupJob = controlPlane.store.workflowJobs.find((job) => job.type === 'preview-cleanup');
+    assert.equal(cleanupJob.payload.kubernetes.workloadName, 'pr-7-web');
+    assert.match(JSON.stringify(controlPlane.store.deploymentEvents), /preview\.cleanup\.requested/);
     assert.equal(service.id, controlPlane.store.servicesForGitHubRepository('alice/web')[0].id);
   } finally {
     server.close();

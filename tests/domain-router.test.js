@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { domainPlanForProject, resourceConsoleHostname, serviceConsoleHostname, serviceHostname } from '../packages/core/src/domain-router.ts';
 import { compileProject } from '../packages/core/src/manifest-compiler.ts';
+import { previewRuntimePlan } from '../packages/core/src/preview-deployments.ts';
 
 test('service hostnames use subdomain-first single-label routing', () => {
   assert.equal(
@@ -36,6 +37,20 @@ test('project domain plan separates platform, app, preview, console, and resourc
   assert.equal(plan.services.find((service) => service.name === 'web').publicHostname, 'web--festival-2026--gdg-hongik.apps.raibitserver.app');
   assert.equal(plan.services.find((service) => service.name === 'worker').publicHostname, null);
   assert.equal(plan.wildcardTls.includes('*.apps.raibitserver.app'), true);
+});
+
+test('preview runtime plan creates isolated workload and cleanup selector', () => {
+  const plan = previewRuntimePlan({
+    organization: { slug: 'gdg-hongik' },
+    project: { slug: 'festival-2026' },
+    service: { id: 'svc_1', name: 'web' },
+    deploymentId: 'dep_1',
+    pullRequestNumber: 32,
+  });
+  assert.equal(plan.url, 'https://pr-32--web--festival-2026--gdg-hongik.preview.raibitserver.app');
+  assert.equal(plan.kubernetes.workloadName, 'pr-32-web');
+  assert.equal(plan.kubernetes.labels['raibitserver.io/preview'], 'true');
+  assert.match(plan.kubernetes.cleanupSelector, /raibitserver\.io\/deployment=dep_1/);
 });
 
 test('compiled ingress uses subdomain-first generated host when no custom domain exists', () => {

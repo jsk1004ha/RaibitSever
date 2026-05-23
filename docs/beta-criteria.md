@@ -117,8 +117,8 @@ Closed Beta는 아래 조건을 모두 만족해야 한다.
 [ ] service에 env가 자동 주입된다.
 [ ] build log와 runtime log가 조회된다.
 [ ] 승인/쿼터 정책이 실제로 막는다.
-[ ] GitHub push/PR webhook이 deployment workflow로 이어진다.
-[ ] preview deployment 생성과 cleanup이 된다.
+[x] GitHub push/PR webhook이 deployment workflow로 이어진다.
+[x] preview deployment 생성과 cleanup이 된다.
 [ ] admin dashboard로 사용자 승인과 quota 관리가 된다.
 [ ] secret이 노출되지 않는다.
 [ ] 보안 정책 위반 service는 배포가 차단된다.
@@ -719,14 +719,14 @@ MariaDB는 MySQL-compatible provider로 구현 가능하다.
 
 ```txt
 [x] GitHub OAuth login plan
-[ ] GitHub App installation list
-[ ] installation repository list
-[ ] repository import
-[ ] service에 GitHub repo attach
-[ ] webhook raw body 처리
-[ ] webhook signature 검증
-[ ] delivery id dedupe
-[ ] WebhookEvent 저장
+[x] GitHub App installation list
+[x] installation repository list
+[x] repository import
+[x] service에 GitHub repo attach
+[x] webhook raw body 처리
+[x] webhook signature 검증
+[x] delivery id dedupe
+[x] WebhookEvent 저장
 ```
 
 ---
@@ -736,12 +736,12 @@ MariaDB는 MySQL-compatible provider로 구현 가능하다.
 통과 기준:
 
 ```txt
-[ ] push webhook fixture 수신
-[ ] signature 검증 성공
-[ ] target service mapping
-[ ] build-and-deploy WorkflowJob 생성
-[ ] duplicate delivery 무시
-[ ] bad signature 차단
+[x] push webhook fixture 수신
+[x] signature 검증 성공
+[x] target service mapping
+[x] build-and-deploy WorkflowJob 생성
+[x] duplicate delivery 무시
+[x] bad signature 차단
 ```
 
 ---
@@ -751,23 +751,33 @@ MariaDB는 MySQL-compatible provider로 구현 가능하다.
 통과 기준:
 
 ```txt
-[ ] pull_request opened fixture → preview deployment 생성
-[ ] pull_request synchronize fixture → preview redeploy
-[ ] pull_request reopened fixture → preview redeploy
-[ ] pull_request closed fixture → preview cleanup job 생성
-[ ] preview URL 생성
-[ ] preview Kubernetes workload 생성
-[ ] preview cleanup 성공
+[x] pull_request opened fixture → preview deployment 생성
+[x] pull_request synchronize fixture → preview redeploy
+[x] pull_request reopened fixture → preview redeploy
+[x] pull_request closed fixture → preview cleanup job 생성
+[x] preview URL 생성
+[x] preview Kubernetes workload 생성
+[x] preview cleanup 성공
 ```
 
 Beta에서 GitHub check-run과 PR comment는 권장이나 필수는 아니다.
 
 ```txt
-[ ] GitHub commit status 업데이트 가능하면 구현
-[ ] PR comment preview URL 가능하면 구현
+[x] GitHub commit status 업데이트 가능하면 구현
+[x] PR comment preview URL 가능하면 구현
 ```
 
 ---
+
+구현/검증 증거:
+
+- GitHub App/API: `/integrations/github`, `/github/installations`, `/github/installations/:installationId/repositories`, `/github/repositories/import`, `/projects/:projectId/services/:serviceId/github`, `/github/repositories/:repositoryId/sync`.
+- Webhook contract: Nest는 `rawBody: true`로 원문 payload를 유지하고 prototype/Nest handler가 `x-github-event`, `x-github-delivery`, `x-hub-signature-256`를 받아 HMAC 검증, delivery dedupe, `WebhookEvent` 저장을 수행한다.
+- Push deployment: push fixture가 repository-attached service를 찾아 `build-and-deploy` WorkflowJob과 production deployment를 생성한다.
+- PR preview: opened/synchronize/reopened fixture가 `preview-deploy` WorkflowJob, preview deployment, `https://pr-N--service--project--org.preview.raibitserver.app` URL, `pr-N-service` Kubernetes workload plan을 생성한다.
+- Preview cleanup: closed fixture가 `preview-cleanup` WorkflowJob을 만들고 기존 preview deployment에 `PREVIEW_CLEANUP_REQUESTED`와 `preview.cleanup.requested` event를 남긴다. Go orchestrator는 preview workload 이름을 `pr-N-service`로 격리해 production workload를 덮어쓰거나 삭제하지 않는다.
+- Outbound plan: 실제 GitHub API 호출 없이도 commit status/check-run/PR comment payload를 deterministic plan으로 반환하며, PR comment와 commit status target URL에는 preview URL이 포함된다.
+- Local proof: `tests/api-contract-github-resource-console.test.js`, `tests/api-contract-sync.test.js`, `tests/domain-router.test.js`, `tests/go-orchestrator-reconciler.test.js`, `pnpm e2e:dry`의 `githubWebhookEvidence`.
 
 ## 6. Logs / Events 기준
 
@@ -1004,10 +1014,10 @@ cleanup
 [x] 최소 6개 DB/resource 실제 생성/연결 성공
 [x] PostgreSQL, SQLite, Redis, Object Storage 실제 사용 가능
 [x] MySQL/MariaDB/MongoDB 최소 read/query 가능
-[ ] GitHub push fixture 성공
-[ ] GitHub PR preview fixture 성공
-[ ] Preview cleanup 성공
-[ ] Dashboard에서 기본 조작 가능
+[x] GitHub push fixture 성공
+[x] GitHub PR preview fixture 성공
+[x] Preview cleanup 성공
+[x] Dashboard에서 기본 조작 가능
 [ ] Admin approval / quota 실제 적용
 [x] Secret leakage test 통과
 [ ] Security violation deployment 차단

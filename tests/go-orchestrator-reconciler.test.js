@@ -25,6 +25,9 @@ test('Go orchestrator reconciler contract is executable when Go exists or static
   assert.match(reconciler, /orchestrator\.apply\.started/);
   assert.match(reconciler, /rollout.*status/s);
   assert.match(reconciler, /preview\.cleanup\.completed/);
+  assert.match(kube, /previewKey := "pr-"/);
+  assert.match(kube, /serviceName = previewKey \+ "-" \+ baseServiceName/);
+  assert.match(kube, /raibitserver\.io\/preview/);
   assert.match(kube, /NetworkPolicy/);
   assert.match(kube, /readOnlyRootFilesystem/);
 });

@@ -98,6 +98,10 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   assert.ok(githubController.includes('req.rawBody'), 'GitHub webhook controller must verify the original raw payload bytes');
   assert.ok(persistence.includes('if (integrationIds.length === 0) return { installationId: String(input.installationId), repositories: [] };'), 'Prisma GitHub installation repository listing must not leak all repos when scope filters out integrations');
   assert.ok(!persistence.includes('integrationIds.length === 0 || integrationIds.includes'), 'Prisma GitHub installation repository listing must not use broad fallback matching');
+  assert.ok(persistence.includes('servicesForPrismaGitHubRepository'), 'Prisma GitHub webhook must map deliveries to attached services');
+  assert.ok(persistence.includes("type: 'preview-deploy'"), 'Prisma GitHub webhook must enqueue preview deploy jobs');
+  assert.ok(persistence.includes("type: 'preview-cleanup'"), 'Prisma GitHub webhook must enqueue preview cleanup jobs');
+  assert.ok(persistence.includes('previewRuntimePlan'), 'GitHub preview jobs must carry deterministic Kubernetes preview workload plans');
   assert.ok(authController.includes("@Get('github/login')"));
   assert.ok(authController.includes("@Get('github/callback')"));
   for (const method of ['getProject', 'updateProject', 'deleteProject', 'getService', 'updateService', 'deleteService', 'getDeployment', 'updateDeploymentStatus', 'cancelDeployment', 'rollbackDeployment', 'resourceSchema', 'resourceTables', 'resourceCollections', 'resourceKeys', 'commandResource', 'listGitHubInstallations', 'listGitHubInstallationRepositories', 'importGitHubRepository', 'syncGitHubRepository']) assert.match(apiClient, new RegExp(method));

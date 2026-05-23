@@ -21,7 +21,25 @@ GITHUB_WEBHOOK_SECRET
 - GitHub repository URL parsing과 clone planning은 token이 argv에 노출되지 않게 처리합니다.
 - Webhook signature는 HMAC SHA-256으로 검증합니다.
 - GitHub integration token은 encrypted `SecretValue` row 또는 sealed local store에 저장합니다.
-- `pnpm e2e:dry`는 pull request fixture payload로 preview deployment record, workflow job, URL 생성을 검증합니다.
+- GitHub App installation 목록, installation repository 목록, repository import, service attach, repository sync API가 같은 계약을 사용합니다.
+- `push` fixture는 attached service를 찾아 production deployment와 `build-and-deploy` WorkflowJob을 생성합니다.
+- `pull_request` `opened`/`synchronize`/`reopened` fixture는 preview deployment, preview URL, `preview-deploy` WorkflowJob, `pr-N-service` Kubernetes workload plan을 생성합니다.
+- `pull_request closed` fixture는 `preview-cleanup` WorkflowJob을 만들고 기존 preview deployment에 cleanup event를 남깁니다.
+- `pnpm e2e:dry`는 실제 GitHub credential 없이 `githubWebhookEvidence`로 push/PR/cleanup 경로를 검증합니다.
+
+## Webhook 처리 계약
+
+```txt
+POST /github/webhooks
+x-github-event: push | pull_request
+x-github-delivery: <dedupe id>
+x-hub-signature-256: sha256=<hmac>
+```
+
+- raw body를 그대로 HMAC 검증에 사용합니다.
+- 같은 delivery id는 duplicate로 처리하고 추가 workflow를 만들지 않습니다.
+- bad signature는 401로 차단합니다.
+- 반환값에는 실제 GitHub API 호출 대신 commit status/check-run/PR comment outbound plan이 포함됩니다.
 
 ## credential이 없을 때
 
