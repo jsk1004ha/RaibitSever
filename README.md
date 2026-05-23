@@ -148,6 +148,7 @@ Dry mode reports `deterministic-dry-run` or `dry-run-container-ready` and always
 
 ## Docs
 
+- `docs/beta-criteria.md`
 - `docs/architecture.md`
 - `docs/local-e2e.md`
 - `docs/live-e2e.md`

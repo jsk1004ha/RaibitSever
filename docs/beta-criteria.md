@@ -1,0 +1,1151 @@
+# RAIBITSERVER Closed Beta 기준
+
+## 0. 베타 정의
+
+**RAIBITSERVER Closed Beta**는 제한된 동아리원, 운영진, 승인된 비동아리원이 실제로 사용할 수 있는 배포 플랫폼이다.
+
+베타에서는 사용자가 다음을 할 수 있어야 한다.
+
+```txt
+1. 회원가입 / 로그인
+2. 관리자 승인
+3. 프로젝트 생성
+4. GitHub repo 또는 Dockerfile 기반 서비스 생성
+5. 실제 Docker image build
+6. local/private registry push
+7. Kubernetes 배포
+8. URL 접속
+9. 다양한 DB/resource 생성
+10. service에 DB/resource env 자동 주입
+11. build/runtime log 확인
+12. DB console 사용
+13. GitHub push / PR preview deployment
+14. quota / approval 정책 적용
+```
+
+베타는 완성형 상용 서비스가 아니다. 하지만 **dry-run만 성공하는 상태도 베타가 아니다.**
+
+베타의 핵심 기준은 다음이다.
+
+> **`pnpm e2e:live`에서 실제 앱이 build → registry push → Kubernetes deploy → URL HTTP 200 → DB 연결 → log 조회 → preview cleanup까지 성공해야 한다.**
+
+---
+
+# 1. 베타 범위
+
+## 1.1 대상 사용자
+
+Closed Beta 대상:
+
+```txt
+- 동아리 운영진
+- 승인된 동아리원
+- 관리자가 승인한 비동아리원
+- 테스트 목적의 내부 사용자
+```
+
+비대상:
+
+```txt
+- 공개 가입 사용자
+- 결제 사용자
+- 외부 고객
+- production-grade SLA를 기대하는 사용자
+```
+
+---
+
+## 1.2 베타 인프라 범위
+
+베타는 단일 클러스터 기준으로 진행한다.
+
+```txt
+- 단일 Kubernetes cluster
+- 단일 control-plane PostgreSQL
+- 단일 registry
+- 단일 region
+- 단일 base domain
+- 단일 ingress controller
+```
+
+베타에서 제외:
+
+```txt
+- 멀티 리전
+- 멀티 클러스터
+- 결제 시스템
+- 고가용성 DB cluster
+- cross-region backup
+- advanced autoscaling
+- Canary / Blue-Green 고도화
+- Production SLA
+```
+
+---
+
+# 2. 베타 성공 기준 요약
+
+Closed Beta는 아래 조건을 모두 만족해야 한다.
+
+```txt
+[ ] 실제 앱 배포가 된다.
+[ ] 실제 URL 접속이 된다.
+[ ] 실제 DB/resource 생성이 된다.
+[ ] service에 env가 자동 주입된다.
+[ ] build log와 runtime log가 조회된다.
+[ ] 승인/쿼터 정책이 실제로 막는다.
+[ ] GitHub push/PR webhook이 deployment workflow로 이어진다.
+[ ] preview deployment 생성과 cleanup이 된다.
+[ ] admin dashboard로 사용자 승인과 quota 관리가 된다.
+[ ] secret이 노출되지 않는다.
+[ ] 보안 정책 위반 service는 배포가 차단된다.
+[ ] `pnpm e2e:live`가 통과한다.
+```
+
+---
+
+# 3. 베타 P0 체크리스트
+
+P0는 **베타 출시 전 반드시 통과해야 하는 항목**이다. 하나라도 실패하면 Closed Beta가 아니다.
+
+## 3.1 기본 검증
+
+```txt
+[ ] pnpm install --frozen-lockfile 성공
+[ ] pnpm test 성공
+[ ] pnpm typecheck 성공
+[ ] pnpm lint 성공
+[ ] pnpm prisma:validate 성공
+[ ] pnpm prisma:generate 성공
+[ ] Go services go test ./... 성공
+[ ] Go services go build ./... 성공
+[ ] pnpm e2e:dry 성공
+[ ] pnpm e2e:live 성공
+```
+
+---
+
+## 3.2 Live E2E
+
+`pnpm e2e:live`는 베타의 가장 중요한 gate다.
+
+필수 통과 조건:
+
+```txt
+[ ] kind 또는 k3d cluster 생성
+[ ] local registry 생성
+[ ] local registry와 cluster 연결
+[ ] ingress controller 설치
+[ ] example Express app build
+[ ] example Vite app build
+[ ] Dockerfile app build
+[ ] generated Dockerfile app build
+[ ] image local registry push
+[ ] Kubernetes Namespace 생성
+[ ] Kubernetes Deployment 생성
+[ ] Kubernetes Service 생성
+[ ] Kubernetes Ingress 또는 port-forward route 생성
+[ ] rollout status 성공
+[ ] public/local URL HTTP 200
+[ ] BuildLog 저장
+[ ] RuntimeLog 저장
+[ ] DeploymentEvent 저장
+[ ] live-e2e-report.json 생성
+```
+
+필수 report:
+
+```txt
+.raibitserver-work/live-e2e-report.json
+```
+
+Report에는 최소한 다음이 있어야 한다.
+
+```txt
+- cluster name
+- registry url
+- deployed services
+- deployment ids
+- image urls
+- image digests
+- public URLs
+- HTTP status results
+- DB resource ids
+- preview deployment ids
+- cleanup result
+- failed steps, if any
+```
+
+---
+
+## 3.3 Auth / Admin / Account
+
+필수 조건:
+
+```txt
+[ ] signup 가능
+[ ] login 가능
+[ ] ADMIN_EMAILS 기반 admin bootstrap 가능
+[ ] NON_CLUB 사용자는 기본 PENDING
+[ ] PENDING 사용자는 project 생성 불가
+[ ] PENDING 사용자는 service 생성 불가
+[ ] PENDING 사용자는 deployment 생성 불가
+[ ] PENDING 사용자는 resource 생성 불가
+[ ] admin이 user approve 가능
+[ ] admin이 user reject 가능
+[ ] admin이 quota 수정 가능
+[ ] CLUB_MEMBER는 user-facing quota 무제한
+[ ] CLUB_MEMBER도 hard safety cap은 적용
+```
+
+통과 테스트:
+
+```txt
+[ ] NON_CLUB PENDING → project create 403
+[ ] ADMIN approve → project create 성공
+[ ] NON_CLUB quota 초과 → service/deployment/resource 생성 차단
+[ ] CLUB_MEMBER → user-facing quota 제한 없이 생성 가능
+```
+
+---
+
+## 3.4 Project / Service / Deployment
+
+필수 조건:
+
+```txt
+[ ] organization 생성 가능
+[ ] project 생성 가능
+[ ] service 생성 가능
+[ ] service type web 지원
+[ ] service type private 지원
+[ ] service type worker 지원
+[ ] service type cron 지원
+[ ] service type job 지원
+[ ] Dockerfile app 배포 가능
+[ ] generated Dockerfile app 배포 가능
+[ ] prebuilt image 배포 가능
+[ ] deployment status 전이 가능
+```
+
+Deployment status 최소 전이:
+
+```txt
+QUEUED
+BUILDING
+IMAGE_READY
+DEPLOYING
+READY
+FAILED
+```
+
+필수 테스트:
+
+```txt
+[ ] Express app 실제 배포
+[ ] Vite app 실제 배포
+[ ] Dockerfile app 실제 배포
+[ ] prebuilt image 실제 배포
+[ ] curl URL HTTP 200
+[ ] failed build는 BUILD_FAILED 또는 FAILED로 기록
+[ ] failed rollout은 FAILED로 기록
+```
+
+---
+
+## 3.5 Builder
+
+필수 조건:
+
+```txt
+[ ] Go builder가 WorkflowJob claim 가능
+[ ] Go builder가 project/service/deployment 조회 가능
+[ ] GitHub repo clone 가능
+[ ] local source path 사용 가능
+[ ] branch checkout 가능
+[ ] commit checkout 가능
+[ ] Dockerfile 우선 빌드
+[ ] Dockerfile 없으면 generated Dockerfile 생성
+[ ] docker buildx 또는 buildctl 실행
+[ ] image push 가능
+[ ] imageDigest 저장
+[ ] BuildLog 저장
+[ ] DeploymentEvent 저장
+[ ] 실패 시 errorCode/errorMessage 저장
+[ ] secret 포함 command/log masking
+```
+
+통과 기준:
+
+```txt
+[ ] 실제 docker buildx 실행
+[ ] 실제 image push
+[ ] deployment.imageUrl 저장
+[ ] deployment.imageDigest 저장
+[ ] build logs API 조회 가능
+[ ] dashboard에서 build logs 확인 가능
+```
+
+---
+
+## 3.6 Orchestrator
+
+필수 조건:
+
+```txt
+[ ] Go orchestrator가 IMAGE_READY deployment 감지
+[ ] project/service/deployment 조회 가능
+[ ] Kubernetes manifest 생성
+[ ] kubectl apply 또는 client-go apply 가능
+[ ] Namespace 생성
+[ ] Secret 생성
+[ ] ConfigMap 생성
+[ ] Deployment 생성
+[ ] Service 생성
+[ ] Ingress 또는 route 생성
+[ ] rollout status 확인
+[ ] RuntimeLog 저장
+[ ] DeploymentEvent 저장
+[ ] READY/FAILED 상태 반영
+[ ] preview cleanup 가능
+[ ] rollback 가능
+```
+
+통과 기준:
+
+```txt
+[ ] kubectl get deployment에서 app 확인
+[ ] kubectl rollout status 성공
+[ ] app URL HTTP 200
+[ ] runtime logs API 조회 가능
+[ ] dashboard에서 runtime logs 확인 가능
+```
+
+---
+
+# 4. 베타 DB / Resource 기준
+
+베타에서도 다양한 DB/resource를 실제로 사용할 수 있어야 한다.
+
+## 4.1 지원 수준 구분
+
+### Beta Core
+
+반드시 실제 구현해야 한다.
+
+```txt
+- PostgreSQL
+- SQLite
+```
+
+### Beta Practical
+
+베타에서 실제로 쓸 수 있어야 한다.
+
+```txt
+- Redis / Valkey
+- Object Storage / MinIO
+- MySQL
+- MariaDB
+- MongoDB
+```
+
+### Beta Experimental
+
+실험 기능으로 제공한다.
+
+```txt
+- Qdrant / Vector DB
+- NATS / Message Queue
+```
+
+---
+
+## 4.2 모든 resource 공통 기준
+
+각 resource는 최소한 아래를 만족해야 한다.
+
+```txt
+[ ] Resource 생성 API
+[ ] Provider implementation
+[ ] Provider-owned connection secret 저장
+[ ] Service env injection
+[ ] Dashboard masked connection info
+[ ] Console read/query/browser 기능
+[ ] Delete/cleanup
+[ ] Quota 반영
+[ ] Audit log 기록
+```
+
+---
+
+## 4.3 PostgreSQL
+
+필수 기능:
+
+```txt
+[ ] CREATE DATABASE
+[ ] CREATE USER
+[ ] GRANT
+[ ] DATABASE_URL 생성
+[ ] POSTGRES_URL 생성
+[ ] PGHOST 생성
+[ ] PGPORT 생성
+[ ] PGDATABASE 생성
+[ ] PGUSER 생성
+[ ] PGPASSWORD 생성
+[ ] provider-owned secret 저장
+[ ] service env 자동 주입
+[ ] connection test
+[ ] DB console SELECT 1
+[ ] schema list
+[ ] table list
+[ ] pg_dump backup
+[ ] restore command 또는 restore workflow
+[ ] resource delete/cleanup
+```
+
+통과 기준:
+
+```txt
+[ ] PostgreSQL resource 실제 생성
+[ ] service에 DATABASE_URL 주입
+[ ] 배포된 app이 DATABASE_URL env를 받음
+[ ] DB console SELECT 1 성공
+[ ] table list 조회 성공
+[ ] backup 생성 성공
+```
+
+---
+
+## 4.4 SQLite
+
+필수 기능:
+
+```txt
+[ ] SQLite resource 생성
+[ ] provider-owned SQLite path 생성
+[ ] PVC-backed file 또는 local provider-owned file
+[ ] SQLITE_PATH env 생성
+[ ] DATABASE_URL=sqlite:<path> env 생성
+[ ] service volume mount
+[ ] DB console CREATE TABLE
+[ ] DB console INSERT
+[ ] DB console SELECT
+[ ] table list
+[ ] file backup
+[ ] file restore
+[ ] replica=1 제한 또는 warning
+```
+
+통과 기준:
+
+```txt
+[ ] SQLite resource 생성
+[ ] service에 SQLITE_PATH 주입
+[ ] DB console CREATE/INSERT/SELECT 성공
+[ ] backup file 생성 성공
+```
+
+---
+
+## 4.5 Redis / Valkey
+
+필수 기능:
+
+```txt
+[ ] Redis 또는 Valkey resource 생성
+[ ] REDIS_URL 생성
+[ ] REDIS_HOST 생성
+[ ] REDIS_PORT 생성
+[ ] REDIS_PASSWORD 생성
+[ ] service env 자동 주입
+[ ] key list
+[ ] value view
+[ ] TTL view
+[ ] delete key
+[ ] memory info 가능하면 구현
+[ ] resource delete/cleanup
+```
+
+통과 기준:
+
+```txt
+[ ] Redis resource 실제 생성
+[ ] service에 REDIS_URL 주입
+[ ] console에서 key list 조회
+[ ] console에서 value 조회
+[ ] console에서 TTL 조회
+```
+
+---
+
+## 4.6 Object Storage / MinIO
+
+필수 기능:
+
+```txt
+[ ] MinIO 또는 S3-compatible resource 생성
+[ ] bucket 생성
+[ ] S3_ENDPOINT 생성
+[ ] S3_BUCKET 생성
+[ ] S3_REGION 생성
+[ ] S3_ACCESS_KEY 생성
+[ ] S3_SECRET_KEY 생성
+[ ] service env 자동 주입
+[ ] file list
+[ ] upload
+[ ] download
+[ ] delete
+[ ] presigned URL 가능하면 구현
+[ ] resource delete/cleanup
+```
+
+통과 기준:
+
+```txt
+[ ] Object Storage resource 생성
+[ ] bucket 생성
+[ ] service에 S3 env 주입
+[ ] dashboard에서 file upload/list/delete 가능
+```
+
+---
+
+## 4.7 MySQL
+
+필수 기능:
+
+```txt
+[ ] CREATE DATABASE
+[ ] CREATE USER
+[ ] GRANT
+[ ] MYSQL_URL 생성
+[ ] MYSQL_HOST 생성
+[ ] MYSQL_PORT 생성
+[ ] MYSQL_DATABASE 생성
+[ ] MYSQL_USER 생성
+[ ] MYSQL_PASSWORD 생성
+[ ] service env 자동 주입
+[ ] connection test
+[ ] DB console SELECT 1
+[ ] table list
+[ ] mysqldump backup command
+[ ] resource delete/cleanup
+```
+
+통과 기준:
+
+```txt
+[ ] MySQL resource 실제 생성
+[ ] service에 MYSQL_URL 주입
+[ ] DB console SELECT 1 성공
+[ ] table list 성공
+```
+
+---
+
+## 4.8 MariaDB
+
+MariaDB는 MySQL-compatible provider로 구현 가능하다.
+
+필수 기능:
+
+```txt
+[ ] MariaDB resource 생성
+[ ] MARIADB_URL 생성
+[ ] MYSQL_URL 생성
+[ ] MYSQL_* env 생성
+[ ] service env 자동 주입
+[ ] DB console SELECT 1
+[ ] table list
+[ ] backup command
+[ ] resource delete/cleanup
+```
+
+통과 기준:
+
+```txt
+[ ] MariaDB resource 실제 생성
+[ ] service에 MARIADB_URL 주입
+[ ] DB console SELECT 1 성공
+```
+
+---
+
+## 4.9 MongoDB
+
+필수 기능:
+
+```txt
+[ ] MongoDB resource 생성
+[ ] database 생성
+[ ] user 생성
+[ ] password 생성
+[ ] MONGODB_URI 생성
+[ ] MONGO_HOST 생성
+[ ] MONGO_DATABASE 생성
+[ ] MONGO_USER 생성
+[ ] MONGO_PASSWORD 생성
+[ ] service env 자동 주입
+[ ] collection list
+[ ] document browse
+[ ] find query
+[ ] resource delete/cleanup
+```
+
+통과 기준:
+
+```txt
+[ ] MongoDB resource 실제 생성
+[ ] service에 MONGODB_URI 주입
+[ ] collection list 조회
+[ ] find query 성공
+```
+
+---
+
+## 4.10 Qdrant / Vector DB
+
+실험적 지원.
+
+필수 기능:
+
+```txt
+[ ] Qdrant resource 생성
+[ ] QDRANT_URL 생성
+[ ] QDRANT_API_KEY 생성
+[ ] VECTOR_DB_URL 생성
+[ ] VECTOR_DB_COLLECTION 생성
+[ ] service env 자동 주입
+[ ] collection list
+[ ] collection create
+[ ] collection delete
+[ ] simple search test 가능하면 구현
+```
+
+통과 기준:
+
+```txt
+[ ] Qdrant resource 생성
+[ ] service에 VECTOR_DB_URL 주입
+[ ] collection list 성공
+```
+
+---
+
+## 4.11 NATS / Message Queue
+
+실험적 지원.
+
+필수 기능:
+
+```txt
+[ ] NATS resource 생성
+[ ] QUEUE_URL 생성
+[ ] QUEUE_TOPIC 생성
+[ ] QUEUE_USERNAME 가능하면 생성
+[ ] QUEUE_PASSWORD 가능하면 생성
+[ ] service env 자동 주입
+[ ] subject/connection info 조회
+[ ] publish/subscribe smoke test 가능하면 구현
+```
+
+통과 기준:
+
+```txt
+[ ] NATS resource 생성
+[ ] service에 QUEUE_URL 주입
+[ ] connection info 조회 가능
+```
+
+---
+
+# 5. GitHub / Preview 기준
+
+## 5.1 GitHub App
+
+필수 기능:
+
+```txt
+[ ] GitHub OAuth login plan
+[ ] GitHub App installation list
+[ ] installation repository list
+[ ] repository import
+[ ] service에 GitHub repo attach
+[ ] webhook raw body 처리
+[ ] webhook signature 검증
+[ ] delivery id dedupe
+[ ] WebhookEvent 저장
+```
+
+---
+
+## 5.2 Push Deployment
+
+통과 기준:
+
+```txt
+[ ] push webhook fixture 수신
+[ ] signature 검증 성공
+[ ] target service mapping
+[ ] build-and-deploy WorkflowJob 생성
+[ ] duplicate delivery 무시
+[ ] bad signature 차단
+```
+
+---
+
+## 5.3 PR Preview
+
+통과 기준:
+
+```txt
+[ ] pull_request opened fixture → preview deployment 생성
+[ ] pull_request synchronize fixture → preview redeploy
+[ ] pull_request reopened fixture → preview redeploy
+[ ] pull_request closed fixture → preview cleanup job 생성
+[ ] preview URL 생성
+[ ] preview Kubernetes workload 생성
+[ ] preview cleanup 성공
+```
+
+Beta에서 GitHub check-run과 PR comment는 권장이나 필수는 아니다.
+
+```txt
+[ ] GitHub commit status 업데이트 가능하면 구현
+[ ] PR comment preview URL 가능하면 구현
+```
+
+---
+
+# 6. Logs / Events 기준
+
+필수 기능:
+
+```txt
+[ ] BuildLog 저장
+[ ] RuntimeLog 저장
+[ ] DeploymentEvent 저장
+[ ] API에서 BuildLog 조회
+[ ] API에서 RuntimeLog 조회
+[ ] API에서 DeploymentEvent 조회
+[ ] Dashboard에서 build log 확인
+[ ] Dashboard에서 runtime log 확인
+[ ] Dashboard에서 deployment event timeline 확인
+```
+
+통과 기준:
+
+```txt
+배포 후 dashboard에서 다음이 보여야 한다.
+
+- git clone step
+- build step
+- image push step
+- kubectl apply step
+- rollout status
+- app runtime log
+```
+
+---
+
+# 7. Quota / Usage 기준
+
+필수 계정 정책:
+
+```txt
+[ ] NON_CLUB 기본 PENDING
+[ ] PENDING user는 생성/배포/resource 생성 차단
+[ ] APPROVED NON_CLUB은 quota 제한
+[ ] CLUB_MEMBER는 user-facing quota 무제한
+[ ] ADMIN은 user approve/reject/quota edit 가능
+```
+
+필수 집계:
+
+```txt
+[ ] project count
+[ ] service count
+[ ] deployment per day
+[ ] preview deployment count
+[ ] DB storage MB
+[ ] object storage MB
+[ ] build minutes
+[ ] runtime hours
+[ ] aggregate CPU requests
+[ ] aggregate memory requests
+```
+
+통과 기준:
+
+```txt
+[ ] quota 초과 시 403 또는 429
+[ ] quota block audit log 기록
+[ ] usage API에서 현재 사용량 조회 가능
+[ ] dashboard에서 quota/usage 확인 가능
+```
+
+---
+
+# 8. Security 기준
+
+## 8.1 Workload Security
+
+다음은 반드시 차단한다.
+
+```txt
+[ ] privileged=true 차단
+[ ] hostNetwork=true 차단
+[ ] hostPID=true 차단
+[ ] hostIPC=true 차단
+[ ] hostPath 차단
+[ ] runAsUser=0 차단
+[ ] runAsNonRoot=false 차단
+[ ] allowPrivilegeEscalation=true 차단
+[ ] readOnlyRootFilesystem=false 차단
+[ ] capabilities.add 차단
+[ ] non-RuntimeDefault seccomp 차단
+[ ] automountServiceAccountToken=true 차단
+```
+
+기본 강제값:
+
+```txt
+[ ] runAsNonRoot=true
+[ ] allowPrivilegeEscalation=false
+[ ] readOnlyRootFilesystem=true
+[ ] capabilities.drop=ALL
+[ ] seccompProfile=RuntimeDefault
+[ ] automountServiceAccountToken=false
+[ ] CPU/memory requests/limits 필수
+```
+
+---
+
+## 8.2 Secret Security
+
+필수 조건:
+
+```txt
+[ ] production에서 JWT secret 필수
+[ ] production에서 ENCRYPTION_KEY 또는 RAIBITSERVER_SECRET_ENCRYPTION_KEY 필수
+[ ] secret은 plain DB 저장 금지
+[ ] secret은 sealed/encrypted 저장
+[ ] API response에서 secret masking
+[ ] CLI output에서 secret masking
+[ ] logs에서 secret masking
+[ ] workflow payload에서 secret masking
+[ ] provider connection은 provider-owned secret만 사용
+[ ] tenant-supplied DB URL / sqlite path 차단
+```
+
+---
+
+## 8.3 DB Console Security
+
+필수 조건:
+
+```txt
+[ ] destructive query는 confirmation 필요
+[ ] viewer는 read-only만 가능
+[ ] query timeout 적용
+[ ] row limit 적용
+[ ] result size limit 적용
+[ ] SQLite ATTACH/DETACH 차단
+[ ] SQLite filesystem escape 차단
+[ ] provider-owned connection만 사용
+[ ] DB query audit log 기록
+```
+
+---
+
+# 9. Dashboard Beta 기준
+
+Dashboard는 예쁘지 않아도 된다. 하지만 Beta에서는 실제 조작이 가능해야 한다.
+
+필수 화면:
+
+```txt
+[ ] Login / Signup
+[ ] Current user / approval status
+[ ] Project list
+[ ] Project create
+[ ] Project detail
+[ ] Service create
+[ ] Deploy production button
+[ ] Deploy preview button
+[ ] Deployment list
+[ ] Deployment detail
+[ ] Build log viewer
+[ ] Runtime log viewer
+[ ] Deployment event viewer
+[ ] Resource create
+[ ] Resource list
+[ ] DB/resource console
+[ ] Admin pending users
+[ ] Admin approve/reject
+[ ] Admin quota edit
+[ ] Usage/quota page
+[ ] GitHub integration page
+[ ] GitHub repository import page
+[ ] Preview deployment list
+```
+
+통과 기준:
+
+```txt
+[ ] CLI 없이 dashboard에서 project → service → deploy → logs 확인 가능
+[ ] dashboard에서 DB resource 생성 가능
+[ ] dashboard에서 DB console SELECT 가능
+[ ] dashboard에서 pending user 승인 가능
+[ ] dashboard에서 quota 수정 가능
+```
+
+---
+
+# 10. 베타에서 제외할 것
+
+Closed Beta 전에는 아래 기능을 하지 않는다.
+
+```txt
+[ ] 결제 시스템
+[ ] 멀티 리전
+[ ] 멀티 클러스터
+[ ] Canary 고도화
+[ ] Blue-Green 고도화
+[ ] PITR
+[ ] read replica
+[ ] Redis cluster
+[ ] MongoDB sharding
+[ ] Kafka production-grade cluster
+[ ] CDN integration
+[ ] 고급 status page
+[ ] AI 기능
+[ ] 고급 템플릿 갤러리
+[ ] advanced billing
+```
+
+베타 목표는 이것이다.
+
+```txt
+생성
+빌드
+배포
+접속
+DB 연결
+로그
+승인
+쿼터
+preview
+cleanup
+```
+
+---
+
+# 11. Beta Ready Gate
+
+아래가 전부 통과되면 **Beta Ready**다.
+
+```txt
+[ ] 모든 P0 체크리스트 통과
+[ ] pnpm e2e:live 성공
+[ ] 최소 2개 example app 실제 배포 성공
+[ ] 최소 6개 DB/resource 실제 생성/연결 성공
+[ ] PostgreSQL, SQLite, Redis, Object Storage 실제 사용 가능
+[ ] MySQL/MariaDB/MongoDB 최소 read/query 가능
+[ ] GitHub push fixture 성공
+[ ] GitHub PR preview fixture 성공
+[ ] Preview cleanup 성공
+[ ] Dashboard에서 기본 조작 가능
+[ ] Admin approval / quota 실제 적용
+[ ] Secret leakage test 통과
+[ ] Security violation deployment 차단
+```
+
+---
+
+# 12. Beta Launch Gate
+
+Beta Ready 이후 실제 사용자에게 열기 전 조건이다.
+
+```txt
+[ ] 운영자 계정 생성
+[ ] 테스트 동아리 organization 생성
+[ ] DNS/base domain 설정
+[ ] TLS/Ingress 설정
+[ ] admin runbook 작성
+[ ] 장애 대응 문서 작성
+[ ] backup 위치 확인
+[ ] restore smoke test
+[ ] 3명 이상 내부 tester가 배포 성공
+[ ] 10회 이상 live deployment 성공
+[ ] 5회 이상 preview deployment 생성/cleanup 성공
+[ ] 5개 이상 DB/resource 생성/삭제 성공
+[ ] 주요 실패 케이스 문서화
+```
+
+---
+
+# 13. Beta Exit 기준
+
+Closed Beta에서 Production v1로 넘어가기 위한 기준이다.
+
+```txt
+[ ] 10명 이상 사용자 테스트
+[ ] 20개 이상 deployment 성공
+[ ] 10개 이상 DB/resource 생성 성공
+[ ] 1주일 이상 major incident 없음
+[ ] backup/restore 검증
+[ ] user/service suspend 가능
+[ ] audit log 검색 가능
+[ ] usage/quota 안정화
+[ ] preview cleanup 누락 없음
+[ ] secret leakage 없음
+[ ] 운영자가 장애 대응 가능
+```
+
+---
+
+# 14. 지금부터 진행 원칙
+
+## 원칙 1. Beta checklist와 무관한 기능 추가 금지
+
+작업 전 질문:
+
+```txt
+이 작업은 어떤 Beta checklist 항목을 통과시키는가?
+```
+
+답이 없으면 하지 않는다.
+
+---
+
+## 원칙 2. Live E2E 우선
+
+가장 중요한 항목:
+
+```txt
+pnpm e2e:live 성공
+```
+
+이게 안 되면 Beta가 아니다.
+
+---
+
+## 원칙 3. DB 다양성은 유지하되 고급 기능은 제한
+
+베타 DB 목표:
+
+```txt
+다양한 DB/resource를 생성하고 연결하고 console로 확인한다.
+```
+
+베타 DB 비목표:
+
+```txt
+고가용성
+replication
+PITR
+multi-region
+advanced permission
+```
+
+---
+
+# 15. 다음 구현 우선순위
+
+지금부터는 아래 순서대로만 진행한다.
+
+```txt
+1. Go worker PostgresStore 구현
+2. pnpm e2e:live 완전 자동화
+3. PostgreSQL provider 실제 lifecycle 완성
+4. Redis/Valkey provider 실제 구현
+5. Object Storage/MinIO provider 실제 구현
+6. MySQL/MariaDB provider 실제 구현
+7. MongoDB provider 실제 구현
+8. GitHub webhook push/PR/cleanup lifecycle 완성
+9. Dashboard Beta UX 완성
+10. Qdrant/NATS 실험 지원
+```
+
+---
+
+# 16. AI에게 줄 Beta 기준 프롬프트
+
+```txt
+너는 RAIBITSERVER의 Beta release engineer다.
+
+목표는 새 기능을 계속 추가하는 것이 아니라 Closed Beta 기준을 통과시키는 것이다.
+
+Closed Beta 정의:
+제한된 동아리원/관리자가 쓰는 실제 배포 플랫폼이다. GitHub repo/Dockerfile/prebuilt image를 실제 Kubernetes에 배포할 수 있고, PostgreSQL, SQLite, Redis/Valkey, Object Storage, MySQL/MariaDB, MongoDB를 resource로 생성해 service에 연결할 수 있으며, Qdrant/NATS는 실험적 resource로 제공된다.
+
+최우선 기준:
+pnpm e2e:live가 실제로 app build → registry push → Kubernetes deploy → URL HTTP 200 → DB/resource attach → log 조회 → preview cleanup까지 성공해야 한다.
+
+금지:
+- Beta checklist와 무관한 기능 추가 금지
+- dry-run만 성공시키고 완료 처리 금지
+- README만 고치고 완료 처리 금지
+- placeholder/TODO/mock만 추가 금지
+- 결제, 멀티 리전, 고급 오토스케일링, PITR, Canary, Blue-Green 고도화는 Beta 전 금지
+
+Beta P0 checklist:
+- pnpm install --frozen-lockfile
+- pnpm test
+- pnpm typecheck
+- pnpm lint
+- pnpm prisma:validate
+- Go services go test/build
+- pnpm e2e:dry
+- pnpm e2e:live
+- Express/Vite/Dockerfile/generated Dockerfile app 실제 배포
+- local registry push
+- Kubernetes Deployment/Service/Ingress 생성
+- public/local URL HTTP 200
+- PostgreSQL resource 실제 생성
+- SQLite resource 실제 생성
+- Redis/Valkey resource 실제 생성
+- Object Storage resource 실제 생성
+- MySQL/MariaDB resource 실제 생성
+- MongoDB resource 실제 생성
+- service env injection
+- DB console query/browser
+- BuildLog/RuntimeLog/DeploymentEvent 조회
+- admin approval/quota enforcement
+- GitHub push webhook fixture
+- GitHub PR preview fixture
+- PR closed cleanup
+- bad webhook signature 차단
+- duplicate delivery idempotent 처리
+- secret leakage 차단
+- security violation deployment 차단
+
+작업마다 보고:
+- 통과시킨 checklist 항목
+- 수정한 파일
+- 구현 내용
+- 실행한 테스트
+- 실패한 테스트
+- 다음 남은 Beta 항목
+
+이제 Closed Beta 통과를 위해 가장 중요한 미통과 항목부터 실제 코드로 구현해라.
+```
+
+---
+
+# 최종 정리
+
+이 기준으로 가면 더 이상 “계속 개선점만 나오는 상태”가 아니라, 명확한 목표가 생깁니다.
+
+```txt
+목표: Closed Beta
+핵심 gate: pnpm e2e:live
+DB 범위: PostgreSQL, SQLite, Redis/Valkey, Object Storage, MySQL/MariaDB, MongoDB 실제 지원
+실험 DB: Qdrant, NATS
+성공 기준: 실제 build/deploy/db/log/preview/admin/quota/security 통과
+```
+
+이제부터는 **새로운 기능을 추가하는 프로젝트가 아니라, 이 체크리스트를 하나씩 지워가는 릴리즈 작업**으로 진행하면 됩니다.
