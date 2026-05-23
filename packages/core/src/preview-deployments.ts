@@ -10,20 +10,13 @@ export function previewKey(pullRequestNumber: any) {
 }
 
 export function previewWorkloadName(service: AnyRecord = {}, pullRequestNumber: any) {
-  return `${previewKey(pullRequestNumber)}-${slugify(service.slug || service.name || service.id || 'service')}`;
+  const identity = previewIdentity({ service, pullRequestNumber });
+  return identity.workloadName;
 }
 
 export function previewRuntimePlan(input: AnyRecord = {}) {
-  const service = input.service || {};
-  const project = input.project || {};
-  const organization = input.organization || {};
-  const pullRequestNumber = Number(input.pullRequestNumber || input.prNumber || 0);
-  const preview = previewKey(pullRequestNumber);
-  const serviceName = slugify(service.slug || service.name || service.id || 'service');
-  const projectSlug = slugify(project.slug || project.name || project.id || 'project');
-  const organizationSlug = slugify(organization.slug || organization.name || project.organizationSlug || project.organizationId || 'org');
+  const { service, project, pullRequestNumber, preview, serviceName, projectSlug, organizationSlug, workloadName } = previewIdentity(input);
   const baseDomain = input.baseDomain || service.baseDomain || project.baseDomain || DEFAULT_DOMAIN;
-  const workloadName = `${preview}-${serviceName}`;
   const host = serviceHostname({ organizationSlug, projectSlug, serviceName, baseDomain, preview });
   const deploymentId = input.deploymentId || input.deployment?.id || null;
   const labels = {
@@ -53,4 +46,16 @@ export function previewRuntimePlan(input: AnyRecord = {}) {
       cleanupSelector: Object.entries(labels).map(([key, value]) => `${key}=${value}`).join(','),
     },
   };
+}
+
+function previewIdentity(input: AnyRecord = {}) {
+  const service = input.service || {};
+  const project = input.project || {};
+  const organization = input.organization || {};
+  const pullRequestNumber = Number(input.pullRequestNumber || input.prNumber || 0);
+  const preview = previewKey(pullRequestNumber);
+  const serviceName = slugify(service.slug || service.name || service.id || 'service');
+  const projectSlug = slugify(project.slug || project.name || project.id || 'project');
+  const organizationSlug = slugify(organization.slug || organization.name || project.organizationSlug || project.organizationId || 'org');
+  return { service, project, pullRequestNumber, preview, serviceName, projectSlug, organizationSlug, workloadName: `${preview}-${serviceName}` };
 }

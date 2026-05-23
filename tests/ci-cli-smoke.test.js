@@ -25,6 +25,14 @@ test('CI dry-run CLI smoke commands return stable PaaS and DBaaS artifacts', asy
   assert.equal(apply.apply.dryRun, true);
   assert.match(apply.apply.command, /^kubectl apply --server-side -f /);
   assert.equal(apply.compiled.manifests.some((resource) => resource.kind === 'Ingress'), true);
+
+  const readOnlyQuery = await runCli(['guard-query', 'SELECT', '1']);
+  assert.equal(readOnlyQuery.allowed, true);
+  assert.equal(readOnlyQuery.readOnly, true);
+
+  const destructiveQuery = await runCli(['guard-query', 'DROP']);
+  assert.equal(destructiveQuery.allowed, false);
+  assert.equal(destructiveQuery.destructive, true);
 });
 
 test('CI workflow keeps local smoke checks and Prisma validation environment', async () => {

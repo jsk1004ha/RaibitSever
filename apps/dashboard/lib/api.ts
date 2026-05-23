@@ -15,23 +15,19 @@ export function apiAction(path: string, context = dashboardApiContext()) {
 }
 
 export async function getJson(path: string, fallback: any = null, context = dashboardApiContext()) {
-  try {
-    const response = await fetch(apiAction(path, context), { headers: context.headers, cache: 'no-store' });
-    const text = await response.text();
-    const body = text ? JSON.parse(text) : null;
-    if (!response.ok) return { ok: false, status: response.status, error: body?.error || response.statusText, body: fallback };
-    return { ok: true, status: response.status, body };
-  } catch (error) {
-    return { ok: false, status: 0, error: error instanceof Error ? error.message : String(error), body: fallback };
-  }
+  return requestJson(path, { fallback, context });
 }
 
 export async function postJson(path: string, body: any = {}, fallback: any = null, context = dashboardApiContext()) {
+  return requestJson(path, { method: 'POST', body, fallback, context });
+}
+
+async function requestJson(path: string, { method = 'GET', body = undefined, fallback = null, context = dashboardApiContext() }: Record<string, any> = {}) {
   try {
     const response = await fetch(apiAction(path, context), {
-      method: 'POST',
-      headers: { ...context.headers, 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      method,
+      headers: method === 'POST' ? { ...context.headers, 'content-type': 'application/json' } : context.headers,
+      body: method === 'POST' ? JSON.stringify(body || {}) : undefined,
       cache: 'no-store',
     });
     const text = await response.text();

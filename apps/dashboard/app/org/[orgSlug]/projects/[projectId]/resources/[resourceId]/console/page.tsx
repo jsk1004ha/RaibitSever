@@ -1,4 +1,5 @@
 import { apiAction, loadResourceConsole } from '../../../../../../../../lib/api';
+import { JsonCard } from '../../../../../../../../components/console-ui';
 
 const ENGINE_COMMANDS: Record<string, { query: string; command: string; help: string }> = {
   postgresql: { query: 'SELECT 1', command: 'SELECT 1', help: 'SQL query, schema/table browser, backup/restore command contract' },
@@ -67,9 +68,7 @@ export default async function ResourceConsolePage({ params }: { params: { orgSlu
   );
 }
 
-function JsonCard({ title, value }: { title: string; value: any }) { return <article style={cardStyle}><h2>{title}</h2><pre style={preStyle}>{JSON.stringify(value, null, 2)}</pre></article>; }
 const pageStyle = { padding: 32, maxWidth: 1180, margin: '0 auto', display: 'grid', gap: 20 } as const;
 const gridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 } as const;
 const cardStyle = { border: '1px solid #dbeafe', borderRadius: 16, padding: 20, background: '#fff', display: 'grid', gap: 10 } as const;
-const preStyle = { whiteSpace: 'pre-wrap', overflowX: 'auto', background: '#0f172a', color: '#dbeafe', padding: 12, borderRadius: 10 } as const;
 const eyebrowStyle = { color: '#2563eb', fontWeight: 800 } as const;

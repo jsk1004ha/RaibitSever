@@ -92,7 +92,9 @@ async function main(argv: string[]) {
     return print(controlPlane.importCompose(text, { projectName: rest.find((arg) => !arg.startsWith('--')) || 'compose-import' }));
   }
   if (command === 'guard-query') {
-    const query = rest.length ? [file, ...rest].join(' ') : await fs.readFile(file, 'utf8');
+    const queryArgs = [file, ...rest].filter(Boolean) as string[];
+    const queryFile = valueForFlag(queryArgs, '--file');
+    const query = queryFile ? await fs.readFile(queryFile, 'utf8') : queryArgs.join(' ');
     return print(controlPlane.guardQuery(query, { role: process.env.RAIBITSERVER_ROLE || 'developer', confirmed: process.env.RAIBITSERVER_CONFIRMED === '1' }));
   }
   if (command === 'auth-token') {
