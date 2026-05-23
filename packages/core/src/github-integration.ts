@@ -128,6 +128,12 @@ export function githubOAuthLoginPlan(options: Record<string, any> = {}) {
   return { provider: 'github', configured, oauthUrl, state, mode: configured ? 'redirect' : 'configuration-required' };
 }
 
+export function deterministicGitHubCallbackAllowed(input: Record<string, any> = {}, env: Record<string, any> = process.env) {
+  if (env.RAIBITSERVER_GITHUB_OAUTH_LOCAL_CALLBACK === '1') return true;
+  if (env.NODE_ENV === 'production') return false;
+  return Boolean(input.localDev === '1' || input.mode === 'deterministic-local-callback' || input.email || input.githubEmail || input.userEmail);
+}
+
 function webhookRepository(payload: Record<string, any>) {
   const fullName = payload.repository?.full_name || payload.repository?.fullName || payload.repository?.nameWithOwner;
   if (fullName) return parseGitHubRepository(String(fullName)).fullName;

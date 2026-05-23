@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
-import { createControlPlaneRepository, createSessionToken, githubOAuthLoginPlan, hashPassword, normalizeEmail, organizationScopeFromProjectInput, personalOrganizationSlug, requireScope, validateServiceSecurity, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
+import { createControlPlaneRepository, createSessionToken, deterministicGitHubCallbackAllowed, githubOAuthLoginPlan, hashPassword, normalizeEmail, organizationScopeFromProjectInput, personalOrganizationSlug, requireScope, shouldPromoteFirstLogin, signupPolicyForAccount, validateServiceSecurity, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 
 /**
  * NestJS-facing desired-state service.
@@ -29,18 +29,20 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const email = normalizeEmail(input.email);
     const existing = repository.findUserByEmail ? await repository.findUserByEmail(email) : repository.store.findUserByEmail(email);
     if (existing) throw new ForbiddenException('user already exists');
+    const passwordHash = hashPassword(input.password);
     const organizationSlug = input.organizationSlug || personalOrganizationSlug(email);
     const existingOrganization = repository.findOrganizationBySlug ? await repository.findOrganizationBySlug(organizationSlug) : repository.store.findOrganizationBySlug(organizationSlug);
     if (existingOrganization) throw new ForbiddenException('organization slug already exists');
     const organization = await repository.createOrganization({ name: input.organizationName || organizationSlug, slug: organizationSlug, plan: input.plan || 'free' });
-    const adminEmails = String(process.env.ADMIN_EMAILS || '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
+    const users = await usersForRepository(repository);
+    const policy = signupPolicyForAccount(input, email, { firstUser: users.length === 0 });
     const user = await repository.createUser({
       name: input.name || email,
       email,
-      passwordHash: hashPassword(input.password),
-      role: adminEmails.includes(email) ? 'ADMIN' : 'USER',
-      accountType: adminEmails.includes(email) ? (input.accountType || (input.plan === 'club' ? 'CLUB_MEMBER' : 'NON_CLUB')) : 'NON_CLUB',
-      approvalStatus: adminEmails.includes(email) ? (input.approvalStatus || 'APPROVED') : 'PENDING',
+      passwordHash,
+      role: policy.role,
+      accountType: policy.accountType,
+      approvalStatus: policy.approvalStatus,
     });
     const membership = await repository.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
     const token = createSessionToken({ ...user, email }, [membership], jwtSecret, { issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', expiresInSeconds: input.expiresInSeconds || 3600 });
@@ -50,8 +52,11 @@ export class RAIBITSERVERService implements OnModuleDestroy {
   async login(input: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     const jwtSecret = jwtSecretOrThrow();
-    const user = repository.findUserByEmail ? await repository.findUserByEmail(normalizeEmail(input.email)) : repository.store.findUserByEmail(normalizeEmail(input.email));
+    let user = repository.findUserByEmail ? await repository.findUserByEmail(normalizeEmail(input.email)) : repository.store.findUserByEmail(normalizeEmail(input.email));
     if (!user || !verifyPassword(input.password, user.passwordHash)) throw new ForbiddenException('invalid credentials');
+    if (shouldPromoteFirstLogin(user, await usersForRepository(repository))) {
+      user = await repository.approveUser(user.id, { accountType: 'CLUB_MEMBER', role: 'ADMIN', actorUserId: 'system' });
+    }
     const memberships = repository.listMembershipsForUser ? await repository.listMembershipsForUser(user.id) : repository.store.listMembershipsForUser(user.id);
     const token = createSessionToken(user, memberships, jwtSecret, { issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', expiresInSeconds: input.expiresInSeconds || 3600 });
     const { passwordHash, ...publicUser } = user;
@@ -128,10 +133,11 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const service = await repository.getService(serviceId);
     if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
     if (String(service.projectId) !== String(projectId)) throw new ForbiddenException('service does not belong to project');
+    const deploymentType = input.deploymentType || input.type || 'production';
     if (repository.enforceUserCan) await repository.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxDeploymentsPerDay', increment: 1 });
+    if (deploymentType === 'preview' && repository.enforceUserCan) await repository.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxPreviewDeployments', increment: 1 });
     const security = validateServiceSecurity(service.desiredState || service.desiredSpec || service);
     if (!security.ok) throw new ForbiddenException(`deployment blocked by security policy: ${security.findings.filter((finding: any) => finding.level === 'block').map((finding: any) => finding.code).join(', ')}`);
-    const deploymentType = input.deploymentType || input.type || 'production';
     const { deployment, workflowJob } = await repository.createDeploymentWorkflow({
       deployment: { ...input, serviceId, projectId, status: 'queued', deploymentType },
       workflow: { type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', payload: { projectId, serviceId, branch: input.branch || 'main', commitSha: input.commitSha || input.commitHash || null } },
@@ -218,8 +224,9 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const repository: any = await this.repositoryPromise;
     const snapshot = await repository.snapshot();
     const usage = (snapshot.usageRecords || []).filter((row: Record<string, any>) => String(row.userId) === String(subject.id));
-    const quota = (snapshot.quotas || []).find((row: Record<string, any>) => String(row.userId) === String(subject.id)) || null;
-    return { accountType: subject.accountType, approvalStatus: subject.approvalStatus, unlimited: subject.accountType === 'CLUB_MEMBER', quota, usage };
+    const unlimited = subject.userRole === 'ADMIN' || subject.accountType === 'CLUB_MEMBER';
+    const quota = unlimited ? null : (snapshot.quotas || []).find((row: Record<string, any>) => String(row.userId) === String(subject.id)) || null;
+    return { accountType: subject.accountType, approvalStatus: subject.approvalStatus, unlimited, quota, usage };
   }
 
   async listEnvironment(projectId: string, serviceId: string, subject: Record<string, any>) {
@@ -294,8 +301,45 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     return githubOAuthLoginPlan(input);
   }
 
-  githubCallback(input: Record<string, any> = {}) {
-    return { provider: 'github', received: true, codePresent: Boolean(input.code), state: input.state || null, mode: 'deterministic-local-callback' };
+  async githubCallback(input: Record<string, any> = {}) {
+    const emailInput = input.email || input.githubEmail || input.userEmail || null;
+    if (!emailInput) return { provider: 'github', received: true, codePresent: Boolean(input.code), state: input.state || null, mode: 'deterministic-local-callback', linked: false };
+    if (!deterministicGitHubCallbackAllowed(input)) throw new ForbiddenException('deterministic GitHub callback is disabled in production');
+    const repository: any = await this.repositoryPromise;
+    const jwtSecret = jwtSecretOrThrow();
+    const email = normalizeEmail(emailInput);
+    const githubId = input.githubId || input.id || input.github_id || null;
+    const githubLogin = input.login || input.username || null;
+    let user = repository.findUserByEmail ? await repository.findUserByEmail(email) : repository.store.findUserByEmail(email);
+    const githubOwner = githubId && repository.findUserByGitHubId ? await repository.findUserByGitHubId(githubId) : null;
+    if (githubOwner && (!user || String(githubOwner.id) !== String(user.id))) throw new ForbiddenException('github account is already linked to another user');
+    let created = false;
+    let organization: any = null;
+    if (user) {
+      user = repository.linkGitHubUser
+        ? await repository.linkGitHubUser(user.id, { githubId, githubLogin, avatarUrl: input.avatarUrl || input.avatar_url || null, name: input.name || user.name, actorUserId: user.id })
+        : user;
+    } else {
+      const organizationSlug = input.organizationSlug || personalOrganizationSlug(email);
+      const existingOrganization = repository.findOrganizationBySlug ? await repository.findOrganizationBySlug(organizationSlug) : repository.store.findOrganizationBySlug(organizationSlug);
+      if (existingOrganization) throw new ForbiddenException('organization slug already exists');
+      organization = await repository.createOrganization({ name: input.organizationName || organizationSlug, slug: organizationSlug, plan: input.plan || 'free' });
+      const policy = signupPolicyForAccount(input, email, { firstUser: (await usersForRepository(repository)).length === 0 });
+      user = await repository.createUser({
+        name: input.name || githubLogin || email,
+        email,
+        githubId,
+        avatarUrl: input.avatarUrl || input.avatar_url || null,
+        role: policy.role,
+        accountType: policy.accountType,
+        approvalStatus: policy.approvalStatus,
+      });
+      await repository.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
+      created = true;
+    }
+    const memberships = repository.listMembershipsForUser ? await repository.listMembershipsForUser(user.id) : repository.store.listMembershipsForUser(user.id);
+    const token = createSessionToken({ ...user, email }, memberships, jwtSecret, { issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', expiresInSeconds: input.expiresInSeconds || 3600 });
+    return { provider: 'github', received: true, codePresent: Boolean(input.code), state: input.state || null, mode: 'deterministic-local-callback', linked: true, created, user, organization, memberships, token };
   }
 
   async listGitHubInstallations(subject: Record<string, any>, organizationId?: string) {
@@ -366,8 +410,14 @@ function isGlobalSubject(subject: Record<string, any>) {
 }
 
 function assertAdmin(subject: Record<string, any>) {
-  if (subject?.global === true || subject?.role === 'owner' || subject?.userRole === 'ADMIN' || subject?.claims?.userRole === 'ADMIN') return;
+  if (subject?.global === true || subject?.userRole === 'ADMIN' || subject?.claims?.userRole === 'ADMIN') return;
   throw new ForbiddenException('admin required');
+}
+
+async function usersForRepository(repository: any) {
+  if (repository?.store?.users) return [...repository.store.users.values()];
+  const snapshot = repository.snapshot ? await repository.snapshot() : { users: [] };
+  return snapshot.users || [];
 }
 
 function jwtSecretOrThrow() {

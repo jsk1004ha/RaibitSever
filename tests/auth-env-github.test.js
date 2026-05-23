@@ -8,7 +8,8 @@ import path from 'node:path';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 import { parseDotEnv } from '../packages/core/src/env-file.ts';
-import { parseGitHubRepository, verifyGitHubWebhookSignature } from '../packages/core/src/github-integration.ts';
+import { deterministicGitHubCallbackAllowed, parseGitHubRepository, verifyGitHubWebhookSignature } from '../packages/core/src/github-integration.ts';
+import { hashPassword } from '../packages/core/src/identity.ts';
 import crypto from 'node:crypto';
 
 test('.env upload parser separates plain values from important secrets', () => {
@@ -18,6 +19,77 @@ test('.env upload parser separates plain values from important secrets', () => {
   assert.equal(parsed.entries.find((entry) => entry.key === 'PUBLIC_URL').valueMasked, 'https://example.com');
   assert.notEqual(parsed.entries.find((entry) => entry.key === 'DATABASE_URL').valueMasked, 'postgresql://u:p@db/app');
   assert.throws(() => parseDotEnv('1BAD=value'), /invalid \.env content/);
+});
+
+test('first auth user bootstraps as admin and GitHub callback can create the first account', async () => {
+  const secret = 'first-user-bootstrap-secret';
+  const previousAdminEmails = process.env.ADMIN_EMAILS;
+  delete process.env.ADMIN_EMAILS;
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'jwt', jwtSecret: secret } }));
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  try {
+    const first = await request(port, 'POST', '/auth/signup', { email: 'first@example.com', password: 'correct-horse', organizationSlug: 'first-org' });
+    assert.equal(first.statusCode, 201);
+    assert.equal(first.body.user.role, 'ADMIN');
+    assert.equal(first.body.user.accountType, 'CLUB_MEMBER');
+    assert.equal(first.body.user.approvalStatus, 'APPROVED');
+
+    const second = await request(port, 'POST', '/auth/signup', { email: 'second@example.com', password: 'correct-horse', organizationSlug: 'second-org', accountType: 'CLUB_MEMBER', approvalStatus: 'APPROVED' });
+    assert.equal(second.statusCode, 201);
+    assert.equal(second.body.user.role, 'USER');
+    assert.equal(second.body.user.accountType, 'NON_CLUB');
+    assert.equal(second.body.user.approvalStatus, 'PENDING');
+    const secondBlocked = await request(port, 'POST', '/projects', { name: 'blocked', slug: 'blocked' }, second.body.token);
+    assert.equal(secondBlocked.statusCode, 403);
+
+    const githubOnly = new RAIBITSERVERControlPlane();
+    const githubServer = http.createServer(createApiHandler(githubOnly, { auth: { mode: 'jwt', jwtSecret: secret } }));
+    githubServer.listen(0);
+    await once(githubServer, 'listening');
+    try {
+      const callback = await request(githubServer.address().port, 'GET', '/auth/github/callback?email=gh-first%40example.com&githubId=42&login=gh-first&organizationSlug=gh-first-org&state=oauth-state');
+      assert.equal(callback.statusCode, 200);
+      assert.equal(callback.body.linked, true);
+      assert.equal(callback.body.created, true);
+      assert.equal(callback.body.state, 'oauth-state');
+      assert.equal(callback.body.user.role, 'ADMIN');
+      assert.equal(callback.body.user.accountType, 'CLUB_MEMBER');
+      assert.equal(callback.body.user.approvalStatus, 'APPROVED');
+      assert.equal(callback.body.user.githubId, '42');
+      assert.equal(Boolean(callback.body.token), true);
+    } finally {
+      githubServer.close();
+    }
+  } finally {
+    server.close();
+    if (previousAdminEmails === undefined) delete process.env.ADMIN_EMAILS; else process.env.ADMIN_EMAILS = previousAdminEmails;
+  }
+});
+
+test('legacy first user is promoted to admin on first login when no admin exists', async () => {
+  const secret = 'first-login-bootstrap-secret';
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const org = controlPlane.store.createOrganization({ name: 'Legacy Org', slug: 'legacy-org' });
+  const legacy = controlPlane.store.createUser({ email: 'legacy@example.com', name: 'Legacy User', passwordHash: hashPassword('correct-horse'), role: 'USER', accountType: 'NON_CLUB', approvalStatus: 'PENDING' });
+  controlPlane.store.addMember({ organizationId: org.id, userId: legacy.id, role: 'owner' });
+  const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'jwt', jwtSecret: secret } }));
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  try {
+    const login = await request(port, 'POST', '/auth/login', { email: 'legacy@example.com', password: 'correct-horse' });
+    assert.equal(login.statusCode, 200);
+    assert.equal(login.body.user.role, 'ADMIN');
+    assert.equal(login.body.user.accountType, 'CLUB_MEMBER');
+    assert.equal(login.body.user.approvalStatus, 'APPROVED');
+    const project = await request(port, 'POST', '/projects', { name: 'legacy', slug: 'legacy' }, login.body.token);
+    assert.equal(project.statusCode, 201);
+  } finally {
+    server.close();
+  }
 });
 
 test('signup/login tokens isolate hosted projects, service env upload, and GitHub integration', async () => {
@@ -34,9 +106,14 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
     assert.equal(aliceSignup.statusCode, 201);
     assert.equal(Boolean(aliceSignup.body.token), true);
     assert.equal(aliceSignup.body.user.passwordHash, undefined);
+    assert.equal(aliceSignup.body.user.role, 'ADMIN');
+    assert.equal(aliceSignup.body.user.accountType, 'CLUB_MEMBER');
+    assert.equal(aliceSignup.body.user.approvalStatus, 'APPROVED');
 
     const bobSignup = await request(port, 'POST', '/auth/signup', { email: 'bob@example.com', password: 'correct-horse', organizationSlug: 'bob-org' });
     assert.equal(bobSignup.statusCode, 201);
+    assert.equal(bobSignup.body.user.accountType, 'NON_CLUB');
+    assert.equal(bobSignup.body.user.approvalStatus, 'PENDING');
 
     const eveSignup = await request(port, 'POST', '/auth/signup', { email: 'eve@example.com', password: 'correct-horse', organizationSlug: 'eve-org', plan: 'club', accountType: 'CLUB_MEMBER', approvalStatus: 'APPROVED' });
     assert.equal(eveSignup.statusCode, 201);
@@ -59,9 +136,38 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
     const bobDenied = await request(port, 'POST', '/services', { projectId: aliceProject.body.id, name: 'steal' }, bobSignup.body.token);
     assert.equal(bobDenied.statusCode, 403);
 
+    const bobOwnProjectBlocked = await request(port, 'POST', '/projects', { name: 'blocked', slug: 'blocked' }, bobSignup.body.token);
+    assert.equal(bobOwnProjectBlocked.statusCode, 403);
+
     const bobProjects = await request(port, 'GET', '/projects', null, bobSignup.body.token);
     assert.equal(bobProjects.statusCode, 200);
     assert.equal(bobProjects.body.projects.some((project) => project.id === aliceProject.body.id), false);
+
+    const bobGithub = await request(port, 'GET', '/auth/github/callback?email=bob%40example.com&githubId=gh-bob&login=bob&state=link-existing');
+    assert.equal(bobGithub.statusCode, 200);
+    assert.equal(bobGithub.body.linked, true);
+    assert.equal(bobGithub.body.created, false);
+    assert.equal(bobGithub.body.user.githubId, 'gh-bob');
+    const duplicateGithub = await request(port, 'GET', '/auth/github/callback?email=eve%40example.com&githubId=gh-bob&login=eve&state=duplicate-link');
+    assert.equal(duplicateGithub.statusCode, 409);
+
+    const approveBob = await request(port, 'POST', `/admin/users/${bobSignup.body.user.id}/approve`, { accountType: 'NON_CLUB' }, aliceLogin.body.token);
+    assert.equal(approveBob.statusCode, 200);
+    assert.equal(approveBob.body.approvalStatus, 'APPROVED');
+    const bobQuota = await request(port, 'PATCH', `/admin/users/${bobSignup.body.user.id}/quota`, { maxProjects: 1, maxServices: 1 }, aliceLogin.body.token);
+    assert.equal(bobQuota.statusCode, 200);
+    const bobProject = await request(port, 'POST', '/projects', { name: 'Bob API', slug: 'bob-api' }, bobSignup.body.token);
+    assert.equal(bobProject.statusCode, 201);
+    const bobService = await request(port, 'POST', `/projects/${bobProject.body.id}/services`, { name: 'web', type: 'web', sourceType: 'image', image: 'localhost:5000/bob/web:latest' }, bobSignup.body.token);
+    assert.equal(bobService.statusCode, 201);
+    const bobQuotaDenied = await request(port, 'POST', `/projects/${bobProject.body.id}/services`, { name: 'worker', type: 'worker', sourceType: 'image', image: 'localhost:5000/bob/worker:latest' }, bobSignup.body.token);
+    assert.equal(bobQuotaDenied.statusCode, 403);
+
+    const rejectEve = await request(port, 'POST', `/admin/users/${eveSignup.body.user.id}/reject`, {}, aliceLogin.body.token);
+    assert.equal(rejectEve.statusCode, 200);
+    assert.equal(rejectEve.body.approvalStatus, 'REJECTED');
+    const eveRejectedProject = await request(port, 'POST', '/projects', { name: 'eve', slug: 'eve' }, eveSignup.body.token);
+    assert.equal(eveRejectedProject.statusCode, 403);
 
     const envUpload = await request(port, 'POST', `/projects/${aliceProject.body.id}/services/${aliceService.body.id}/env-file`, {
       filename: '.env.production',
@@ -97,6 +203,9 @@ test('GitHub helpers normalize repositories and verify webhook signatures', () =
   const signature = `sha256=${crypto.createHmac('sha256', 'webhook-secret').update(body).digest('hex')}`;
   assert.equal(verifyGitHubWebhookSignature(body, signature, 'webhook-secret'), true);
   assert.equal(verifyGitHubWebhookSignature(body, signature, 'wrong-secret'), false);
+  assert.equal(deterministicGitHubCallbackAllowed({ email: 'local@example.com' }, { NODE_ENV: 'test' }), true);
+  assert.equal(deterministicGitHubCallbackAllowed({ email: 'prod@example.com' }, { NODE_ENV: 'production' }), false);
+  assert.equal(deterministicGitHubCallbackAllowed({ email: 'prod@example.com' }, { NODE_ENV: 'production', RAIBITSERVER_GITHUB_OAUTH_LOCAL_CALLBACK: '1' }), true);
 });
 
 test('CLI parses env files and GitHub repo references without leaking secrets', async () => {

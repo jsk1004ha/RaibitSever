@@ -62,3 +62,53 @@ export function createSessionToken(user: Record<string, any>, memberships: Array
 export function personalOrganizationSlug(email: string) {
   return slugify(String(email).split('@')[0] || 'user');
 }
+
+export function configuredAdminEmails(env: Record<string, any> = process.env) {
+  return String(env.ADMIN_EMAILS || '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+export function signupPolicyForAccount(input: Record<string, any>, email: string, options: Record<string, any> = {}) {
+  const adminEmails = configuredAdminEmails(options.env || process.env);
+  const isAdminEmail = adminEmails.includes(String(email || '').toLowerCase());
+  const firstUser = options.firstUser === true;
+  const isAdminBootstrap = firstUser || isAdminEmail;
+  if (isAdminBootstrap) {
+    return {
+      isAdminBootstrap,
+      bootstrapReason: firstUser ? 'first-user' : 'admin-email',
+      role: 'ADMIN',
+      accountType: 'CLUB_MEMBER',
+      approvalStatus: 'APPROVED',
+    };
+  }
+  return {
+    isAdminBootstrap: false,
+    bootstrapReason: null,
+    role: 'USER',
+    accountType: 'NON_CLUB',
+    approvalStatus: 'PENDING',
+  };
+}
+
+export function shouldPromoteFirstLogin(user: Record<string, any>, users: Array<Record<string, any>> = []) {
+  if (!user || user.role === 'ADMIN') return false;
+  if (!users.length) return false;
+  if (users.some((candidate) => candidate.role === 'ADMIN')) return false;
+  const first = [...users].sort(compareUsersByCreation)[0];
+  return Boolean(first && sameUser(first, user));
+}
+
+function sameUser(a: Record<string, any>, b: Record<string, any>) {
+  if (a.id && b.id && String(a.id) === String(b.id)) return true;
+  return Boolean(a.email && b.email && String(a.email).toLowerCase() === String(b.email).toLowerCase());
+}
+
+function compareUsersByCreation(a: Record<string, any>, b: Record<string, any>) {
+  const aTime = Date.parse(a.createdAt || '') || 0;
+  const bTime = Date.parse(b.createdAt || '') || 0;
+  if (aTime !== bTime) return aTime - bTime;
+  return String(a.id || a.email || '').localeCompare(String(b.id || b.email || ''));
+}

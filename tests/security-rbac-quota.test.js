@@ -95,6 +95,7 @@ test('quota enforcement accounts for existing project and service usage', () => 
 
   assert.throws(() => store.enforceUserCan({ userId: user.id, action: 'project:create', metric: 'maxProjects', increment: 1 }), /quota exceeded: maxProjects/);
   assert.throws(() => store.enforceUserCan({ userId: user.id, action: 'service:create', metric: 'maxServices', increment: 1 }), /quota exceeded: maxServices/);
+  assert.equal(store.auditLogs.filter((row) => row.action === 'quota:block').length, 2);
 });
 
 test('quota usage includes build minutes, runtime hours, CPU, and memory', () => {

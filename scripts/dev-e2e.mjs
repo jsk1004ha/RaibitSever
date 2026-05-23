@@ -8,7 +8,6 @@ import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts'
 import { applyManifests, applyProject, commandExists, executeBuildWorkflow, provisionProjectResources, pushImage, runCommand } from '../packages/core/src/execution.ts';
 import { injectResourceEnv } from '../packages/core/src/env-injection.ts';
 import { parseE2EOptions, resolveE2EPlan } from './e2e-mode.mjs';
-import { signJwtHs256 } from '../packages/core/src/auth.ts';
 import { serviceHostname } from '../packages/core/src/domain-router.ts';
 
 const e2eOptions = parseE2EOptions(process.argv.slice(2), process.env);
@@ -40,12 +39,18 @@ try {
   evidence.liveSetup = e2ePlan.setup;
   evidence.liveSetupResults = e2ePlan.mode === 'live' ? await runLiveSetup(e2ePlan.setup) : [];
 
+  const bootstrapAdmin = await request('POST', '/auth/signup', { email: 'admin@example.com', password: 'correct-horse-battery', organizationSlug: 'admin-org' });
+  assertStatus(bootstrapAdmin, 201, 'first-user admin bootstrap');
+  if (bootstrapAdmin.body.user.role !== 'ADMIN' || bootstrapAdmin.body.user.approvalStatus !== 'APPROVED' || bootstrapAdmin.body.user.accountType !== 'CLUB_MEMBER') {
+    throw new Error('first auth user was not bootstrapped as approved club admin');
+  }
+  const adminToken = bootstrapAdmin.body.token;
+
   const pending = await request('POST', '/auth/signup', { email: 'student@example.com', password: 'correct-horse-battery', organizationSlug: 'student-org' });
   assertStatus(pending, 201, 'non-club signup');
   const blocked = await request('POST', '/projects', { name: 'blocked', slug: 'blocked' }, pending.body.token);
   assertStatus(blocked, 403, 'non-club pending blocked');
 
-  const adminToken = signJwtHs256({ sub: 'admin-local', role: 'owner', userRole: 'ADMIN', global: true }, jwtSecret);
   const approved = await request('POST', `/admin/users/${pending.body.user.id}/approve`, { accountType: 'NON_CLUB' }, adminToken);
   assertStatus(approved, 200, 'admin approve non-club');
   const quota = await request('PATCH', `/admin/users/${pending.body.user.id}/quota`, { maxProjects: 3, maxServices: 4, maxDeploymentsPerDay: 10, maxDbStorageMb: 2048 }, adminToken);
@@ -137,7 +142,7 @@ try {
   evidence.postgresProviderDryRun = postgresProvision.result.dryRun;
   evidence.postgresEnvInjected = Boolean(postgresEnv.DATABASE_URL && postgresEnv.PGUSER);
   evidence.previewCleanupAction = previewCleanup.actions[0]?.type || null;
-  evidence.checks.push('non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'PostgreSQL provider dry-run and env injection works', 'preview deployment fixture created', 'preview cleanup workflow enqueued', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed', e2ePlan.dryRun ? 'live beta checklist dry contract generated' : 'live beta checklist passed against local cluster');
+  evidence.checks.push('first-user admin bootstrap works', 'non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'PostgreSQL provider dry-run and env injection works', 'preview deployment fixture created', 'preview cleanup workflow enqueued', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed', e2ePlan.dryRun ? 'live beta checklist dry contract generated' : 'live beta checklist passed against local cluster');
   await fs.mkdir('.raibitserver-work', { recursive: true });
   await fs.writeFile('.raibitserver-work/e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);
   if (e2ePlan.mode === 'live') await fs.writeFile('.raibitserver-work/live-e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);

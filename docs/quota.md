@@ -8,6 +8,8 @@
 
 ## 사용자 상태
 
+첫 auth 사용자(이메일/비밀번호 signup 또는 deterministic GitHub callback)는 자동으로 `ADMIN` + `CLUB_MEMBER` + `APPROVED`가 됩니다. `ADMIN_EMAILS`는 운영자가 사전에 지정한 이메일을 같은 관리자 bootstrap 경로로 승인하는 fallback입니다. GitHub deterministic callback의 이메일 기반 계정 생성/연동은 production에서 기본 비활성화되며, 로컬/베타 검증 또는 `RAIBITSERVER_GITHUB_OAUTH_LOCAL_CALLBACK=1`일 때만 사용합니다.
+
 | 사용자 | 기본 상태 | 사용 가능 범위 |
 | --- | --- | --- |
 | `ADMIN` | 승인됨 | 모든 사용자, 프로젝트, 리소스 관리 |
@@ -25,7 +27,7 @@
 - resource 생성
 - preview deployment 생성
 
-Quota block은 403/429 계열 오류로 응답하고 persistence-capable path에서는 audit log에 기록합니다.
+Quota block은 403/429 계열 오류로 응답하고 in-memory/prod persistence path 모두 audit log에 기록합니다.
 
 ## Runtime quota accounting
 
@@ -68,6 +70,7 @@ maxRuntimeHoursPerMonth
 `pnpm e2e:dry`는 다음을 확인합니다.
 
 - pending non-club 사용자는 project 생성이 차단됩니다.
+- 첫 auth 사용자는 admin으로 bootstrap됩니다.
 - admin approve 후 quota 설정으로 사용이 가능해집니다.
 - build/runtime/resource 사용량 evidence가 기록됩니다.
 - club member는 non-club quota보다 많은 service 생성이 가능합니다.

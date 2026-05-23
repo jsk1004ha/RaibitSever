@@ -19,6 +19,8 @@ export class InMemoryControlPlaneRepository {
   async findOrganizationBySlug(slug: string) { return this.store.findOrganizationBySlug(slug); }
   async createUser(input: Record<string, any>) { return this.store.createUser(input); }
   async findUserByEmail(email: string) { return this.store.findUserByEmail(email); }
+  async findUserByGitHubId(githubId: string) { return this.store.findUserByGitHubId(githubId); }
+  async linkGitHubUser(userId: string, input: Record<string, any> = {}) { return this.store.linkGitHubUser(userId, input); }
   async addMember(input: Record<string, any>) { return this.store.addMember(input); }
   async listMembershipsForUser(userId: string) { return this.store.listMembershipsForUser(userId); }
   async createProject(input: Record<string, any>) { return this.store.createProject(input); }
@@ -121,6 +123,31 @@ export class PrismaControlPlaneRepository {
 
   async findUserByEmail(email: string) {
     return this.prisma.user.findUnique({ where: { email: String(email || '').toLowerCase() } });
+  }
+
+  async findUserByGitHubId(githubId: string) {
+    const id = String(githubId || '').trim();
+    if (!id) return null;
+    return this.prisma.user.findFirst({ where: { githubId: id } });
+  }
+
+  async linkGitHubUser(userId: string, input: Record<string, any> = {}) {
+    const existing = input.githubId ? await this.findUserByGitHubId(input.githubId) : null;
+    if (existing && String(existing.id) !== String(userId)) {
+      const error = new Error('github account is already linked to another user');
+      (error as any).statusCode = 403;
+      throw error;
+    }
+    const data: Record<string, any> = {};
+    if (input.githubId !== null && input.githubId !== undefined && String(input.githubId).trim()) data.githubId = String(input.githubId);
+    if (input.avatarUrl !== null && input.avatarUrl !== undefined && String(input.avatarUrl).trim()) data.avatarUrl = String(input.avatarUrl);
+    if (input.name !== null && input.name !== undefined && String(input.name).trim()) data.name = String(input.name);
+    const user = Object.keys(data).length
+      ? await this.prisma.user.update({ where: { id: userId }, data })
+      : await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new Error(`user not found: ${userId}`);
+    await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'user.github:link', targetType: 'user', targetId: userId, metadata: maskSecrets({ githubId: input.githubId || user.githubId || null, githubLogin: input.githubLogin || null }) } });
+    return redactUser(user);
   }
 
   async addMember(input: Record<string, any>) {

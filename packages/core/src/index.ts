@@ -19,11 +19,11 @@ export { compileResourceProvisioningPlan, compileProjectProvisioning, provisionP
 export { createWorkflowJobRecord, processNextWorkflowJob, processWorkflowQueue, claimWorkflowJobRecord, completeWorkflowJobRecord, failWorkflowJobRecord, WORKFLOW_TYPES, WORKFLOW_STATUSES } from './workflows.ts';
 export { organizationScopeFromProjectInput, projectScopeFromInput } from './scope.ts';
 export { signJwtHs256, verifyJwtHs256, authorizeRequest, subjectFromRequest, requireAction, requireScope } from './auth.ts';
-export { hashPassword, verifyPassword, normalizeEmail, createSessionToken, sessionPayloadForUser, personalOrganizationSlug } from './identity.ts';
+export { hashPassword, verifyPassword, normalizeEmail, createSessionToken, sessionPayloadForUser, personalOrganizationSlug, configuredAdminEmails, signupPolicyForAccount, shouldPromoteFirstLogin } from './identity.ts';
 export { runtimeConfigStatus, assertRuntimeKeys, secretEncryptionConfigured } from './config.ts';
 export { sealSecret, openSecret, secureRandomSecret, publicSecretRecord } from './secret-vault.ts';
 export { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
 export { buildPostgresProviderPlan, provisionPostgresProvider, providerConsoleSurface } from './resource-providers.ts';
-export { parseGitHubRepository, githubIntegrationSummary, githubCloneOptionsFromIntegration, verifyGitHubWebhookSignature, githubWebhookActionPlan, githubWebhookOutboundPlan, githubOAuthLoginPlan } from './github-integration.ts';
+export { parseGitHubRepository, githubIntegrationSummary, githubCloneOptionsFromIntegration, verifyGitHubWebhookSignature, githubWebhookActionPlan, githubWebhookOutboundPlan, githubOAuthLoginPlan, deterministicGitHubCallbackAllowed } from './github-integration.ts';
 export { createControlPlaneRepository, resolveControlPlaneRepositoryConfig, InMemoryControlPlaneRepository, PrismaControlPlaneRepository } from './persistence.ts';
 export type * from './types.ts';

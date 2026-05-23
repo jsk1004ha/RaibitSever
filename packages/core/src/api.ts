@@ -2,12 +2,12 @@ import { RAIBITSERVERControlPlane } from './control-plane.ts';
 import { isSecretKey, maskSecrets } from './secrets.ts';
 import { authorizeRequest, requireAction, requireScope, signJwtHs256, subjectFromRequest } from './auth.ts';
 import { organizationScopeFromProjectInput } from './scope.ts';
-import { createSessionToken, hashPassword, normalizeEmail, personalOrganizationSlug, verifyPassword } from './identity.ts';
+import { createSessionToken, hashPassword, normalizeEmail, personalOrganizationSlug, shouldPromoteFirstLogin, signupPolicyForAccount, verifyPassword } from './identity.ts';
 import { runtimeConfigStatus } from './config.ts';
 import { normalizeEnvEntries, parseDotEnv } from './env-file.ts';
 import { can } from './rbac.ts';
 import { validateServiceSecurity } from './security.ts';
-import { githubOAuthLoginPlan } from './github-integration.ts';
+import { deterministicGitHubCallbackAllowed, githubOAuthLoginPlan } from './github-integration.ts';
 
 export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), options: Record<string, any> = {}) {
   const auth = options.auth || authConfigFromEnv();
@@ -31,14 +31,12 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
         const email = normalizeEmail(body.email);
         if (controlPlane.store.findUserByEmail(email)) return send(res, 409, { error: 'user_already_exists' });
+        const passwordHash = hashPassword(body.password);
         const organizationSlug = body.organizationSlug || body.orgSlug || personalOrganizationSlug(email);
         if (controlPlane.store.findOrganizationBySlug(organizationSlug)) return send(res, 409, { error: 'organization_slug_already_exists' });
         const organization = controlPlane.store.createOrganization({ name: body.organizationName || organizationSlug, slug: organizationSlug, plan: body.plan || 'free' });
-        const adminEmails = String(process.env.ADMIN_EMAILS || '').split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
-        const isAdmin = adminEmails.includes(email);
-        const accountType = isAdmin ? (body.accountType || (body.plan === 'club' ? 'CLUB_MEMBER' : 'NON_CLUB')) : 'NON_CLUB';
-        const approvalStatus = isAdmin ? (body.approvalStatus || 'APPROVED') : 'PENDING';
-        const user = controlPlane.store.createUser({ name: body.name || email, email, passwordHash: hashPassword(body.password), role: isAdmin ? 'ADMIN' : 'USER', accountType, approvalStatus });
+        const policy = signupPolicyForAccount(body, email, { firstUser: controlPlane.store.users.size === 0 });
+        const user = controlPlane.store.createUser({ name: body.name || email, email, passwordHash, role: policy.role, accountType: policy.accountType, approvalStatus: policy.approvalStatus });
         const membership = controlPlane.store.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
         const token = createSessionToken({ ...user, email }, [membership], auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: body.expiresInSeconds || 3600 });
         return send(res, 201, { user, organization, membership, token });
@@ -46,8 +44,11 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       if (method === 'POST' && url.pathname === '/auth/login') {
         const body = await readJson(req);
         if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
-        const user = controlPlane.store.findUserByEmail(normalizeEmail(body.email));
+        let user = controlPlane.store.findUserByEmail(normalizeEmail(body.email));
         if (!user || !verifyPassword(body.password, user.passwordHash)) return send(res, 401, { error: 'invalid_credentials' });
+        if (shouldPromoteFirstLogin(user, [...controlPlane.store.users.values()])) {
+          user = controlPlane.store.approveUser(user.id, { accountType: 'CLUB_MEMBER', role: 'ADMIN' });
+        }
         const memberships = controlPlane.store.listMembershipsForUser(user.id);
         const token = createSessionToken(user, memberships, auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: body.expiresInSeconds || 3600 });
         const { passwordHash: _passwordHash, ...publicUser } = user;
@@ -57,7 +58,33 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         return send(res, 200, githubOAuthLoginPlan(Object.fromEntries(url.searchParams.entries())));
       }
       if (method === 'GET' && url.pathname === '/auth/github/callback') {
-        return send(res, 200, { provider: 'github', received: true, codePresent: Boolean(url.searchParams.get('code')), state: url.searchParams.get('state'), mode: 'deterministic-local-callback' });
+        const input = Object.fromEntries(url.searchParams.entries());
+        const emailInput = input.email || input.githubEmail || input.userEmail || null;
+        if (!emailInput) return send(res, 200, { provider: 'github', received: true, codePresent: Boolean(url.searchParams.get('code')), state: url.searchParams.get('state'), mode: 'deterministic-local-callback', linked: false });
+        if (!deterministicGitHubCallbackAllowed(input)) return send(res, 403, { error: 'deterministic_github_callback_disabled' });
+        if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
+        const email = normalizeEmail(emailInput);
+        const githubId = input.githubId || input.id || input.github_id || null;
+        const githubLogin = input.login || input.username || null;
+        let user = controlPlane.store.findUserByEmail(email);
+        const githubOwner = githubId ? controlPlane.store.findUserByGitHubId(githubId) : null;
+        if (githubOwner && (!user || String(githubOwner.id) !== String(user.id))) return send(res, 409, { error: 'github_account_already_linked' });
+        let created = false;
+        let organization = null;
+        if (user) {
+          user = controlPlane.store.linkGitHubUser(user.id, { githubId, githubLogin, avatarUrl: input.avatarUrl || input.avatar_url || null, name: input.name || user.name, actorUserId: user.id });
+        } else {
+          const organizationSlug = input.organizationSlug || personalOrganizationSlug(email);
+          if (controlPlane.store.findOrganizationBySlug(organizationSlug)) return send(res, 409, { error: 'organization_slug_already_exists' });
+          organization = controlPlane.store.createOrganization({ name: input.organizationName || organizationSlug, slug: organizationSlug, plan: input.plan || 'free' });
+          const policy = signupPolicyForAccount(input, email, { firstUser: controlPlane.store.users.size === 0 });
+          user = controlPlane.store.createUser({ name: input.name || githubLogin || email, email, githubId, avatarUrl: input.avatarUrl || input.avatar_url || null, role: policy.role, accountType: policy.accountType, approvalStatus: policy.approvalStatus });
+          controlPlane.store.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
+          created = true;
+        }
+        const memberships = controlPlane.store.listMembershipsForUser(user.id);
+        const token = createSessionToken({ ...user, email }, memberships, auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: input.expiresInSeconds || 3600 });
+        return send(res, 200, { provider: 'github', received: true, codePresent: Boolean(url.searchParams.get('code')), state: url.searchParams.get('state'), mode: 'deterministic-local-callback', linked: true, created, user: publicUser(user), organization, memberships, token });
       }
       if (method === 'GET' && url.pathname === '/auth/me') {
         const subject = subjectFromRequest(req, auth);
@@ -217,28 +244,32 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const serviceId = decodeURIComponent(serviceDeploymentsMatch[1]);
         const service = controlPlane.store.services.get(serviceId);
         if (!service) return send(res, 404, { error: 'service_not_found' });
+        const body = await readJson(req);
+        const deploymentType = body.deploymentType || body.type || 'production';
         const subject = authorizeAction(req, 'deploy:run', auth);
         await assertProjectAccess(controlPlane.store, service.projectId, subject);
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxDeploymentsPerDay', increment: 1 });
+        if (deploymentType === 'preview') controlPlane.store.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxPreviewDeployments', increment: 1 });
         const security = validateServiceSecurity(service.desiredState || service.desiredSpec || service);
         if (!security.ok) return send(res, 403, { error: 'security_policy_violation', findings: security.findings });
-        const body = await readJson(req);
-        const deployment = controlPlane.store.createDeployment({ ...body, serviceId, deploymentType: body.deploymentType || 'production' });
-        const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: body.deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId: service.projectId, deploymentId: deployment.id } });
+        const deployment = controlPlane.store.createDeployment({ ...body, serviceId, deploymentType });
+        const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId: service.projectId, deploymentId: deployment.id } });
         return send(res, 202, { ...deployment, workflowJob });
       }
       const projectServiceDeploymentsMatch = url.pathname.match(/^\/projects\/([^/]+)\/services\/([^/]+)\/deployments$/);
       if (projectServiceDeploymentsMatch && method === 'POST') {
         const [projectId, serviceId] = projectServiceDeploymentsMatch.slice(1).map(decodeURIComponent);
+        const body = await readJson(req);
+        const deploymentType = body.deploymentType || body.type || 'production';
         const subject = authorizeAction(req, 'deploy:run', auth);
         await assertServiceAccess(controlPlane.store, projectId, serviceId, subject);
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxDeploymentsPerDay', increment: 1 });
+        if (deploymentType === 'preview') controlPlane.store.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxPreviewDeployments', increment: 1 });
         const service = controlPlane.store.services.get(serviceId);
         const security = validateServiceSecurity(service?.desiredState || service?.desiredSpec || service || {});
         if (!security.ok) return send(res, 403, { error: 'security_policy_violation', findings: security.findings });
-        const body = await readJson(req);
-        const deployment = controlPlane.store.createDeployment({ ...body, serviceId, deploymentType: body.deploymentType || 'production' });
-        const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: body.deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId, deploymentId: deployment.id } });
+        const deployment = controlPlane.store.createDeployment({ ...body, serviceId, deploymentType });
+        const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId, deploymentId: deployment.id } });
         return send(res, 202, { ...deployment, workflowJob });
       }
       const deploymentLogsMatch = url.pathname.match(/^\/deployments\/([^/]+)\/(logs|events)$/);
@@ -276,23 +307,24 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       const adminApproveMatch = url.pathname.match(/^\/admin\/users\/([^/]+)\/(approve|reject)$/);
       if (adminApproveMatch && method === 'POST') {
         const subject = authorizeAction(req, 'audit:read', auth);
-        if (subject.userRole !== 'ADMIN' && subject.role !== 'owner' && subject.global !== true) return send(res, 403, { error: 'admin_required' });
+        if (subject.userRole !== 'ADMIN' && subject.global !== true) return send(res, 403, { error: 'admin_required' });
         const [userId, action] = adminApproveMatch.slice(1).map(decodeURIComponent);
         const body = await readJson(req);
-        return send(res, 200, action === 'approve' ? controlPlane.store.approveUser(userId, body) : controlPlane.store.rejectUser(userId));
+        return send(res, 200, action === 'approve' ? controlPlane.store.approveUser(userId, { ...body, actorUserId: subject.id }) : controlPlane.store.rejectUser(userId, { actorUserId: subject.id }));
       }
       const adminQuotaMatch = url.pathname.match(/^\/admin\/users\/([^/]+)\/quota$/);
       if (adminQuotaMatch && (method === 'PATCH' || method === 'POST')) {
         const subject = authorizeAction(req, 'audit:read', auth);
-        if (subject.userRole !== 'ADMIN' && subject.role !== 'owner' && subject.global !== true) return send(res, 403, { error: 'admin_required' });
+        if (subject.userRole !== 'ADMIN' && subject.global !== true) return send(res, 403, { error: 'admin_required' });
         const body = await readJson(req);
         return send(res, 200, controlPlane.store.setQuota({ ...body, userId: decodeURIComponent(adminQuotaMatch[1]) }));
       }
       if (method === 'GET' && url.pathname === '/usage/me') {
         const subject = authorizeAction(req, 'metrics:read', auth);
         const usage = controlPlane.store.usageRecords.filter((row) => String(row.userId) === String(subject.id));
-        const quota = [...controlPlane.store.quotas.values()].find((row) => String(row.userId) === String(subject.id));
-        return send(res, 200, { accountType: subject.accountType, approvalStatus: subject.approvalStatus, unlimited: subject.accountType === 'CLUB_MEMBER', quota: quota || null, usage });
+        const unlimited = subject.userRole === 'ADMIN' || subject.accountType === 'CLUB_MEMBER';
+        const quota = unlimited ? null : [...controlPlane.store.quotas.values()].find((row) => String(row.userId) === String(subject.id));
+        return send(res, 200, { accountType: subject.accountType, approvalStatus: subject.approvalStatus, unlimited, quota: quota || null, usage });
       }
       const envMatch = url.pathname.match(/^\/projects\/([^/]+)\/services\/([^/]+)\/env$/);
       if (envMatch && method === 'GET') {

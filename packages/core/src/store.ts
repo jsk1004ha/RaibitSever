@@ -78,6 +78,26 @@ export class ControlPlaneStore {
     return user ? deepClone(user) : null;
   }
 
+  findUserByGitHubId(githubId: string) {
+    const id = String(githubId || '').trim();
+    if (!id) return null;
+    const user = [...this.users.values()].find((candidate) => String(candidate.githubId || '') === id);
+    return user ? deepClone(user) : null;
+  }
+
+  linkGitHubUser(userId: string, { githubId = null, avatarUrl = null, name = null, actorUserId = 'system', githubLogin = null }: Record<string, any> = {}) {
+    const user = this.users.get(userId);
+    if (!user) throw notFound(`user not found: ${userId}`);
+    const existing = githubId ? this.findUserByGitHubId(githubId) : null;
+    if (existing && String(existing.id) !== String(userId)) throw forbidden('github account is already linked to another user');
+    if (githubId !== null && githubId !== undefined && String(githubId).trim()) user.githubId = String(githubId);
+    if (avatarUrl !== null && avatarUrl !== undefined && String(avatarUrl).trim()) user.avatarUrl = String(avatarUrl);
+    if (name !== null && name !== undefined && String(name).trim()) user.name = String(name);
+    user.updatedAt = nowIso();
+    this.audit(actorUserId, 'user.github:link', 'user', userId, { githubId: user.githubId || null, githubLogin: githubLogin || null });
+    return redactUser(deepClone(user));
+  }
+
   addMember({ organizationId, userId, role = 'developer' }: Record<string, any>) {
     const existing = this.members.find((member) => member.organizationId === organizationId && member.userId === userId);
     if (existing) {
@@ -466,7 +486,7 @@ export class ControlPlaneStore {
     return deepClone(row);
   }
 
-  approveUser(userId: string, { accountType = 'NON_CLUB', role = null }: Record<string, any> = {}) {
+  approveUser(userId: string, { accountType = 'NON_CLUB', role = null, actorUserId = 'system' }: Record<string, any> = {}) {
     const user = this.users.get(userId);
     if (!user) throw notFound(`user not found: ${userId}`);
     user.approvalStatus = 'APPROVED';
@@ -474,16 +494,16 @@ export class ControlPlaneStore {
     if (role) user.role = role;
     user.updatedAt = nowIso();
     if (accountType === 'NON_CLUB') this.setQuota({ userId, accountType });
-    this.audit('system', 'user:approve', 'user', userId, { accountType });
+    this.audit(actorUserId, 'user:approve', 'user', userId, { accountType });
     return redactUser(deepClone(user));
   }
 
-  rejectUser(userId: string) {
+  rejectUser(userId: string, { actorUserId = 'system' }: Record<string, any> = {}) {
     const user = this.users.get(userId);
     if (!user) throw notFound(`user not found: ${userId}`);
     user.approvalStatus = 'REJECTED';
     user.updatedAt = nowIso();
-    this.audit('system', 'user:reject', 'user', userId, {});
+    this.audit(actorUserId, 'user:reject', 'user', userId, {});
     return redactUser(deepClone(user));
   }
 
@@ -491,12 +511,18 @@ export class ControlPlaneStore {
     const user = this.users.get(userId);
     if (!user) return true;
     if (user.role === 'ADMIN' || user.accountType === 'CLUB_MEMBER') return true;
-    if (user.approvalStatus !== 'APPROVED') throw forbidden(`user ${userId} is ${user.approvalStatus || 'PENDING'} and cannot ${action}`);
+    if (user.approvalStatus !== 'APPROVED') {
+      this.audit(userId, 'quota:block', action || 'action', metric || action || 'unknown', { reason: user.approvalStatus || 'PENDING' });
+      throw forbidden(`user ${userId} is ${user.approvalStatus || 'PENDING'} and cannot ${action}`);
+    }
     const quota = [...this.quotas.values()].find((row) => row.userId === userId) || this.setQuota({ userId, accountType: user.accountType || 'NON_CLUB' });
     if (metric && quota[metric] !== undefined) {
       const current = this.quotaUsageForUser(userId)[metric] || 0;
       const requested = current + Number(increment || 0);
-      if (requested > Number(quota[metric])) throw forbidden(`quota exceeded: ${metric} (${requested}/${quota[metric]})`);
+      if (requested > Number(quota[metric])) {
+        this.audit(userId, 'quota:block', action || 'action', metric, { current, increment: Number(increment || 0), limit: quota[metric] });
+        throw forbidden(`quota exceeded: ${metric} (${requested}/${quota[metric]})`);
+      }
     }
     return true;
   }
