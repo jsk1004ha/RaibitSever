@@ -14,14 +14,19 @@ test('Go builder worker contract is executable when Go exists or statically pres
     return;
   }
 
-  const [main, worker, store] = await Promise.all([
+  const [main, worker, store, postgresStore] = await Promise.all([
     fs.readFile('services/builder/cmd/builder/main.go', 'utf8'),
     fs.readFile('services/builder/internal/worker/builder.go', 'utf8'),
     fs.readFile('services/builder/internal/controlplane/store.go', 'utf8'),
+    fs.readFile('services/builder/internal/controlplane/postgres_store.go', 'utf8'),
   ]);
   assert.match(main, /StateFileFromEnv/);
+  assert.match(main, /PostgresDSNFromEnv/);
   assert.match(store, /ClaimNextWorkflowJob/);
   assert.match(store, /AppendBuildLog/);
+  assert.match(postgresStore, /FOR UPDATE SKIP LOCKED/);
+  assert.match(postgresStore, /RAIBITSERVER_CONTROL_PLANE_DATABASE_URL/);
+  assert.match(postgresStore, /AppendDeploymentEvent/);
   assert.match(worker, /git.*clone/s);
   assert.match(worker, /docker.*buildx.*build/s);
   assert.match(worker, /DeploymentStatusImageReady/);

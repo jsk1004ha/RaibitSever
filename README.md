@@ -55,6 +55,8 @@ node src/cli.js compose examples/docker-compose.yml >/tmp/raibitserver-compose-p
 pnpm prisma:validate
 ```
 
+For a focused matrix by change area, see `docs/verification-commands.md`.
+
 If Go is installed:
 
 ```sh
@@ -68,6 +70,8 @@ done
 Core:
 
 - `DATABASE_URL`
+- `RAIBITSERVER_CONTROL_PLANE_DATABASE_URL` (Go builder worker DB store; falls back to `DATABASE_URL` only when `RAIBITSERVER_CONTROL_PLANE_STORE=postgresql`)
+- `RAIBITSERVER_CONTROL_PLANE_FILE` (local file-state worker mode)
 - `REDIS_URL`
 - `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`
 - `REGISTRY_URL`
@@ -120,7 +124,7 @@ The root `src/cli.js` remains the deterministic no-server planner/executor CLI f
 - PR preview deployment fixture,
 - build/Kubernetes/provisioning dry-run artifacts.
 
-Dry mode reports `deterministic-dry-run` or `dry-run-container-ready` and always keeps build, Kubernetes, and provisioning worker actions non-side-effecting. Live mode is separate: `pnpm e2e:live` requires Docker, kubectl, kind/k3d, and the explicit `--execute` script contract before it runs local registry, kind/k3d cluster, ingress, build, Kubernetes apply, and provisioning commands against the local environment. Auto/dry mode records a deterministic fallback plan when those tools are missing.
+Dry mode reports `deterministic-dry-run` or `dry-run-container-ready` and always keeps build, Kubernetes, and provisioning worker actions non-side-effecting. Live mode is separate: `pnpm e2e:live` requires Docker, kubectl, kind/k3d, and the explicit `--execute` script contract before it runs local registry, kind/k3d cluster, local-registry-to-cluster wiring, ingress, build, Kubernetes apply, and provisioning commands against the local environment. Auto/dry mode records a deterministic fallback plan when those tools are missing. An optional manually dispatched GitHub Actions workflow lives at `.github/workflows/live-e2e.yml` for Docker/kind-capable runners.
 
 ## Account and quota model
 
@@ -158,7 +162,7 @@ Dry mode reports `deterministic-dry-run` or `dry-run-container-ready` and always
 
 ## Production runbook and current limitations
 
-1. Configure production persistence: `DATABASE_URL` for the control-plane PostgreSQL DB plus `RAIBITSERVER_SECRET_ENCRYPTION_KEY`/`ENCRYPTION_KEY` with at least 32 characters. The in-memory store is only for tests/dev fallback.
+1. Configure production persistence: `DATABASE_URL` for the API/control-plane PostgreSQL DB plus `RAIBITSERVER_SECRET_ENCRYPTION_KEY`/`ENCRYPTION_KEY` with at least 32 characters. The Go builder can poll the same Prisma/PostgreSQL tables with `RAIBITSERVER_CONTROL_PLANE_DATABASE_URL` or with `RAIBITSERVER_CONTROL_PLANE_STORE=postgresql` plus `DATABASE_URL`; `RAIBITSERVER_CONTROL_PLANE_FILE` remains the deterministic local worker mode. The in-memory store is only for tests/dev fallback.
 2. Configure auth and admin bootstrap: `RAIBITSERVER_AUTH_JWT_SECRET`, `ADMIN_EMAILS`, and hosted domain settings (`BASE_DOMAIN`, DNS, TLS/ingress).
 3. Configure GitHub App/OAuth if repository import and previews are needed: `GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_PRIVATE_KEY`, and `GITHUB_WEBHOOK_SECRET`.
 4. Configure build/runtime infrastructure: registry (`REGISTRY_URL`), Docker/BuildKit or builder service access, Kubernetes credentials (`KUBECONFIG`/in-cluster config), ingress controller, and resource limits.
@@ -170,4 +174,5 @@ Current limitations:
 - Real GitHub OAuth/App network calls require configured GitHub credentials; local tests use deterministic webhook/status/check-run plans.
 - Execute-mode Docker/BuildKit build, registry push, Kubernetes apply, and ingress setup require local Docker/kind-or-k3d/kubectl or production infrastructure.
 - Dry E2E proves the full control-plane contract and dry-run worker artifacts without those tools; live E2E is reserved for explicit local-cluster execution.
+- Go builder has a PostgreSQL control-plane store for production job claim/update/log writes; orchestrator and provisioner still need matching production DB/API stores beyond their file-state/local contracts.
 - Node.js 24+ remains required until the `node:sqlite` console path is replaced with a Node 22-compatible SQLite dependency.

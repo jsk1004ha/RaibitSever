@@ -32,6 +32,8 @@ cat .raibitserver-work/local-stack.json
 
 Missing tools are reported before any side-effecting build or Kubernetes operation starts.
 
+For kind, the live setup plan must include containerd registry mirror configuration, Docker network connection to `raibitserver-registry`, and the `kube-public/local-registry-hosting` ConfigMap. If image pulls fail, inspect `.raibitserver-work/e2e-report.json` under `liveSetupResults` before retrying.
+
 ## Deployment blocked by security policy
 
 RAIBITSERVER blocks privileged containers, root execution, host networking, host PID/IPC, hostPath, capability additions, writable non-`/tmp` mounts, service-account token automount, and non-`RuntimeDefault` seccomp. Fix the service desired state and retry deployment.

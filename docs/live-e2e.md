@@ -27,8 +27,13 @@ When live mode is requested with `--execute` and tools are available, the E2E pl
 
 1. local registry `raibitserver-registry` on port `5000`,
 2. disposable `kind` or `k3d` cluster `raibitserver-e2e`,
-3. ingress-nginx install/check for local HTTP routing,
-4. build/push, Kubernetes apply, rollout/log evidence, and provider provisioning checks.
+3. registry-to-cluster wiring:
+   - kind gets a containerd mirror for `localhost:5000`, Docker network connection to the registry container, and the `kube-public/local-registry-hosting` ConfigMap,
+   - k3d is created with `--registry-use`,
+4. ingress-nginx install plus readiness wait for local HTTP routing,
+5. build/push, Kubernetes apply, rollout/log evidence, and provider provisioning checks.
+
+The optional manual CI workflow `.github/workflows/live-e2e.yml` runs the same live command on a Docker/kubectl/kind-capable runner. It defaults to `["self-hosted","linux"]` so normal pull requests keep using deterministic dry E2E.
 
 The setup commands are written into `.raibitserver-work/e2e-report.json` under `liveSetup`. Dry mode writes the same shape with `clusterEngine: dry-run` so CI can assert the contract without side effects.
 
@@ -38,6 +43,7 @@ Live mode writes `.raibitserver-work/e2e-report.json` with:
 
 - detected tool readiness,
 - local registry/cluster/ingress setup commands and results,
+- whether the local registry is planned as cluster-reachable,
 - example app HTTP 200 evidence,
 - PostgreSQL provider dry-run/env-injection evidence,
 - SQLite DB console query evidence,

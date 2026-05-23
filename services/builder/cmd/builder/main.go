@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	buildplan "github.com/raibitserver/builder/internal/build"
 	"github.com/raibitserver/builder/internal/controlplane"
@@ -24,6 +25,22 @@ func main() {
 		_ = json.NewEncoder(os.Stdout).Encode(result)
 		return
 	}
+	if dsn := controlplane.PostgresDSNFromEnv(environment()); dsn != "" {
+		store, closeStore, err := controlplane.OpenPostgresStore(ctx, dsn)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "builder PostgreSQL control-plane store failed: %v\n", err)
+			os.Exit(1)
+		}
+		defer closeStore()
+		builder := worker.New(store, worker.OSRunner{}, worker.ConfigFromEnv())
+		result, err := builder.RunOnce(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "builder workflow failed: %v\n", err)
+			os.Exit(1)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(result)
+		return
+	}
 
 	mode := os.Getenv("RAIBITSERVER_BUILD_MODE")
 	if mode == "" {
@@ -35,4 +52,15 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("raibitserver builder mode=%s action=build-or-verify-image state=env-only\n", plan.Mode)
+}
+
+func environment() map[string]string {
+	values := map[string]string{}
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			values[key] = value
+		}
+	}
+	return values
 }

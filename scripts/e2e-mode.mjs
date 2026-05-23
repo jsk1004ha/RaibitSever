@@ -105,14 +105,19 @@ export function liveE2ESetupPlan(tools = {}, options = {}) {
   const registryPort = Number(options.registryPort || 5000);
   const clusterEngine = tools.kind ? 'kind' : tools.k3d ? 'k3d' : 'unavailable';
   const commands = [
-    `docker inspect ${registryName} || docker run -d -p ${registryPort}:5000 --restart=always --name ${registryName} registry:2`,
+    `docker inspect ${shellQuote(registryName)} >/dev/null 2>&1 || docker run -d -p ${registryPort}:5000 --restart=always --name ${shellQuote(registryName)} registry:2; docker start ${shellQuote(registryName)} >/dev/null`,
     clusterEngine === 'kind'
-      ? `kind get clusters | grep -qx ${clusterName} || kind create cluster --name ${clusterName}`
-      : `k3d cluster list ${clusterName} >/dev/null 2>&1 || k3d cluster create ${clusterName} --registry-use ${registryName}:5000`,
+      ? kindCreateClusterCommand({ clusterName, registryName, registryPort })
+      : `k3d cluster list ${shellQuote(clusterName)} >/dev/null 2>&1 || k3d cluster create ${shellQuote(clusterName)} --agents 1 --registry-use ${shellQuote(`${registryName}:5000`)} -p "80:80@loadbalancer"`,
+    ...(clusterEngine === 'kind' ? [
+      `docker network inspect kind >/dev/null 2>&1 && docker network connect kind ${shellQuote(registryName)} 2>/dev/null || true`,
+      kindLocalRegistryConfigMapCommand({ registryPort }),
+    ] : []),
     'kubectl get namespace ingress-nginx || kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml',
+    'kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=180s',
     `kubectl get nodes -o wide && kubectl get pods -A`,
   ];
-  return { clusterEngine, clusterName, registryName, registryPort, ingress: 'ingress-nginx', commands };
+  return { clusterEngine, clusterName, registryName, registryPort, registryReachableFromCluster: clusterEngine !== 'unavailable', ingress: 'ingress-nginx', commands };
 }
 
 export function deterministicE2EFallbackPlan(missingTools = []) {
@@ -123,4 +128,41 @@ export function deterministicE2EFallbackPlan(missingTools = []) {
     reason: missingTools.length ? `missing live tool group(s): ${missingTools.join(', ')}` : 'execute flag not set',
     commands: [],
   };
+}
+
+function kindCreateClusterCommand({ clusterName, registryName, registryPort }) {
+  return `kind get clusters | grep -qx ${shellQuote(clusterName)} || cat <<'KIND_CONFIG' | kind create cluster --name ${shellQuote(clusterName)} --config=-
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+containerdConfigPatches:
+- |-
+  [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:${registryPort}"]
+    endpoint = ["http://${registryName}:5000"]
+nodes:
+- role: control-plane
+  extraPortMappings:
+  - containerPort: 80
+    hostPort: 80
+    protocol: TCP
+KIND_CONFIG`;
+}
+
+function kindLocalRegistryConfigMapCommand({ registryPort }) {
+  return `cat <<'KIND_REGISTRY' | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: local-registry-hosting
+  namespace: kube-public
+data:
+  localRegistryHosting.v1: |
+    host: "localhost:${registryPort}"
+    help: "https://kind.sigs.k8s.io/docs/user/local-registry/"
+KIND_REGISTRY`;
+}
+
+function shellQuote(value) {
+  const text = String(value);
+  if (/^[A-Za-z0-9_./:@-]+$/.test(text)) return text;
+  return `'${text.replaceAll("'", "'\"'\"'")}'`;
 }

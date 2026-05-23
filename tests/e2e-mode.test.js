@@ -28,6 +28,7 @@ test('live e2e requires explicit execute plus container and cluster tools', () =
   assert.equal(plan.label, 'live-container-execute');
   assert.equal(plan.setup.clusterEngine, 'k3d');
   assert.equal(plan.setup.commands.some((command) => command.includes('registry:2')), true);
+  assert.equal(plan.setup.commands.some((command) => command.includes('--registry-use')), true);
 });
 
 test('auto mode only escalates to live when execute is explicit and tools are ready', () => {
@@ -40,5 +41,10 @@ test('live setup plan chooses kind or k3d and includes registry plus ingress ste
   const kindPlan = liveE2ESetupPlan({ docker: true, kubectl: true, kind: true });
   assert.equal(kindPlan.clusterEngine, 'kind');
   assert.equal(kindPlan.registryPort, 5000);
+  assert.equal(kindPlan.registryReachableFromCluster, true);
+  assert.equal(kindPlan.commands.some((command) => command.includes('containerdConfigPatches')), true);
+  assert.equal(kindPlan.commands.some((command) => command.includes('docker network connect kind')), true);
+  assert.equal(kindPlan.commands.some((command) => command.includes('local-registry-hosting')), true);
   assert.equal(kindPlan.commands.some((command) => command.includes('ingress-nginx')), true);
+  assert.equal(kindPlan.commands.some((command) => command.includes('kubectl wait')), true);
 });
