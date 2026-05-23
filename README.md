@@ -130,13 +130,219 @@ node src/cli.js compose examples/docker-compose.yml
 
 | 분류 | 변수 |
 | --- | --- |
-| DB/상태 | `DATABASE_URL`, `RAIBITSERVER_CONTROL_PLANE_DATABASE_URL`, `RAIBITSERVER_CONTROL_PLANE_FILE`, `REDIS_URL` |
-| Secret/Auth | `JWT_SECRET`, `RAIBITSERVER_AUTH_JWT_SECRET`, `ENCRYPTION_KEY`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, `ADMIN_EMAILS` |
-| Build/Runtime | `REGISTRY_URL`, `KUBECONFIG`, `BASE_DOMAIN` |
+| DB/상태 | `DATABASE_URL`, `RAIBITSERVER_PERSISTENCE`, `RAIBITSERVER_CONTROL_PLANE_DATABASE_URL`, `RAIBITSERVER_CONTROL_PLANE_STORE`, `RAIBITSERVER_CONTROL_PLANE_FILE`, `REDIS_URL` |
+| Secret/Auth | `JWT_SECRET`, `RAIBITSERVER_AUTH_JWT_SECRET`, `RAIBITSERVER_AUTH_ISSUER`, `ENCRYPTION_KEY`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, `ADMIN_EMAILS` |
+| Dashboard/API | `PORT`, `RAIBITSERVER_API_URL`, `RAIBITSERVER_DASHBOARD_TOKEN`, `RAIBITSERVER_TOKEN` |
+| Build/Runtime | `REGISTRY_URL`, `RAIBITSERVER_REGISTRY`, `RAIBITSERVER_REGISTRY_USERNAME`, `RAIBITSERVER_REGISTRY_PASSWORD`, `KUBECONFIG`, `RAIBITSERVER_KUBE_CONTEXT`, `BASE_DOMAIN`, `RAIBITSERVER_BASE_DOMAIN`, `RAIBITSERVER_EXECUTE`, `RAIBITSERVER_PUSH` |
 | Object Storage | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` |
-| GitHub App/OAuth | `GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` |
+| Provider | `RAIBITSERVER_POSTGRES_PROVIDER_URL`, `POSTGRES_PROVIDER_URL` |
+| GitHub App/OAuth | `RAIBITSERVER_GITHUB_CLIENT_ID`, `RAIBITSERVER_GITHUB_CLIENT_SECRET`, `RAIBITSERVER_GITHUB_REDIRECT_URI`, `RAIBITSERVER_GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` |
 
 Production 실행 전 필수 설정은 [production 배포 문서](deploy/production/README.md)를 확인하세요.
+
+## 서버 구축 세팅 체크리스트
+
+이 섹션은 베타/production 서버를 직접 구성할 때 누락되기 쉬운 항목을 한 번에 점검하기 위한 운영 체크리스트입니다. 로컬 dry-run은 파일 기반 상태와 mock provider로도 동작하지만, 실제 서버는 **PostgreSQL control-plane DB + Kubernetes runtime + registry + Go worker** 구성이 기본입니다.
+
+### 1. 권장 배포 형태
+
+```txt
+사용자/관리자
+  -> HTTPS Ingress / Load Balancer
+     -> Dashboard(Next.js)
+     -> API(NestJS, /api)
+     -> 사용자 서비스 Ingress(*.apps / *.preview)
+
+비공개 네트워크
+  -> PostgreSQL(control-plane)
+  -> Redis/queue/cache
+  -> Image registry
+  -> Object storage
+  -> Kubernetes API
+  -> Go workers(builder, orchestrator, provisioner, log/metrics ingester)
+```
+
+- **Control plane**: API, Dashboard, Prisma/PostgreSQL, audit/quota/auth 상태를 담당합니다.
+- **Runtime plane**: Kubernetes namespace, Deployment/Service/Ingress, Secret ref, NetworkPolicy를 담당합니다.
+- **Worker plane**: builder가 source를 image로 만들고 registry에 push하며, orchestrator/provisioner가 DB desired state를 실제 Kubernetes/resource 상태로 reconcile합니다.
+- `RAIBITSERVER_CONTROL_PLANE_FILE`은 deterministic local worker 전용입니다. 베타/production에서는 PostgreSQL store를 사용합니다.
+
+### 2. 서버와 클러스터 준비물
+
+| 영역 | 필요 설정 |
+| --- | --- |
+| OS/런타임 | Linux 서버 또는 Kubernetes cluster, Node.js 24+, pnpm 11.1.2, Go 1.22+ |
+| Container build | Docker/BuildKit 또는 Kubernetes 내부 builder, image push 권한이 있는 registry |
+| Kubernetes | `kubectl`, Helm, ingress controller, 기본 StorageClass/PVC, namespace 생성 권한 |
+| Database | PostgreSQL 15+ 권장, Prisma migration 적용 가능해야 함 |
+| Queue/cache | Redis 호환 backend 권장. workflow lease/backlog와 cache에 사용 |
+| TLS/DNS | public load balancer, wildcard DNS, TLS 인증서 또는 cert-manager |
+| Storage | object storage/S3-compatible backend, DB backup 저장소, registry retention 정책 |
+| 관측성 | API health check, worker log, Kubernetes event, audit log, metrics/log 수집 경로 |
+
+단일 서버 베타는 한 노드에 control-plane과 소형 Kubernetes(kind/k3d/k3s 등)를 함께 둘 수 있지만, 외부 사용자를 받는 운영 환경은 control-plane DB, registry, runtime cluster를 분리하는 구성을 권장합니다.
+
+### 3. DNS와 라우팅
+
+`BASE_DOMAIN=raibitserver.app`을 예로 들면 다음 DNS가 ingress/load balancer를 바라봐야 합니다.
+
+| 용도 | 예시 |
+| --- | --- |
+| API | `api.raibitserver.app` |
+| Dashboard/Admin | `admin.raibitserver.app` 또는 `console.raibitserver.app` |
+| 서비스 실행 URL | `*.apps.raibitserver.app` |
+| PR preview URL | `*.preview.raibitserver.app` |
+| 서비스 관리 화면 | `*.console.raibitserver.app` |
+| 리소스 관리 화면 | `*.resources.raibitserver.app` |
+
+서비스/preview host는 `<service>--<project>--<org>` 또는 `pr-<number>--<service>--<project>--<org>` 패턴으로 생성됩니다. 따라서 `*.apps`, `*.preview`, `*.console`, `*.resources` wildcard 인증서를 준비해야 합니다.
+
+### 4. production 환경 변수 예시
+
+아래 값은 예시입니다. 실제 secret은 password manager, sealed secret, cloud secret manager, Kubernetes Secret 등으로 주입하고 저장소에 커밋하지 마세요.
+
+```sh
+# 공통
+NODE_ENV=production
+PORT=3000
+BASE_DOMAIN=raibitserver.app
+RAIBITSERVER_BASE_DOMAIN=raibitserver.app
+
+# Control-plane DB / Prisma
+RAIBITSERVER_PERSISTENCE=prisma
+DATABASE_URL=postgresql://raibitserver:<password>@postgres.internal:5432/raibitserver?schema=public
+RAIBITSERVER_CONTROL_PLANE_STORE=postgresql
+RAIBITSERVER_CONTROL_PLANE_DATABASE_URL=postgresql://raibitserver:<password>@postgres.internal:5432/raibitserver?schema=public
+
+# Auth / secret
+RAIBITSERVER_AUTH_JWT_SECRET=<32바이트-이상-랜덤값>
+RAIBITSERVER_AUTH_ISSUER=raibitserver
+RAIBITSERVER_SECRET_ENCRYPTION_KEY=<32바이트-이상-랜덤값>
+ADMIN_EMAILS=admin@example.com
+
+# Dashboard -> API
+RAIBITSERVER_API_URL=https://api.raibitserver.app/api
+RAIBITSERVER_DASHBOARD_TOKEN=<dashboard-server-side-token>
+
+# Kubernetes / runtime
+KUBECONFIG=/etc/raibitserver/kubeconfig
+RAIBITSERVER_KUBE_CONTEXT=raibitserver-prod
+RAIBITSERVER_EXECUTE=1
+RAIBITSERVER_ROLLOUT_TIMEOUT_SECONDS=300
+
+# Registry / builder
+REGISTRY_URL=registry.raibitserver.app/raibitserver
+RAIBITSERVER_REGISTRY=registry.raibitserver.app
+RAIBITSERVER_REGISTRY_USERNAME=<registry-user>
+RAIBITSERVER_REGISTRY_PASSWORD=<registry-password>
+RAIBITSERVER_PUSH=1
+RAIBITSERVER_BUILD_TIMEOUT_SECONDS=900
+
+# Provider
+REDIS_URL=redis://redis.internal:6379
+RAIBITSERVER_POSTGRES_PROVIDER_URL=postgresql://provider:<password>@postgres-provider.internal:5432/postgres
+S3_ENDPOINT=https://s3.example.com
+S3_ACCESS_KEY=<access-key>
+S3_SECRET_KEY=<secret-key>
+
+# GitHub OAuth/App
+RAIBITSERVER_GITHUB_CLIENT_ID=<github-oauth-client-id>
+RAIBITSERVER_GITHUB_CLIENT_SECRET=<github-oauth-client-secret>
+RAIBITSERVER_GITHUB_REDIRECT_URI=https://api.raibitserver.app/api/auth/github/callback
+RAIBITSERVER_GITHUB_WEBHOOK_SECRET=<webhook-secret>
+GITHUB_APP_ID=<github-app-id>
+GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
+```
+
+운영에서 사용하면 안 되는 개발 편의 변수도 있습니다.
+
+- `RAIBITSERVER_AUTH_DISABLED`, `RAIBITSERVER_AUTH_DEV_HEADERS`, `RAIBITSERVER_AUTH_DEV_TOKEN`, `RAIBITSERVER_ROLE`은 로컬 개발 전용입니다.
+- `RAIBITSERVER_ALLOW_MEMORY_PERSISTENCE=1`은 production 안전 조건을 깨뜨립니다.
+- `RAIBITSERVER_DRY_RUN=1` 또는 `RAIBITSERVER_EXECUTE` 미설정 상태에서는 worker가 실제 apply/push/provision을 수행하지 않습니다.
+
+### 5. 처음 서버 올리는 순서
+
+1. **DB 생성**
+   - PostgreSQL database/user를 만들고 `DATABASE_URL`로 접근을 확인합니다.
+   - production API는 in-memory store를 사용하지 않도록 `RAIBITSERVER_PERSISTENCE=prisma`를 둡니다.
+2. **Prisma 준비**
+   ```sh
+   pnpm install --frozen-lockfile
+   pnpm prisma:validate
+   pnpm prisma:generate
+   pnpm exec prisma migrate deploy --schema prisma/schema.prisma
+   ```
+3. **Secret 준비**
+   - `RAIBITSERVER_AUTH_JWT_SECRET`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, GitHub/registry/provider secret을 secret manager에 저장합니다.
+   - 첫 로그인 사용자는 자동으로 `ADMIN / CLUB_MEMBER / APPROVED`가 됩니다. 운영자는 첫 로그인 계정을 정하고 `ADMIN_EMAILS`에도 break-glass 관리자 이메일을 넣어 둡니다.
+4. **이미지 빌드/배포**
+   - API, Dashboard, Go workers 이미지를 빌드해 registry에 push합니다.
+   - Helm을 사용한다면 `infra/helm/raibitserver/values.yaml`의 `image.registry`, `image.tag`, `ingress.host`, replica 수를 환경에 맞게 덮어씁니다.
+5. **API와 Dashboard 기동**
+   - API는 `/api` global prefix를 사용합니다. health check와 auth/login/signup 경로를 확인합니다.
+   - Dashboard는 `RAIBITSERVER_API_URL=https://api.<BASE_DOMAIN>/api`로 API를 바라보게 합니다.
+6. **Go worker 기동**
+   - builder/orchestrator/provisioner/log-ingester/metrics-ingester에 PostgreSQL control-plane URL을 주입합니다.
+   - 실제 적용 환경에서는 `RAIBITSERVER_EXECUTE=1`, build push가 필요하면 `RAIBITSERVER_PUSH=1`을 설정합니다.
+7. **GitHub App/OAuth 연결**
+   - OAuth callback: `https://api.<BASE_DOMAIN>/api/auth/github/callback`
+   - Webhook URL: `https://api.<BASE_DOMAIN>/api/github/webhooks`
+   - Webhook event는 `push`, `pull_request`, `installation`, `installation_repositories`를 포함합니다.
+   - 자세한 권한과 fixture 검증은 [GitHub App 문서](docs/github-app.md)와 [Preview Deployment 문서](docs/preview-deployments.md)를 참고하세요.
+8. **운영 smoke 검증**
+   - 관리자 첫 로그인 → 조직/프로젝트 생성 → GitHub repo attach 또는 image service 생성 → deployment queue → worker 처리 → 서비스 URL 접속까지 확인합니다.
+   - Disposable cluster 기준 live 검증은 `RAIBITSERVER_EXECUTE=1 pnpm e2e:live`로 실행합니다.
+
+### 6. Kubernetes 보안 기본값
+
+- platform component는 `raibitserver-system` 같은 전용 namespace에 두고, 사용자 workload는 조직/프로젝트별 namespace로 분리합니다.
+- tenant workload에는 restricted Pod Security, non-root 실행, resource requests/limits, Secret ref, NetworkPolicy를 적용합니다.
+- privileged container, hostPath, hostNetwork, root 실행, quota 초과 배포는 배포 전 차단되어야 합니다.
+- orchestrator service account는 필요한 namespace/resource에만 권한을 주고 cluster-admin 상시 권한은 피합니다.
+- registry pull secret과 provider credential은 사용자가 API body로 직접 넘기는 값이 아니라 platform secret/ref로 관리합니다.
+
+### 7. 방화벽과 네트워크
+
+| 방향 | 열어야 할 대상 |
+| --- | --- |
+| Public inbound | 80/443 -> ingress/load balancer |
+| Private inbound | PostgreSQL, Redis, registry, object storage, Kubernetes API |
+| Admin only | SSH, Kubernetes API 직접 접근, DB admin endpoint |
+| Outbound | GitHub API/webhook response, registry, package mirror, object storage |
+
+DB, Redis, provider credential endpoint는 public internet에 직접 노출하지 않습니다. GitHub webhook은 API public endpoint로 받아야 하므로 webhook secret/HMAC 검증이 필수입니다.
+
+### 8. 백업, 복구, 관측성
+
+- PostgreSQL은 PITR 또는 주기 백업을 켜고, migration 전 스냅샷을 남깁니다.
+- object storage bucket, registry image retention, Kubernetes secret 백업 정책을 정합니다.
+- audit log, workflow job, deployment event, preview cleanup event를 일정 기간 보관합니다.
+- `/health` 또는 ingress health check, worker backlog, failed workflow, quota violation, GitHub webhook 401/5xx를 모니터링합니다.
+- 복구 리허설은 “DB restore → API boot → worker reconcile → 기존 서비스 URL 정상화” 순서로 확인합니다.
+
+### 9. go-live 직전 검증
+
+```sh
+pnpm test
+pnpm typecheck
+pnpm lint
+pnpm prisma:validate
+pnpm prisma:generate
+node src/cli.js validate examples/project.json
+node src/cli.js manifest examples/project.json >/tmp/raibitserver-manifest.json
+node src/cli.js compose examples/docker-compose.yml >/tmp/raibitserver-compose-plan.json
+RAIBITSERVER_EXECUTE=1 pnpm e2e:live
+```
+
+Go가 설치된 운영 빌드 환경에서는 다음도 함께 확인합니다.
+
+```sh
+for dir in services/builder services/orchestrator services/provisioner services/log-ingester services/metrics-ingester; do
+  (cd "$dir" && go test ./... && go build ./...)
+done
+```
+
+Production 세부 항목은 [Production 배포 문서](deploy/production/README.md), 검증 기준은 [베타 출시 기준](docs/beta-criteria.md)과 [검증 명령 매트릭스](docs/verification-commands.md)를 함께 확인하세요.
 
 ## DB와 리소스 지원 범위
 
