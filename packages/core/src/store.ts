@@ -224,7 +224,7 @@ export class ControlPlaneStore {
     return deepClone(current);
   }
 
-  createResource({ projectId, name, type = 'database', engine, provider = 'kubernetes-operator', plan = 'shared-small', region = 'local', status = 'provisioning', ...rest }: Record<string, any>) {
+  createResource({ projectId, name, type = 'database', engine, provider = 'shared-provider', plan = 'shared-small', region = 'local', status = 'provisioning', ...rest }: Record<string, any>) {
     const safe = sanitizeTenantResourceInput({ projectId, name, type, engine, provider, plan, region, status, ...rest });
     const normalizedEngine = normalizeResourceEngine(safe.engine || safe.type);
     const id = stableId('res', safe.projectId, safe.name);

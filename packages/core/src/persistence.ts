@@ -1042,7 +1042,7 @@ function resourceData(input: Record<string, any>, options: Record<string, any> =
     slug: safe.slug || slugInput(safe.name),
     type: safe.type || resourceTypeForEngine(engine),
     engine,
-    provider: safe.provider || 'kubernetes-operator',
+    provider: safe.provider || 'shared-provider',
     plan: safe.plan || 'shared-small',
     region: safe.region || 'local',
     version: safe.version || null,

@@ -37,7 +37,7 @@ export function compileResourceProvisioningPlan(resource: Record<string, any>, {
         collection: ['vector-db', 'qdrant'].includes(entry.key) ? (resource.collection || slugify(resource.name || 'collection')) : undefined,
         topic: ['message-queue', 'nats'].includes(entry.key) ? (resource.topic || slugify(resource.name || 'events')) : undefined,
         username: supportsUsername(entry.type) ? (resource.username || slugify(resource.username || resource.name || 'app')) : undefined,
-        provider: resource.provider || 'kubernetes-operator',
+        provider: resource.provider || 'shared-provider',
         backup: resource.backup || defaultBackup(entry.type),
         credentialsSecretName: `${name}-connection`,
       },
@@ -60,7 +60,7 @@ export function compileResourceProvisioningPlan(resource: Record<string, any>, {
     catalogKey: entry.key,
     resourceKind: kind,
     operator: entry.operator,
-    provider: resource.provider || 'kubernetes-operator',
+    provider: resource.provider || 'shared-provider',
     lifecycle: providerLifecycle(entry.key, resource.provider),
     envKeys: entry.env,
     providerPlan: providerPlanForResource(entry.key, resource),
@@ -127,7 +127,7 @@ function defaultStorageGb(engine: string) {
 
 function providerLifecycle(engine: string, provider: any) {
   if (engine === 'postgresql' && String(provider || '').includes('direct')) return ['desired-state-write', 'create-user', 'create-database', 'grant-privileges', 'provider-secret', 'connection-test', 'backup-plan', 'metrics'];
-  return ['desired-state-write', 'kubectl-apply', 'operator-reconcile', 'credentials-secret', 'backup-policy', 'metrics'];
+  return ['desired-state-write', 'shared-provider-reconcile', 'credentials-secret', 'backup-policy', 'metrics'];
 }
 
 function providerPlanForResource(engine: string, resource: Record<string, any>) {

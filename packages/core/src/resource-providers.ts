@@ -12,17 +12,23 @@ const SQL_IDENTIFIER_RE = /^[a-z_][a-z0-9_]{0,62}$/;
 type AnyRecord = Record<string, any>;
 
 export function buildPostgresProviderPlan(resource: AnyRecord = {}, options: AnyRecord = {}) {
-  const databaseName = safeSqlIdentifier(resource.databaseName || resource.database || resource.name || 'app');
+  const databaseName = safeSqlIdentifier(resource.databaseName || resource.database || tenantResourceName(resource, 'db'));
   const username = safeSqlIdentifier(resource.username || `${databaseName}_app`);
   const password = String(options.password || resource.generatedPassword || resource.password || (options.generatePassword === true ? secureRandomSecret(24) : '<generated-provider-password>'));
-  const host = options.host || resource.host || resource.internalHost || `${slugify(resource.name || databaseName)}.${slugify(resource.projectSlug || resource.project || 'project')}.svc.cluster.local`;
+  const providerHost = options.providerHost || resource.providerHost || resource.sharedHost || resource.host || resource.internalHost || 'postgresql.shared-providers.svc.cluster.local';
+  const host = options.poolerHost || resource.poolerHost || process.env.RAIBITSERVER_POSTGRES_POOLER_HOST || providerHost.replace(/^postgresql\./, 'pgbouncer.');
   const port = Number(options.port || resource.port || 5432);
+  const limits = postgresTenantLimits(resource, options);
   const databaseUrl = `postgresql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}/${databaseName}`;
   const adminUrl = options.adminUrl || options.providerAdminUrl || process.env.RAIBITSERVER_POSTGRES_PROVIDER_URL || process.env.POSTGRES_PROVIDER_URL || null;
   const sqlStatements = [
     `CREATE USER ${quoteIdent(username)} WITH PASSWORD ${quoteLiteral(password)}`,
+    `ALTER ROLE ${quoteIdent(username)} CONNECTION LIMIT ${limits.connectionLimit}`,
     `CREATE DATABASE ${quoteIdent(databaseName)} OWNER ${quoteIdent(username)}`,
     `GRANT ALL PRIVILEGES ON DATABASE ${quoteIdent(databaseName)} TO ${quoteIdent(username)}`,
+    `ALTER ROLE ${quoteIdent(username)} IN DATABASE ${quoteIdent(databaseName)} SET statement_timeout = ${quoteLiteral(`${limits.statementTimeoutMs}ms`)}`,
+    `ALTER ROLE ${quoteIdent(username)} IN DATABASE ${quoteIdent(databaseName)} SET idle_in_transaction_session_timeout = ${quoteLiteral(`${limits.idleInTransactionSessionTimeoutMs}ms`)}`,
+    `ALTER ROLE ${quoteIdent(username)} IN DATABASE ${quoteIdent(databaseName)} SET lock_timeout = ${quoteLiteral(`${limits.lockTimeoutMs}ms`)}`,
   ];
   const sql = `${sqlStatements.join(';\n')};\n`;
   const adminCommand = psqlCommand(adminUrl || '<provider-admin-url>', ['--set', 'ON_ERROR_STOP=1'], sql);
@@ -42,6 +48,15 @@ export function buildPostgresProviderPlan(resource: AnyRecord = {}, options: Any
   const plan = {
     engine: 'postgresql',
     provider: options.provider || resource.provider || 'postgresql-direct',
+    sharedProvider: {
+      model: 'shared-postgresql-cluster',
+      providerHost,
+      connectionPath: 'service -> PgBouncer -> PostgreSQL',
+      tenantPrimitive: 'database + cluster-level role',
+      namingWarning: 'PostgreSQL roles are cluster-level; keep generated usernames globally unique per provider.',
+      memoryGuidance: ['cap max_connections at the provider and prefer PgBouncer transaction pooling', 'reduce shared_buffers/work_mem/hash_mem_multiplier when OOM pressure appears', 'set per-role statement_timeout and idle_in_transaction_session_timeout for shared-small tenants'],
+    },
+    tenantLimits: limits,
     databaseName,
     username,
     host,
@@ -57,7 +72,8 @@ export function buildPostgresProviderPlan(resource: AnyRecord = {}, options: Any
     },
     secret: { key: 'DATABASE_URL', valueMasked: maskSecretValue(databaseUrl), providerOwned: true },
     connectionSecret: connectionSecretSummary(env),
-    lifecycle: ['create-user', 'create-database', 'grant-privileges', 'store-provider-secret', 'connection-test', 'backup-plan', 'restore-plan', 'delete-plan'],
+    riskControls: sharedProviderRiskControls('postgresql'),
+    lifecycle: ['shared-provider-select', 'create-user', 'set-role-limits', 'create-database', 'grant-privileges', 'store-provider-secret', 'connection-pooler', 'connection-test', 'backup-plan', 'restore-plan', 'delete-plan'],
   } as AnyRecord;
   Object.defineProperty(plan, 'internal', { value: { adminUrl, sql, databaseUrl, env, adminCommand, testCommand, backupCommand, restoreCommand }, enumerable: false });
   return plan;
@@ -97,17 +113,20 @@ export function buildResourceProviderPlan(resource: AnyRecord = {}, options: Any
   const name = slugify(prepared.name || engine || 'resource');
   const database = slugify(prepared.databaseName || prepared.database || prepared.name || 'app').replace(/-/g, '_');
   const username = slugify(prepared.username || prepared.name || engine || 'app').replace(/-/g, '_');
+  const keyPrefix = redisLike(engine) ? safeRedisKeyPrefix(prepared.keyPrefix || `${slugify(prepared.projectSlug || resource.project || 'project')}:${name}:`) : undefined;
   const bucket = slugify(prepared.bucket || prepared.name || 'bucket');
   const collection = slugify(prepared.collection || prepared.name || 'collection');
   const topic = slugify(prepared.topic || prepared.name || 'events');
   const backupPath = options.backupPath || path.posix.join('/backups', `${name}-${new Date(0).toISOString().slice(0, 10)}`);
-  const commands = providerCommands(engine, { env, name, database, username, bucket, collection, topic, backupPath, sqlitePath: prepared.sqlitePath });
+  const commands = providerCommands(engine, { env, name, database, username, keyPrefix, bucket, collection, topic, backupPath, sqlitePath: prepared.sqlitePath });
   const plan = {
     engine,
     provider: options.provider || resource.provider || defaultProvider(engine),
+    sharedProvider: sharedProviderModelFor(engine, { keyPrefix }),
     resourceName: name,
     databaseName: database,
     username: databaseLike(engine) || engine === 'nats' || engine === 'message-queue' ? username : undefined,
+    keyPrefix,
     bucket: engine === 'object-storage' ? bucket : undefined,
     collection: ['qdrant', 'vector-db', 'mongodb'].includes(engine) ? collection : undefined,
     topic: ['nats', 'message-queue'].includes(engine) ? topic : undefined,
@@ -115,6 +134,7 @@ export function buildResourceProviderPlan(resource: AnyRecord = {}, options: Any
     connectionSecret: connectionSecretSummary(env),
     commands: Object.fromEntries(Object.entries(commands).map(([key, command]) => [key, commandToString(command)])),
     consoleSurface: providerConsoleSurface({ ...resource, engine, desiredSpec: { ...(resource.desiredSpec || {}), ...defaultConsoleSeed(engine, { bucket, collection, topic }) } }),
+    riskControls: sharedProviderRiskControls(engine),
     lifecycle: lifecycleFor(engine),
   } as AnyRecord;
   Object.defineProperty(plan, 'internal', { value: { env, commands }, enumerable: false });
@@ -188,7 +208,7 @@ export function publicResourceProviderPlan(plan: AnyRecord) {
 }
 
 function providerCommands(engine: string, context: AnyRecord): Record<string, CommandSpec> {
-  const { env, database, username, bucket, collection, topic, backupPath, sqlitePath } = context;
+  const { env, database, username, keyPrefix, bucket, collection, topic, backupPath, sqlitePath } = context;
   const primary = primaryConnectionValue(env, engine) || '<provider-owned-connection>';
   switch (engine) {
     case 'mysql':
@@ -202,20 +222,20 @@ function providerCommands(engine: string, context: AnyRecord): Record<string, Co
       };
     case 'mongodb':
       return {
-        create: shellCommand(`mongosh ${maskSecretValue(primary)} --eval "db.createCollection('health')"`),
+        create: shellCommand(`mongosh ${maskSecretValue(primary)} --eval "db = db.getSiblingDB('${database}'); db.createUser({ user: '${username}', pwd: '<provider-password>', roles: [{ role: 'readWrite', db: '${database}' }] }); db.createCollection('health')"`),
         test: shellCommand(`mongosh ${maskSecretValue(primary)} --eval "db.runCommand({ ping: 1 })"`),
-        backup: shellCommand(`mongodump --uri ${maskSecretValue(primary)} --out ${backupPath}`),
-        restore: shellCommand(`mongorestore --uri ${maskSecretValue(primary)} ${backupPath}`),
-        delete: shellCommand(`mongosh ${maskSecretValue(primary)} --eval "db.dropDatabase()"`),
+        backup: shellCommand(`mongodump --uri ${maskSecretValue(primary)} --db ${database} --out ${backupPath}`),
+        restore: shellCommand(`mongorestore --uri ${maskSecretValue(primary)} --db ${database} ${backupPath}/${database}`),
+        delete: shellCommand(`mongosh ${maskSecretValue(primary)} --eval "db = db.getSiblingDB('${database}'); db.dropDatabase()"`),
       };
     case 'redis':
     case 'valkey':
       return {
-        create: shellCommand(`redis-cli -u ${maskSecretValue(primary)} PING`),
+        create: shellCommand(`redis-cli -u ${maskSecretValue(primary)} ACL SETUSER ${username} on \\>'<provider-password>' '~${keyPrefix}*' +@read +@write +@connection +@pubsub +@transaction -@admin -@dangerous -FLUSHALL -FLUSHDB && redis-cli -u ${maskSecretValue(primary)} PING`),
         test: shellCommand(`redis-cli -u ${maskSecretValue(primary)} PING`),
-        backup: shellCommand(`redis-cli -u ${maskSecretValue(primary)} --rdb ${backupPath}.rdb`),
-        restore: shellCommand(`redis-cli -u ${maskSecretValue(primary)} --pipe < ${backupPath}.resp`),
-        delete: shellCommand(`redis-cli -u ${maskSecretValue(primary)} FLUSHDB ASYNC`),
+        backup: shellCommand(`redis-cli -u ${maskSecretValue(primary)} --scan --pattern '${keyPrefix}*' > ${backupPath}.keys`),
+        restore: shellCommand(`redis-cli -u ${maskSecretValue(primary)} --pipe < ${backupPath}.resp # prefix-scoped restore only for keys under ${keyPrefix}`),
+        delete: shellCommand(`cursor=0; while :; do reply=$(redis-cli -u ${maskSecretValue(primary)} SCAN "$cursor" MATCH '${keyPrefix}*' COUNT 500); cursor=$(printf '%s\\n' "$reply" | sed -n '1p'); keys=$(printf '%s\\n' "$reply" | sed '1d'); [ -n "$keys" ] && printf '%s\\n' "$keys" | xargs -r redis-cli -u ${maskSecretValue(primary)} UNLINK; [ "$cursor" = "0" ] && break; done`),
       };
     case 'sqlite':
       return {
@@ -259,6 +279,7 @@ function providerCommands(engine: string, context: AnyRecord): Record<string, Co
 function prepareResourceForEnv(resource: AnyRecord, options: AnyRecord) {
   const engine = normalizedEngine(resource.engine || resource.type);
   const name = slugify(resource.name || engine || 'resource');
+  const tenantName = tenantResourceName(resource, name);
   const generatedPassword = options.password || resource.password || resource.generatedPassword || secureRandomSecret(24);
   const prepared: AnyRecord = {
     ...resource,
@@ -267,14 +288,50 @@ function prepareResourceForEnv(resource: AnyRecord, options: AnyRecord) {
     apiKey: options.apiKey || resource.apiKey || secureRandomSecret(24),
     accessKey: options.accessKey || resource.accessKey || `ak-${name}`,
     secretKey: options.secretKey || resource.secretKey || secureRandomSecret(24),
-    databaseName: resource.databaseName || resource.database || name.replace(/-/g, '_'),
-    username: resource.username || `${name.replace(/-/g, '_')}_app`,
-    bucket: resource.bucket || name,
-    collection: resource.collection || name,
-    topic: resource.topic || name,
+    databaseName: resource.databaseName || resource.database || tenantName,
+    username: resource.username || `${tenantName}_app`.slice(0, 63),
+    keyPrefix: safeRedisKeyPrefix(resource.keyPrefix || `${slugify(resource.projectSlug || resource.project || 'project')}:${name}:`),
+    bucket: resource.bucket || tenantName.replace(/_/g, '-'),
+    collection: resource.collection || tenantName.replace(/_/g, '-'),
+    topic: resource.topic || tenantName.replace(/_/g, '-'),
   };
   if (engine === 'sqlite') prepared.sqlitePath = resource.sqlitePath || resource.desiredSpec?.sqlitePath || providerOwnedSqlitePath(resource.id || name);
   return prepared;
+}
+
+function sharedProviderModelFor(engine: string, context: AnyRecord = {}) {
+  if (['postgresql', 'mysql', 'mariadb'].includes(engine)) return { model: `shared-${engine}-server`, tenantPrimitive: 'database + user', isolation: 'shared process, WAL/binlog, buffer pool/cache, disk I/O, and backup substrate' };
+  if (engine === 'mongodb') return { model: 'shared-mongodb-server', tenantPrimitive: 'database + user', isolation: 'shared process, cache, journal, disk I/O, and backup substrate' };
+  if (redisLike(engine)) return { model: `shared-${engine}-server`, tenantPrimitive: 'ACL user + key prefix', keyPrefix: context.keyPrefix, isolation: 'shared event loop, memory, eviction policy, persistence, and network I/O' };
+  if (engine === 'object-storage') return { model: 'shared-object-storage-provider', tenantPrimitive: 'bucket + IAM-style credentials' };
+  if (engine === 'qdrant' || engine === 'vector-db') return { model: 'shared-vector-provider', tenantPrimitive: 'collection + API key' };
+  if (engine === 'nats' || engine === 'message-queue') return { model: 'shared-queue-provider', tenantPrimitive: 'stream/subject + credentials' };
+  return { model: `${engine}-provider`, tenantPrimitive: 'provider-owned resource' };
+}
+
+function sharedProviderRiskControls(engine: string) {
+  const controls = ['plan quotas and per-resource usage metering', 'provider-owned credentials only', 'backup/restore scoped to the tenant primitive', 'monitor noisy-neighbor saturation before promoting tenants to dedicated plans'];
+  if (engine === 'postgresql') return [...controls, 'PgBouncer in front of PostgreSQL to reduce connection memory', 'per-role timeouts and connection limits', 'pg_dump -Fc per database for project-level restore'];
+  if (engine === 'mysql' || engine === 'mariadb') return [...controls, 'per-user grants scoped to one database', 'database-level dumps for project-level restore'];
+  if (engine === 'mongodb') return [...controls, 'per-database users and mongodump --db for restore boundaries'];
+  if (redisLike(engine)) return [...controls, 'Redis ACL key patterns must match REDIS_KEY_PREFIX', 'delete uses SCAN MATCH prefix + UNLINK, never FLUSHDB/FLUSHALL', 'prefix restore is best-effort and must be tested before production'];
+  return controls;
+}
+
+function postgresTenantLimits(resource: AnyRecord, options: AnyRecord) {
+  const spec = { ...(resource.desiredSpec || {}), ...(resource.desiredState || {}), ...resource, ...options };
+  return {
+    connectionLimit: clampInteger(spec.connectionLimit ?? spec.maxConnections, 1, 100, 20),
+    statementTimeoutMs: clampInteger(spec.statementTimeoutMs, 1_000, 300_000, 30_000),
+    idleInTransactionSessionTimeoutMs: clampInteger(spec.idleInTransactionSessionTimeoutMs, 1_000, 300_000, 30_000),
+    lockTimeoutMs: clampInteger(spec.lockTimeoutMs, 500, 120_000, 5_000),
+  };
+}
+
+function clampInteger(value: any, min: number, max: number, fallback: number) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.trunc(Math.min(max, Math.max(min, number)));
 }
 
 function connectionSecretSummary(env: AnyRecord) {
@@ -333,6 +390,10 @@ function databaseLike(engine: string) {
   return ['postgresql', 'mysql', 'mariadb', 'mongodb', 'sqlite'].includes(engine);
 }
 
+function redisLike(engine: string) {
+  return engine === 'redis' || engine === 'valkey';
+}
+
 function maskedProviderConnection(connection: AnyRecord, engine: string) {
   const entries = Object.entries(connection || {}).filter(([key]) => key !== 'live' && key !== 'mode');
   if (!entries.length) return undefined;
@@ -357,6 +418,17 @@ function safeSqlIdentifier(value: any) {
   const withPrefix = /^[a-z_]/.test(normalized) ? normalized : `r_${normalized}`;
   if (!SQL_IDENTIFIER_RE.test(withPrefix)) throw new Error(`unsafe PostgreSQL identifier: ${value}`);
   return withPrefix;
+}
+
+function tenantResourceName(resource: AnyRecord, fallback: string) {
+  const project = slugify(resource.projectSlug || resource.project || 'project').replace(/-/g, '_');
+  const name = slugify(resource.name || fallback || 'resource').replace(/-/g, '_');
+  return `${project}_${name}`.slice(0, 55);
+}
+
+function safeRedisKeyPrefix(value: any) {
+  const raw = String(value || 'project:cache:').replace(/[^a-zA-Z0-9:_-]/g, '_').slice(0, 128) || 'project:cache:';
+  return raw.endsWith(':') ? raw : `${raw}:`;
 }
 
 function quoteIdent(value: string) {

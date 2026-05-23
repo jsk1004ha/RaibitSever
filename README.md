@@ -241,6 +241,7 @@ RAIBITSERVER_BUILD_TIMEOUT_SECONDS=900
 # Provider
 REDIS_URL=redis://redis.internal:6379
 RAIBITSERVER_POSTGRES_PROVIDER_URL=postgresql://provider:<password>@postgres-provider.internal:5432/postgres
+RAIBITSERVER_POSTGRES_POOLER_HOST=pgbouncer.shared-providers.svc.cluster.local
 S3_ENDPOINT=https://s3.example.com
 S3_ACCESS_KEY=<access-key>
 S3_SECRET_KEY=<secret-key>
@@ -346,16 +347,22 @@ Production 세부 항목은 [Production 배포 문서](deploy/production/README.
 
 ## DB와 리소스 지원 범위
 
+RAIBITSERVER의 관리형 리소스는 raw compose container가 아니라 프로젝트에 연결되는 catalog resource입니다. `shared-small` DBaaS/cache 플랜은 resource마다 PostgreSQL/MySQL/MongoDB/Redis 컨테이너를 새로 띄우지 않고, 공유 provider 안에 database/user/bucket/collection/prefix를 생성합니다.
+
 | 엔진 | 로컬 proof | Provider contract |
 | --- | --- | --- |
-| PostgreSQL | provider dry-run, env injection, console contract | user/database/grant, `DATABASE_URL`, connection test, backup/restore |
-| MySQL/MariaDB | env/provision plan | DB/user/password |
-| MongoDB | collection/document contract | database/user/URI |
-| Redis/Valkey | key/value/TTL contract | URL/key browser |
+| PostgreSQL | provider dry-run, env injection, console contract | shared PostgreSQL + PgBouncer, database/user/grant, `DATABASE_URL`, connection test, `pg_dump -Fc` backup/restore |
+| MySQL/MariaDB | env/provision plan | shared server, DB/user/password/grant |
+| MongoDB | collection/document contract | shared server, database/user/URI, `mongodump --db` |
+| Redis/Valkey | key/value/TTL contract | shared server, ACL user + `REDIS_KEY_PREFIX`, key browser, prefix delete via `SCAN MATCH` + `UNLINK` |
 | SQLite | 실행 가능한 로컬 console | PVC-backed file DB |
 | Object Storage | MinIO/S3 env plan | bucket/browser/presign |
 | Qdrant/vector | collection/search-test contract | vector collection/search |
 | NATS/queue | subject/connection contract | queue connection info |
+
+운영 리스크는 공유 인스턴스의 본질적인 trade-off입니다. noisy neighbor, 낮은 프로세스/디스크 I/O 격리, 프로젝트 단위 백업/복구 복잡도, Redis prefix-only 위험을 줄이기 위해 quota/metering, timeout, PgBouncer, provider-owned secret, Redis ACL key pattern, dedicated plan 승격 경로를 함께 둡니다.
+
+베타에서는 destructive operation 방지와 기본 연결/timeout 제한을 우선 구현합니다. PostgreSQL resource plan은 PgBouncer 경유 URL과 role별 connection/statement/idle/lock timeout 계약을 생성하고, Redis/Valkey plan은 ACL + prefix와 `SCAN MATCH`/`UNLINK` 삭제만 허용합니다. 자동 noisy-neighbor 탐지, per-prefix Redis restore, dedicated plan 자동 승격은 정식 버전 범위로 문서화했습니다.
 
 자세한 내용은 [리소스 프로비저닝](docs/provisioning.md)과 [DB console](docs/db-console.md)을 참고하세요.
 

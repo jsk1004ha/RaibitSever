@@ -5,20 +5,19 @@ import { secureRandomSecret } from './secret-vault.ts';
 type AnyRecord = Record<string, any>;
 
 function hostFor(resource: AnyRecord, projectSlug: any) {
-  const name = slugify(resource.name || resource.engine || 'resource');
-  return resource.internalHost || `${name}.${slugify(projectSlug || resource.projectSlug || 'project')}.svc.cluster.local`;
+  return resource.poolerHost || resource.providerHost || resource.sharedHost || resource.internalHost || resource.host || defaultSharedProviderHost(normalizeResourceEngine(resource.engine || resource.type), projectSlug || resource.projectSlug);
 }
 
-function userFor(resource: AnyRecord) {
-  return resource.username || slugify(resource.name || resource.engine || 'app');
+function userFor(resource: AnyRecord, projectSlug: any) {
+  return resource.username || sharedTenantName(resource, 'app', projectSlug);
 }
 
 function passwordFor(resource: AnyRecord) {
   return resource.password || secureRandomSecret(24);
 }
 
-function databaseFor(resource: AnyRecord) {
-  return resource.databaseName || slugify(resource.database || resource.name || 'app');
+function databaseFor(resource: AnyRecord, projectSlug: any) {
+  return resource.databaseName || sharedTenantName(resource, 'db', projectSlug).replace(/-/g, '_');
 }
 
 export function connectionEnvForResource(resource: AnyRecord, projectSlug = 'project') {
@@ -26,9 +25,9 @@ export function connectionEnvForResource(resource: AnyRecord, projectSlug = 'pro
   const entry = getCatalogEntry(engine);
   const host = hostFor(resource, projectSlug);
   const port = resource.port || defaultPort(engine);
-  const username = userFor(resource);
+  const username = userFor(resource, projectSlug);
   const password = passwordFor(resource);
-  const database = databaseFor(resource);
+  const database = databaseFor(resource, projectSlug);
   const bucket = resource.bucket || slugify(resource.name || 'bucket');
   const protocol = resource.tls ? 'rediss' : 'redis';
 
@@ -67,11 +66,14 @@ export function connectionEnvForResource(resource: AnyRecord, projectSlug = 'pro
       break;
     case 'redis':
     case 'valkey':
-      env.REDIS_URL = `${protocol}://:${password}@${host}:${port}`;
+      env.REDIS_USERNAME = username;
+      env.REDIS_URL = `${protocol}://${username}:${password}@${host}:${port}`;
       if (entry.key === 'valkey') env.VALKEY_URL = env.REDIS_URL;
       env.REDIS_HOST = host;
       env.REDIS_PORT = String(port);
       env.REDIS_PASSWORD = password;
+      env.REDIS_KEY_PREFIX = redisKeyPrefixFor(resource, projectSlug);
+      if (entry.key === 'valkey') env.VALKEY_KEY_PREFIX = env.REDIS_KEY_PREFIX;
       break;
     case 'object-storage':
       env.S3_ENDPOINT = resource.endpoint || `https://${host}`;
@@ -97,6 +99,29 @@ export function connectionEnvForResource(resource: AnyRecord, projectSlug = 'pro
       throw new Error(`unsupported resource: ${engine}`);
   }
   return env;
+}
+
+function defaultSharedProviderHost(engine: string, projectSlug: any) {
+  const project = slugify(projectSlug || 'project');
+  if (engine === 'postgresql') return process.env.RAIBITSERVER_POSTGRES_POOLER_HOST || `pgbouncer.shared-providers.svc.cluster.local`;
+  if (engine === 'mysql' || engine === 'mariadb') return `mysql.shared-providers.svc.cluster.local`;
+  if (engine === 'mongodb') return `mongodb.shared-providers.svc.cluster.local`;
+  if (engine === 'redis') return `redis.shared-providers.svc.cluster.local`;
+  if (engine === 'valkey') return `valkey.shared-providers.svc.cluster.local`;
+  const name = slugify(engine || 'resource');
+  return `${name}.${project}.svc.cluster.local`;
+}
+
+function sharedTenantName(resource: AnyRecord, suffix: string, projectSlug: any) {
+  const project = slugify(projectSlug || resource.projectSlug || resource.project || 'project').replace(/-/g, '_');
+  const name = slugify(resource.name || resource.engine || suffix).replace(/-/g, '_');
+  return `${project}_${name}_${suffix}`.slice(0, 63);
+}
+
+function redisKeyPrefixFor(resource: AnyRecord, projectSlug: any) {
+  const fallback = `${slugify(projectSlug || resource.projectSlug || 'project')}:${slugify(resource.name || 'cache')}:`;
+  const raw = String(resource.keyPrefix || fallback).replace(/[^a-zA-Z0-9:_-]/g, '_').slice(0, 128) || fallback;
+  return raw.endsWith(':') ? raw : `${raw}:`;
 }
 
 export function injectResourceEnv(service: AnyRecord, resources: AnyRecord[] = [], projectSlug = 'project') {

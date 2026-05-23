@@ -13,7 +13,7 @@ test('catalog includes relational, cache, storage, vector, and queue resources',
 
 test('postgres resource generates standard connection variables', () => {
   const env = connectionEnvForResource({ name: 'todo-postgres', engine: 'postgresql', databaseName: 'todo', username: 'todo_app', password: 'pw' }, 'todo');
-  assert.match(env.DATABASE_URL, /^postgresql:\/\/todo_app:pw@todo-postgres\.todo\.svc\.cluster\.local:5432\/todo$/);
+  assert.match(env.DATABASE_URL, /^postgresql:\/\/todo_app:pw@pgbouncer\.shared-providers\.svc\.cluster\.local:5432\/todo$/);
   assert.equal(env.PGDATABASE, 'todo');
 });
 
@@ -28,7 +28,8 @@ test('service env injection attaches selected resources only', () => {
   );
   assert.equal(env.NODE_ENV, 'production');
   assert.equal(env.POSTGRES_URL, undefined);
-  assert.match(env.REDIS_URL, /^redis:\/\/:secret@redis\.demo\.svc\.cluster\.local:6379$/);
+  assert.match(env.REDIS_URL, /^redis:\/\/demo_redis_app:secret@redis\.shared-providers\.svc\.cluster\.local:6379$/);
+  assert.equal(env.REDIS_KEY_PREFIX, 'demo:redis:');
 });
 
 test('secret masking hides secret-looking fields', () => {

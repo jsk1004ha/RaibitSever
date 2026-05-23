@@ -9,6 +9,7 @@ export const RUNTIME_KEY_CATALOG = Object.freeze([
   { name: 'RAIBITSERVER_REGISTRY_USERNAME', category: 'registry', required: false, secret: false, description: 'Default image registry username' },
   { name: 'RAIBITSERVER_REGISTRY_PASSWORD', category: 'registry', required: false, secret: true, description: 'Default image registry password/token' },
   { name: 'DATABASE_URL', category: 'persistence', required: false, secret: true, description: 'PostgreSQL connection string used by Prisma persistence' },
+  { name: 'RAIBITSERVER_POSTGRES_POOLER_HOST', category: 'provider', required: false, secret: false, description: 'PgBouncer host used for shared PostgreSQL resource DATABASE_URL injection' },
 ]);
 
 export function runtimeConfigStatus(env: Record<string, any> = process.env) {

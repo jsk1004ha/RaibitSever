@@ -7,7 +7,7 @@ export const RESOURCE_CATALOG = Object.freeze({
     priority: 1,
     operator: 'CloudNativePG',
     env: ['DATABASE_URL', 'POSTGRES_URL', 'PGHOST', 'PGPORT', 'PGDATABASE', 'PGUSER', 'PGPASSWORD'],
-    features: ['sql-editor', 'table-browser', 'extensions', 'backup-restore', 'pitr', 'read-replica', 'pooling'],
+    features: ['shared-provider', 'sql-editor', 'table-browser', 'extensions', 'backup-restore', 'pitr', 'read-replica', 'pooling', 'per-role-limits'],
   },
   mysql: {
     type: 'database',
@@ -17,7 +17,7 @@ export const RESOURCE_CATALOG = Object.freeze({
     priority: 1,
     operator: 'Percona Operator for MySQL',
     env: ['MYSQL_URL', 'MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_DATABASE', 'MYSQL_USER', 'MYSQL_PASSWORD'],
-    features: ['sql-editor', 'table-browser', 'indexes', 'slow-query-logs', 'backup-restore'],
+    features: ['shared-provider', 'sql-editor', 'table-browser', 'indexes', 'slow-query-logs', 'backup-restore'],
   },
   mariadb: {
     type: 'database',
@@ -27,7 +27,7 @@ export const RESOURCE_CATALOG = Object.freeze({
     priority: 2,
     operator: 'MariaDB Operator or Percona-compatible profile',
     env: ['MARIADB_URL', 'MYSQL_URL', 'MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_DATABASE', 'MYSQL_USER', 'MYSQL_PASSWORD'],
-    features: ['sql-editor', 'table-browser', 'backup-restore'],
+    features: ['shared-provider', 'sql-editor', 'table-browser', 'backup-restore'],
   },
   mongodb: {
     type: 'database',
@@ -37,7 +37,7 @@ export const RESOURCE_CATALOG = Object.freeze({
     priority: 2,
     operator: 'MongoDB Kubernetes Operator / Atlas Operator',
     env: ['MONGODB_URI', 'MONGO_URL', 'MONGO_HOST', 'MONGO_DATABASE', 'MONGO_USER', 'MONGO_PASSWORD'],
-    features: ['collection-browser', 'document-editor', 'index-management', 'backup-restore'],
+    features: ['shared-provider', 'collection-browser', 'document-editor', 'index-management', 'backup-restore'],
   },
   sqlite: {
     type: 'database',
@@ -56,8 +56,8 @@ export const RESOURCE_CATALOG = Object.freeze({
     defaultVersion: '7',
     priority: 1,
     operator: 'Redis Operator / Redis Enterprise Operator / Upstash adapter',
-    env: ['REDIS_URL', 'REDIS_HOST', 'REDIS_PORT', 'REDIS_PASSWORD'],
-    features: ['key-browser', 'ttl', 'memory-usage', 'eviction-policy', 'pubsub-monitoring'],
+    env: ['REDIS_URL', 'REDIS_HOST', 'REDIS_PORT', 'REDIS_USERNAME', 'REDIS_PASSWORD', 'REDIS_KEY_PREFIX'],
+    features: ['shared-provider', 'acl-key-prefix', 'key-browser', 'ttl', 'memory-usage', 'eviction-policy', 'pubsub-monitoring'],
   },
   valkey: {
     type: 'cache',
@@ -66,8 +66,8 @@ export const RESOURCE_CATALOG = Object.freeze({
     defaultVersion: '8',
     priority: 1,
     operator: 'Valkey/Redis-compatible provider adapter',
-    env: ['REDIS_URL', 'VALKEY_URL', 'REDIS_HOST', 'REDIS_PORT', 'REDIS_PASSWORD'],
-    features: ['key-browser', 'ttl', 'memory-usage', 'pubsub-monitoring'],
+    env: ['REDIS_URL', 'VALKEY_URL', 'REDIS_HOST', 'REDIS_PORT', 'REDIS_USERNAME', 'REDIS_PASSWORD', 'REDIS_KEY_PREFIX', 'VALKEY_KEY_PREFIX'],
+    features: ['shared-provider', 'acl-key-prefix', 'key-browser', 'ttl', 'memory-usage', 'pubsub-monitoring'],
   },
   'object-storage': {
     type: 'storage',
