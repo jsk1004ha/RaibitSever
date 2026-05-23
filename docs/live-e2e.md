@@ -1,8 +1,12 @@
 # Live E2E
 
-Live E2E is the side-effecting local-cluster proof. It is intentionally separate from deterministic dry E2E and fails fast when required tools are missing.
+> `pnpm e2e:live`는 Docker, kind/k3d, kubectl을 사용해 실제 local cluster에 build → push → deploy → HTTP 검증까지 수행하는 side-effecting smoke test입니다.
 
-## Command
+## 목적
+
+Dry-run으로는 확인할 수 없는 registry, cluster, ingress, rollout, live provider 경계를 검증합니다. 일반 CI 기본값은 dry E2E이며, live E2E는 의도적으로 실행할 때만 사용합니다.
+
+## 실행 명령
 
 ```sh
 pnpm dev:up
@@ -10,46 +14,48 @@ pnpm e2e:live
 pnpm dev:down
 ```
 
-Alias: `pnpm dev:e2e:live`.
+Alias는 `pnpm dev:e2e:live`입니다.
 
-## Required local tools
+## 사전 요구사항
 
-- Docker with BuildKit/buildx support.
-- `kubectl`.
-- `kind` or `k3d`.
-- A local registry address via `REGISTRY_URL` when the default `localhost:5000` is not correct.
+- Docker + BuildKit/buildx
+- `kubectl`
+- `kind` 또는 `k3d`
+- 기본값 `localhost:5000`이 맞지 않으면 `REGISTRY_URL`
 
-If any required Docker/Kubernetes tool is missing, `pnpm e2e:live` exits non-zero before running build, registry push, or `kubectl apply`. Auto/dry mode records a deterministic fallback plan instead of mutating the machine.
+필수 도구가 없으면 build, push, `kubectl apply`를 시작하기 전에 non-zero로 종료합니다.
 
-## Live setup plan
+## 실행 중 준비하는 것
 
-When live mode is requested with `--execute` and tools are available, the E2E planner prepares:
+Live mode는 `--execute` 계약과 도구 준비가 모두 충족될 때 다음을 준비합니다.
 
-1. local registry `raibitserver-registry` on port `5000`,
-2. disposable `kind` or `k3d` cluster `raibitserver-e2e`,
-3. registry-to-cluster wiring:
-   - kind gets a containerd mirror for `localhost:5000`, Docker network connection to the registry container, and the `kube-public/local-registry-hosting` ConfigMap,
-   - k3d is created with `--registry-use`,
-4. ingress-nginx install plus readiness wait for local HTTP routing,
-5. build/push, Kubernetes apply, rollout/log evidence, and provider provisioning checks.
+1. `raibitserver-registry` local registry (`:5000`)
+2. `raibitserver-e2e` disposable kind 또는 k3d cluster
+3. registry-to-cluster wiring
+   - kind: containerd mirror, Docker network 연결, `kube-public/local-registry-hosting` ConfigMap
+   - k3d: `--registry-use`
+4. ingress-nginx 설치와 readiness wait
+5. build/push, Kubernetes apply, rollout/log evidence, provider provisioning check
 
-The optional manual CI workflow `.github/workflows/live-e2e.yml` runs the same live command on a Docker/kubectl/kind-capable runner. It defaults to `["self-hosted","linux"]` so normal pull requests keep using deterministic dry E2E.
+## 증거 파일
 
-The setup commands are written into `.raibitserver-work/e2e-report.json` under `liveSetup`. Dry mode writes the same shape with `clusterEngine: dry-run` so CI can assert the contract without side effects.
+`.raibitserver-work/e2e-report.json`에는 다음이 포함되어야 합니다.
 
-## Evidence
+- tool readiness
+- registry/cluster/ingress setup command와 결과
+- local registry가 cluster에서 접근 가능한지 여부
+- example app HTTP 200 결과
+- PostgreSQL provider dry-run/env injection evidence
+- SQLite DB console query evidence
+- deployment, preview deployment, preview cleanup, build log, runtime log, event check
+- build/Kubernetes/provisioning mode의 `dryRun: false`
 
-Live mode writes `.raibitserver-work/e2e-report.json` with:
+## CI에서의 위치
 
-- detected tool readiness,
-- local registry/cluster/ingress setup commands and results,
-- whether the local registry is planned as cluster-reachable,
-- example app HTTP 200 evidence,
-- PostgreSQL provider dry-run/env-injection evidence,
-- SQLite DB console query evidence,
-- deployment, preview deployment, preview cleanup workflow, build log, runtime log, and event checks,
-- build workflow mode (`dryRun: false`),
-- Kubernetes apply mode (`dryRun: false`),
-- provisioning mode (`dryRun: false`).
+수동 실행용 GitHub Actions workflow는 `.github/workflows/live-e2e.yml`에 있습니다. 기본 runner는 `self-hosted` 계열로 가정하므로 일반 PR은 dry E2E를 기본 proof로 사용합니다.
 
-Dry mode remains the default acceptance proof; live mode is for operator smoke tests against a disposable local cluster.
+## 관련 문서
+
+- [로컬 E2E](local-e2e.md)
+- [검증 명령](verification-commands.md)
+- [문제 해결](troubleshooting.md)

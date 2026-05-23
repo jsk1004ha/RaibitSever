@@ -1,22 +1,79 @@
-# Quota and Approval
+# 승인과 쿼터
 
-- `NON_CLUB` users default to `PENDING` and cannot create projects, services, deployments, resources, or previews.
-- Admins approve/reject users and can patch per-user quota.
-- `NON_CLUB + APPROVED` is constrained by the `Quota` row.
-- `CLUB_MEMBER` is treated as unlimited for user-facing quota but still subject to hard security/safety caps.
-- Quota blocks return 403/429-style errors and are audit logged in persistence-capable paths.
+> RAIBITSERVER는 사용자 유형과 관리자 승인 상태에 따라 project, service, deployment, resource 사용량을 제한합니다.
 
-Runtime quota usage now includes:
+## 목적
 
-- project and service counts,
-- daily deployment count,
-- preview deployment count,
-- DB storage MB and object storage MB,
-- monthly build minutes from usage records and deployment build timestamps,
-- monthly runtime hours from usage records and deployment runtime timestamps,
-- aggregate service CPU requests in millicores,
-- aggregate service memory requests in MB.
+이 문서는 사용자 승인 흐름, club member 예외, runtime quota accounting 범위를 설명합니다.
 
-Plan-time quota names in `packages/core/src/quota.ts` (`apps`, `projects`, `dbStorageGb`, `buildMinutesMonthly`) remain the public plan model. Runtime enforcement maps those concepts to `Quota` row fields such as `maxServices`, `maxProjects`, `maxDbStorageMb`, `maxBuildMinutesPerMonth`, and `maxRuntimeHoursPerMonth`.
+## 사용자 상태
 
-Local proof: `pnpm e2e:dry` blocks a pending non-club user, approves it, sets quota, confirms build/runtime/resource usage evidence, and then confirms a club member can create services beyond non-club limits.
+| 사용자 | 기본 상태 | 사용 가능 범위 |
+| --- | --- | --- |
+| `ADMIN` | 승인됨 | 모든 사용자, 프로젝트, 리소스 관리 |
+| `CLUB_MEMBER` | 승인됨 | user-facing quota는 무제한, hard safety cap은 적용 |
+| `NON_CLUB` | `PENDING` | 관리자 승인 전 생성/배포/provision 차단 |
+| `NON_CLUB + APPROVED` | 승인됨 | `Quota` row 범위 안에서 사용 |
+
+## 차단 대상 작업
+
+`PENDING` 또는 quota 초과 사용자는 다음 작업이 차단됩니다.
+
+- project 생성
+- service 생성
+- deployment 생성
+- resource 생성
+- preview deployment 생성
+
+Quota block은 403/429 계열 오류로 응답하고 persistence-capable path에서는 audit log에 기록합니다.
+
+## Runtime quota accounting
+
+현재 runtime 사용량은 다음 항목을 포함합니다.
+
+- project 수
+- service 수
+- 일별 deployment 수
+- preview deployment 수
+- DB storage MB
+- object storage MB
+- 월별 build minutes
+- 월별 runtime hours
+- aggregate service CPU requests (millicores)
+- aggregate service memory requests (MB)
+
+## Plan model과 DB field 매핑
+
+`packages/core/src/quota.ts`의 plan-time quota 이름은 공개 plan model입니다.
+
+```txt
+apps
+projects
+dbStorageGb
+buildMinutesMonthly
+```
+
+Runtime enforcement는 이를 `Quota` row field에 매핑합니다.
+
+```txt
+maxServices
+maxProjects
+maxDbStorageMb
+maxBuildMinutesPerMonth
+maxRuntimeHoursPerMonth
+```
+
+## 로컬 검증
+
+`pnpm e2e:dry`는 다음을 확인합니다.
+
+- pending non-club 사용자는 project 생성이 차단됩니다.
+- admin approve 후 quota 설정으로 사용이 가능해집니다.
+- build/runtime/resource 사용량 evidence가 기록됩니다.
+- club member는 non-club quota보다 많은 service 생성이 가능합니다.
+
+## 관련 문서
+
+- [보안](security.md)
+- [로컬 E2E](local-e2e.md)
+- [Closed Beta 기준](beta-criteria.md)

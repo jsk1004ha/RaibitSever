@@ -1,34 +1,42 @@
 # RAIBITSERVER
 
-RAIBITSERVER is a container-first **PaaS + DBaaS + project operations platform** for clubs, schools, and small teams. It manages GitHub repos, Dockerfiles, prebuilt images, ZIP/local examples, managed DB/resources, logs, quotas, and preview deployments inside one project model.
+> 동아리, 학교, 소규모 팀을 위한 **컨테이너 우선 PaaS + DBaaS + 프로젝트 운영 플랫폼**입니다.
 
-## Architecture
+RAIBITSERVER는 GitHub 저장소, Dockerfile, 사전 빌드 이미지, ZIP/로컬 예제, 관리형 DB와 리소스를 하나의 프로젝트 모델로 묶습니다. 사용자의 서비스는 항상 **컨테이너 이미지**와 **Kubernetes desired state**로 변환되며, TypeScript 제어 평면이 원하는 상태를 저장하고 Go 인프라 서비스가 실제 빌드·배포·프로비저닝을 조정합니다.
 
-```txt
-Dashboard / API / CLI     TypeScript, Next.js, NestJS, shared schemas/client
-Deterministic core        packages/core build plans, compose import, security, manifests
-Control-plane DB          PostgreSQL + Prisma schema
-Infra reconcilers         Go builder/orchestrator/provisioner/log/metrics services
-Runtime target            container image + Kubernetes desired state
-```
+이 README는 처음 온 사람이 빠르게 이해하고 실행할 수 있도록 핵심만 담습니다. 세부 운영 문서는 [문서 허브](docs/README.md)에 목적별로 분리했습니다.
 
-Product invariants implemented in code:
+## 주요 기능
 
-- Dockerfile wins over framework detection; generated Dockerfile/buildpack fallback exists.
-- API writes desired state; worker/reconciler surfaces consume workflow jobs/dry-run or execute commands.
-- Services support `web`, `private`, `worker`, `cron`, `job`.
-- Resource catalog supports PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, SQLite, Object Storage, Qdrant/vector, and NATS/queue contract.
-- Generated manifests enforce namespace isolation, NetworkPolicy, non-root containers, no privileged/hostPath, resource limits, dropped capabilities, seccomp, and no service-account token mount.
+- **멀티 서비스 프로젝트**: `web`, `private`, `worker`, `cron`, `job` 서비스를 한 프로젝트에서 관리합니다.
+- **컨테이너 우선 빌드**: 사용자 Dockerfile을 최우선으로 사용하고, 없을 때만 프레임워크 감지/생성 Dockerfile fallback을 사용합니다.
+- **관리형 리소스**: PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, SQLite, Object Storage, Qdrant/vector, NATS/queue를 카탈로그 리소스로 다룹니다.
+- **서브도메인 라우팅**: 서비스 실행 URL, preview URL, console/resource 화면은 `<service>--<project>--<org>` 형태의 서브도메인을 사용합니다.
+- **승인·쿼터·감사**: 비동아리 사용자는 관리자 승인 후 쿼터 안에서 사용하고, 주요 작업은 감사 로그와 사용량에 반영됩니다.
+- **안전한 기본값**: namespace 격리, NetworkPolicy, non-root 컨테이너, privileged/hostPath 차단, 리소스 제한, secret masking을 기본으로 적용합니다.
+- **로컬 검증 가능**: 기본 검증은 실제 Kubernetes, registry, cloud, GitHub secret 없이 dry-run으로 재현됩니다.
 
-## Prerequisites
+## 아키텍처 요약
 
-- Node.js 24+ (required by the built-in `node:sqlite` DB console path; Node 22 LTS can be revisited by replacing it with an external SQLite adapter such as `better-sqlite3`/`sqlite3`.)
-- pnpm 11.1.2 (`corepack enable`)
-- Optional for execute-mode local cluster: Docker, kind or k3d, kubectl, Go 1.22+
+| 영역 | 구현 | 역할 |
+| --- | --- | --- |
+| Dashboard / API / CLI | TypeScript, Next.js, NestJS | 제품 UI, 인증/RBAC, API, CLI |
+| Deterministic core | `packages/core` | 빌드 계획, compose import, 라우팅, manifest, 보안/쿼터 규칙 |
+| Control-plane DB | PostgreSQL + Prisma | 프로젝트, 서비스, 리소스, 배포, 워크플로 desired state 저장 |
+| Infra reconcilers | Go services | builder/orchestrator/provisioner/log/metrics 작업 처리 |
+| Runtime target | Container image + Kubernetes | 사용자 워크로드 실행 상태 |
 
-Local verification does **not** require real cloud credentials, registry, Kubernetes, or GitHub secrets. `pnpm e2e:dry` is the default deterministic proof and writes dry-run artifacts. `pnpm e2e:live` is an explicit `--execute` path for local Docker/kind-or-k3d/kubectl environments.
+자세한 구성은 [아키텍처 문서](docs/architecture.md)를 참고하세요.
 
-## Quick start
+## 사전 요구사항
+
+- Node.js **24+**
+- pnpm **11.1.2** (`corepack enable` 권장)
+- 선택 사항: Docker, kind 또는 k3d, kubectl, Go 1.22+
+
+Node.js 24+는 로컬 SQLite DB console 경로가 `node:sqlite`를 사용하기 때문에 필요합니다. 기본 dry-run 검증은 cloud credential, registry, Kubernetes cluster, GitHub secret 없이 실행됩니다.
+
+## 빠른 시작
 
 ```sh
 corepack enable
@@ -39,11 +47,20 @@ pnpm e2e:dry
 pnpm dev:down
 ```
 
-Legacy/script-friendly aliases are also available: `pnpm dev-up`, `pnpm dev-e2e`, `pnpm dev-down`, plus explicit split commands `pnpm dev:e2e:dry` and `pnpm dev:e2e:live`.
+결과 증거는 `.raibitserver-work/e2e-report.json`에 저장됩니다.
 
-Evidence is written to `.raibitserver-work/e2e-report.json`.
+기존 스크립트 호환 alias도 유지합니다.
 
-## Verification commands
+| 권장 명령 | 호환 alias | 설명 |
+| --- | --- | --- |
+| `pnpm dev:up` | `pnpm dev-up` | 로컬 도구 감지 및 dev 상태 준비 |
+| `pnpm e2e:dry` | `pnpm dev:e2e:dry`, `pnpm dev-e2e` | 외부 부작용 없는 기본 E2E |
+| `pnpm e2e:live` | `pnpm dev:e2e:live` | Docker/kind·k3d/kubectl을 사용하는 live E2E |
+| `pnpm dev:down` | `pnpm dev-down` | 로컬 상태 정리 |
+
+## 기본 검증
+
+변경 전후에 아래 명령을 우선 확인합니다.
 
 ```sh
 pnpm test
@@ -55,9 +72,7 @@ node src/cli.js compose examples/docker-compose.yml >/tmp/raibitserver-compose-p
 pnpm prisma:validate
 ```
 
-For a focused matrix by change area, see `docs/verification-commands.md`.
-
-If Go is installed:
+Go가 설치되어 있다면 인프라 서비스도 확인합니다.
 
 ```sh
 for dir in services/builder services/orchestrator services/provisioner services/log-ingester services/metrics-ingester; do
@@ -65,35 +80,11 @@ for dir in services/builder services/orchestrator services/provisioner services/
 done
 ```
 
-## Environment variables
+변경 영역별 검증 명령은 [검증 명령 매트릭스](docs/verification-commands.md)에 정리되어 있습니다.
 
-Core:
+## API와 CLI 사용 예시
 
-- `DATABASE_URL`
-- `RAIBITSERVER_CONTROL_PLANE_DATABASE_URL` (Go builder worker DB store; falls back to `DATABASE_URL` only when `RAIBITSERVER_CONTROL_PLANE_STORE=postgresql`)
-- `RAIBITSERVER_CONTROL_PLANE_FILE` (local file-state worker mode)
-- `REDIS_URL`
-- `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`
-- `REGISTRY_URL`
-- `KUBECONFIG`
-- `BASE_DOMAIN` (default local: `127.0.0.1.sslip.io`)
-- `JWT_SECRET` or `RAIBITSERVER_AUTH_JWT_SECRET`
-- `ENCRYPTION_KEY` or `RAIBITSERVER_SECRET_ENCRYPTION_KEY`
-- `ADMIN_EMAILS`
-
-GitHub App/OAuth:
-
-- `GITHUB_APP_ID`
-- `GITHUB_CLIENT_ID`
-- `GITHUB_CLIENT_SECRET`
-- `GITHUB_PRIVATE_KEY`
-- `GITHUB_WEBHOOK_SECRET`
-
-## API and CLI
-
-Canonical API is documented in `openapi/raibitserver.yaml` and implemented through the NestJS module plus the local prototype handler used by tests.
-
-CLI examples:
+정식 API 계약은 [`openapi/raibitserver.yaml`](openapi/raibitserver.yaml)에 있고, CLI는 API client와 로컬 planner/executor smoke path를 함께 검증합니다.
 
 ```sh
 RAIBITSERVER_API_URL=http://localhost:3000/api raibit whoami
@@ -107,73 +98,76 @@ raibit db query --resource-id res_id --query "SELECT 1"
 raibit admin approve --user-id usr_id
 ```
 
-The root `src/cli.js` remains the deterministic no-server planner/executor CLI for CI smoke commands.
+CI smoke와 manifest 생성에는 루트 CLI도 사용할 수 있습니다.
 
-## Local E2E behavior
+```sh
+node src/cli.js validate examples/project.json
+node src/cli.js manifest examples/project.json
+node src/cli.js compose examples/docker-compose.yml
+```
 
-`pnpm e2e:dry` verifies:
+## 문서 바로가기
 
-- example app HTTP 200 through a generated RAIBITSERVER-style host,
-- non-club pending user is blocked,
-- admin approval and quota set unlock usage,
-- club member bypasses user-facing quota,
-- service/resource/deployment creation,
-- `.env` upload with secret masking,
-- SQLite DB console query,
-- build logs, runtime logs, deployment events,
-- PR preview deployment fixture,
-- build/Kubernetes/provisioning dry-run artifacts.
+| 필요 | 문서 |
+| --- | --- |
+| 전체 문서 목록 | [docs/README.md](docs/README.md) |
+| 시스템 구조 | [docs/architecture.md](docs/architecture.md) |
+| 로컬 dry-run E2E | [docs/local-e2e.md](docs/local-e2e.md) |
+| live E2E | [docs/live-e2e.md](docs/live-e2e.md) |
+| GitHub App/preview | [docs/github-app.md](docs/github-app.md), [docs/preview-deployments.md](docs/preview-deployments.md) |
+| 보안 정책 | [docs/security.md](docs/security.md) |
+| 승인/쿼터 | [docs/quota.md](docs/quota.md) |
+| DB console | [docs/db-console.md](docs/db-console.md) |
+| 리소스 프로비저닝 | [docs/provisioning.md](docs/provisioning.md) |
+| 워크플로 작업 | [docs/workflows.md](docs/workflows.md) |
+| 문제 해결 | [docs/troubleshooting.md](docs/troubleshooting.md) |
+| 베타 출시 기준 | [docs/beta-criteria.md](docs/beta-criteria.md) |
+| Staging 배포 | [deploy/staging/README.md](deploy/staging/README.md) |
+| Production 배포 | [deploy/production/README.md](deploy/production/README.md) |
+| 변경 이력 | [CHANGELOG.md](CHANGELOG.md) |
 
-Dry mode reports `deterministic-dry-run` or `dry-run-container-ready` and always keeps build, Kubernetes, and provisioning worker actions non-side-effecting. Live mode is separate: `pnpm e2e:live` requires Docker, kubectl, kind/k3d, and the explicit `--execute` script contract before it runs local registry, kind/k3d cluster, local-registry-to-cluster wiring, ingress, build, Kubernetes apply, and provisioning commands against the local environment. Auto/dry mode records a deterministic fallback plan when those tools are missing. An optional manually dispatched GitHub Actions workflow lives at `.github/workflows/live-e2e.yml` for Docker/kind-capable runners.
+## 핵심 환경 변수
 
-## Account and quota model
+| 분류 | 변수 |
+| --- | --- |
+| DB/상태 | `DATABASE_URL`, `RAIBITSERVER_CONTROL_PLANE_DATABASE_URL`, `RAIBITSERVER_CONTROL_PLANE_FILE`, `REDIS_URL` |
+| Secret/Auth | `JWT_SECRET`, `RAIBITSERVER_AUTH_JWT_SECRET`, `ENCRYPTION_KEY`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, `ADMIN_EMAILS` |
+| Build/Runtime | `REGISTRY_URL`, `KUBECONFIG`, `BASE_DOMAIN` |
+| Object Storage | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` |
+| GitHub App/OAuth | `GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` |
 
-- `ADMIN` can manage all users/projects/resources.
-- `CLUB_MEMBER` is approved and user-facing unlimited, with hard abuse caps still enforced.
-- `NON_CLUB` defaults to `PENDING` and cannot create/deploy/provision until admin approval.
-- `NON_CLUB + APPROVED` is limited by `Quota` rows. Runtime accounting includes project/service/deployment counts, preview count, DB/object storage MB, build minutes, runtime hours, aggregate CPU requests, and aggregate memory requests.
+Production 실행 전 필수 설정은 [production 배포 문서](deploy/production/README.md)를 확인하세요.
 
-## DB support matrix
+## DB와 리소스 지원 범위
 
-| Engine | Local proof | Provider contract |
+| 엔진 | 로컬 proof | Provider contract |
 | --- | --- | --- |
-| PostgreSQL | direct provider dry-run + env injection + console contract | CREATE USER/DATABASE/GRANT, DATABASE_URL secret, connection test, pg_dump/restore |
+| PostgreSQL | provider dry-run, env injection, console contract | user/database/grant, `DATABASE_URL`, connection test, backup/restore |
 | MySQL/MariaDB | env/provision plan | DB/user/password |
-| MongoDB | env/provision plan | database/user/URI |
-| Redis/Valkey | env/provision plan | URL/key browser |
-| SQLite | executable local console | PVC-backed file DB |
+| MongoDB | collection/document contract | database/user/URI |
+| Redis/Valkey | key/value/TTL contract | URL/key browser |
+| SQLite | 실행 가능한 로컬 console | PVC-backed file DB |
 | Object Storage | MinIO/S3 env plan | bucket/browser/presign |
-| Qdrant/vector | env/provision plan | collection/search test |
-| NATS/queue | env/provision plan | subject/connection info |
+| Qdrant/vector | collection/search-test contract | vector collection/search |
+| NATS/queue | subject/connection contract | queue connection info |
 
-## Docs
+자세한 내용은 [리소스 프로비저닝](docs/provisioning.md)과 [DB console](docs/db-console.md)을 참고하세요.
 
-- `docs/beta-criteria.md`
-- `docs/architecture.md`
-- `docs/local-e2e.md`
-- `docs/live-e2e.md`
-- `docs/github-app.md`
-- `docs/security.md`
-- `docs/quota.md`
-- `docs/db-console.md`
-- `docs/preview-deployments.md`
-- `docs/workflows.md`
-- `docs/provisioning.md`
-- `docs/troubleshooting.md`
+## 문제 해결
 
-## Production runbook and current limitations
+자주 발생하는 문제는 [troubleshooting](docs/troubleshooting.md)에 정리되어 있습니다.
 
-1. Configure production persistence: `DATABASE_URL` for the API/control-plane PostgreSQL DB plus `RAIBITSERVER_SECRET_ENCRYPTION_KEY`/`ENCRYPTION_KEY` with at least 32 characters. The Go builder can poll the same Prisma/PostgreSQL tables with `RAIBITSERVER_CONTROL_PLANE_DATABASE_URL` or with `RAIBITSERVER_CONTROL_PLANE_STORE=postgresql` plus `DATABASE_URL`; `RAIBITSERVER_CONTROL_PLANE_FILE` remains the deterministic local worker mode. The in-memory store is only for tests/dev fallback.
-2. Configure auth and admin bootstrap: `RAIBITSERVER_AUTH_JWT_SECRET`, `ADMIN_EMAILS`, and hosted domain settings (`BASE_DOMAIN`, DNS, TLS/ingress).
-3. Configure GitHub App/OAuth if repository import and previews are needed: `GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_PRIVATE_KEY`, and `GITHUB_WEBHOOK_SECRET`.
-4. Configure build/runtime infrastructure: registry (`REGISTRY_URL`), Docker/BuildKit or builder service access, Kubernetes credentials (`KUBECONFIG`/in-cluster config), ingress controller, and resource limits.
-5. Configure DB/resource providers: PostgreSQL provider admin URL for direct PostgreSQL provisioning first, then MySQL/Mongo/Redis/MinIO/Qdrant/NATS provider adapters as they become live.
-6. Run verification before go-live: `pnpm test`, `pnpm typecheck`, `pnpm prisma:validate`, CLI validate/manifest/compose, Go service tests/builds, `pnpm e2e:dry`, and a prepared `pnpm e2e:live` against disposable local infrastructure.
+- `pnpm install --frozen-lockfile` 실패: Node.js 24+와 pnpm 11.1.2를 확인합니다.
+- Production API 부팅 실패: `DATABASE_URL`, auth secret, encryption key를 확인합니다.
+- dry E2E는 성공하지만 live E2E가 실패: Docker, kubectl, kind/k3d와 `.raibitserver-work/e2e-report.json`의 `liveSetupResults`를 확인합니다.
+- DB console query 거부: 역할, `confirmed: true`, provider-owned connection 여부를 확인합니다.
 
-Current limitations:
+## 지원, 라이선스, 변경 이력
 
-- Real GitHub OAuth/App network calls require configured GitHub credentials; local tests use deterministic webhook/status/check-run plans.
-- Execute-mode Docker/BuildKit build, registry push, Kubernetes apply, and ingress setup require local Docker/kind-or-k3d/kubectl or production infrastructure.
-- Dry E2E proves the full control-plane contract and dry-run worker artifacts without those tools; live E2E is reserved for explicit local-cluster execution.
-- Go builder has a PostgreSQL control-plane store for production job claim/update/log writes; orchestrator and provisioner still need matching production DB/API stores beyond their file-state/local contracts.
-- Node.js 24+ remains required until the `node:sqlite` console path is replaced with a Node 22-compatible SQLite dependency.
+- 지원/문의: 저장소 이슈 트래커([GitHub Issues](https://github.com/jsk1004ha/RaibitSever/issues)) 또는 프로젝트 운영 채널을 사용합니다.
+- 라이선스: [Apache-2.0](LICENSE)
+- 변경 이력: [CHANGELOG.md](CHANGELOG.md)
+
+## 문서 작성 기준
+
+이 README와 하위 문서는 “프로젝트 목적, 설치/사용 방법, 문제 해결, 지원/라이선스, 심화 링크를 간결하게 제공하고 긴 내용은 별도 문서로 분리한다”는 원칙으로 정리했습니다. 작성 기준은 InfoGrab의 [좋은 README 작성하는 방법](https://insight.infograb.net/blog/2023/08/23/good-readme/)을 참고했습니다.

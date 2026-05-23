@@ -1,10 +1,10 @@
-# Verification command matrix
+# 검증 명령 매트릭스
 
-Use these exact commands to verify production-risk hardening changes. The baseline commands are deterministic and do not require cloud credentials, a live Kubernetes cluster, or GitHub secrets.
+> 변경을 완료했다고 말하기 전에, 변경 영역에 맞는 가장 작은 검증부터 실행하고 결과를 확인합니다.
 
-## Baseline local acceptance
+## 기본 로컬 acceptance
 
-Run this set before handing off any production-hardening slice:
+Production-risk hardening 또는 공통 코드 변경 후 우선 실행합니다. 이 명령들은 cloud credential, live Kubernetes cluster, GitHub secret을 요구하지 않습니다.
 
 ```sh
 pnpm test
@@ -19,7 +19,7 @@ node src/cli.js k8s-apply examples/project.json >/tmp/raibitserver-k8s-apply.jso
 pnpm e2e:dry
 ```
 
-If Go is installed, also run the same Go loop as CI:
+Go가 설치되어 있으면 CI와 같은 loop를 실행합니다.
 
 ```sh
 for dir in services/builder services/orchestrator services/provisioner services/log-ingester services/metrics-ingester; do
@@ -28,7 +28,7 @@ for dir in services/builder services/orchestrator services/provisioner services/
 done
 ```
 
-## Focused checks by change area
+## 변경 영역별 집중 검증
 
 ### Go builder/orchestrator/provisioner workers
 
@@ -39,16 +39,16 @@ for dir in services/builder services/orchestrator services/provisioner; do
 done
 ```
 
-Add or update focused Go package tests next to the changed package. For example, production control-plane store changes in `services/builder/internal/controlplane` should include a package-level store test plus the builder worker contract test above.
+Production control-plane store처럼 Go package가 바뀌면 변경 package 옆에 package-level test를 추가합니다.
 
-### Live E2E bootstrap and CI workflow contract
+### Live E2E bootstrap과 CI workflow contract
 
 ```sh
 node --test tests/e2e-mode.test.js tests/local-e2e.test.js tests/ci-cli-smoke.test.js
 pnpm e2e:dry
 ```
 
-Only run the live local-cluster proof when side effects are intentional and Docker, kubectl, and kind or k3d are available:
+Docker/kubectl/kind 또는 k3d side effect를 의도할 때만 live proof를 실행합니다.
 
 ```sh
 pnpm dev:up
@@ -56,7 +56,7 @@ pnpm e2e:live
 pnpm dev:down
 ```
 
-### TypeScript control plane, API, auth, GitHub, and workflow jobs
+### TypeScript control plane, API, auth, GitHub, workflow jobs
 
 ```sh
 node --test \
@@ -70,7 +70,7 @@ pnpm --filter @raibitserver/api typecheck
 pnpm --filter @raibitserver/api test
 ```
 
-### Build, manifest, resource provider, and security policy changes
+### Build, manifest, resource provider, security policy
 
 ```sh
 node --test \
@@ -84,7 +84,7 @@ pnpm --filter @raibitserver/core test
 pnpm --filter @raibitserver/core typecheck
 ```
 
-### CLI, Prisma, OpenAPI, and infrastructure manifests
+### CLI, Prisma, OpenAPI, infrastructure manifests
 
 ```sh
 node --test tests/ci-cli-smoke.test.js
@@ -93,13 +93,13 @@ pnpm prisma:generate
 node -e "import('yaml').then(({default:YAML})=>{const fs=require('node:fs'); YAML.parse(fs.readFileSync('openapi/raibitserver.yaml','utf8')); for (const f of ['infra/k8s/appservice-crd.yaml','infra/operators/manageddatabase-crd.yaml','infra/operators/managedresources-crd.yaml']) YAML.parse(fs.readFileSync(f,'utf8')); console.log('yaml-ok')})"
 ```
 
-If Helm is installed:
+Helm이 설치되어 있으면 추가로 실행합니다.
 
 ```sh
 helm template raibitserver infra/helm/raibitserver >/tmp/raibitserver-helm.yaml
 ```
 
-### Dashboard and app-package changes
+### Dashboard와 app package
 
 ```sh
 pnpm --filter @raibitserver/dashboard typecheck
@@ -109,7 +109,7 @@ pnpm --filter @raibitserver/cli typecheck
 
 ## Known coverage gaps
 
-- `pnpm lint` currently runs `git diff --check` and `node scripts/check-structure.js`; it is not a full ESLint pass for every package.
-- Root `pnpm typecheck` covers `packages/core`, `apps/api`, `apps/cli`, and `apps/dashboard`; packages without scripts are not independently typechecked.
-- `pnpm e2e:live` is intentionally side-effecting and outside default CI; use `pnpm e2e:dry` as the deterministic default proof.
-- Go service validation is a manual CI loop rather than a root script.
+- `pnpm lint`는 현재 `git diff --check`와 `node scripts/check-structure.js`를 실행하며, 모든 package의 full ESLint가 아닙니다.
+- root `pnpm typecheck`는 `packages/core`, `apps/api`, `apps/cli`, `apps/dashboard`를 중심으로 검증합니다.
+- `pnpm e2e:live`는 side-effecting proof이므로 기본 CI 밖에 둡니다. 기본 proof는 `pnpm e2e:dry`입니다.
+- Go service validation은 root script가 아니라 수동/CI loop입니다.

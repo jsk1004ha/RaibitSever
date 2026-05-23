@@ -1,47 +1,110 @@
-# Troubleshooting
+# 문제 해결
 
-## `pnpm install --frozen-lockfile` fails
+> 이 문서는 RAIBITSERVER를 설치, 검증, 배포할 때 자주 만나는 실패와 우선 확인 순서를 정리합니다.
 
-Use Node.js 24+ and pnpm 11.1.2:
+## `pnpm install --frozen-lockfile` 실패
+
+### 증상
+
+- lockfile 설치가 실패합니다.
+- pnpm version mismatch 또는 Node.js version 오류가 납니다.
+
+### 확인
 
 ```sh
+node --version
 corepack enable
 pnpm --version
 ```
 
-The repository pins `packageManager: pnpm@11.1.2`.
+### 해결
 
-## Production API refuses to boot
+- Node.js 24+를 사용합니다.
+- 저장소는 `packageManager: pnpm@11.1.2`를 pinning합니다.
+- corepack으로 pnpm 11.1.2를 활성화한 뒤 다시 설치합니다.
 
-Production persistence defaults to Prisma/PostgreSQL. Set:
+## Production API가 부팅을 거부함
 
-- `DATABASE_URL`
-- `ENCRYPTION_KEY` or `RAIBITSERVER_SECRET_ENCRYPTION_KEY`
-- `JWT_SECRET` or `RAIBITSERVER_AUTH_JWT_SECRET`
+### 증상
 
-The in-memory repository is only for dev/test fallback and requires explicit opt-in outside those modes.
+Production mode에서 in-memory fallback으로 뜨지 않고 부팅이 실패합니다.
 
-## Dry E2E passes but live E2E fails immediately
+### 확인할 환경 변수
 
-`pnpm e2e:live` requires Docker, kubectl, and kind or k3d. Run:
+```txt
+DATABASE_URL
+ENCRYPTION_KEY 또는 RAIBITSERVER_SECRET_ENCRYPTION_KEY
+JWT_SECRET 또는 RAIBITSERVER_AUTH_JWT_SECRET
+```
+
+### 해결
+
+Production persistence는 Prisma/PostgreSQL을 기본으로 사용합니다. In-memory repository는 dev/test fallback 전용이며, production에서는 명시적 opt-in 없이 사용하지 않습니다.
+
+## Dry E2E는 성공하지만 Live E2E가 즉시 실패
+
+### 증상
+
+`pnpm e2e:live`가 build나 Kubernetes apply를 시작하기 전에 실패합니다.
+
+### 확인
 
 ```sh
 pnpm dev:up
 cat .raibitserver-work/local-stack.json
 ```
 
-Missing tools are reported before any side-effecting build or Kubernetes operation starts.
+### 해결
 
-For kind, the live setup plan must include containerd registry mirror configuration, Docker network connection to `raibitserver-registry`, and the `kube-public/local-registry-hosting` ConfigMap. If image pulls fail, inspect `.raibitserver-work/e2e-report.json` under `liveSetupResults` before retrying.
+- Docker가 실행 중인지 확인합니다.
+- `kubectl`이 설치되어 있는지 확인합니다.
+- `kind` 또는 `k3d`가 설치되어 있는지 확인합니다.
+- 기본 registry가 맞지 않으면 `REGISTRY_URL`을 설정합니다.
 
-## Deployment blocked by security policy
+kind image pull 문제가 있으면 `.raibitserver-work/e2e-report.json`의 `liveSetupResults`에서 containerd registry mirror, Docker network 연결, `kube-public/local-registry-hosting` ConfigMap 결과를 먼저 확인합니다.
 
-RAIBITSERVER blocks privileged containers, root execution, host networking, host PID/IPC, hostPath, capability additions, writable non-`/tmp` mounts, service-account token automount, and non-`RuntimeDefault` seccomp. Fix the service desired state and retry deployment.
+## Deployment가 보안 정책에 차단됨
 
-## DB console query rejected
+### 증상
 
-- Viewer role can run read-only queries only.
-- Non-read SQL requires `db:query` permission and `confirmed: true`.
-- Live PostgreSQL queries require a provider-owned connection URL on the resource; request-supplied URLs are ignored.
-- Resource-create payloads strip connection URL/URI/DSN/JDBC variants from both top-level resource fields and nested `desiredSpec`.
-- SQLite creates parent directories only under the provider-owned `.raibitserver-work/sqlite` local console root, and blocks `ATTACH`, `DETACH`, `VACUUM INTO`, `load_extension`, and unsafe PRAGMAs before SQLite executes them.
+manifest compile 또는 deployment queue 단계에서 security policy 오류가 발생합니다.
+
+### 원인
+
+RAIBITSERVER는 다음을 차단합니다.
+
+- privileged container
+- root execution
+- host networking
+- host PID/IPC
+- hostPath
+- capability addition
+- writable non-`/tmp` mount
+- service-account token automount
+- non-`RuntimeDefault` seccomp
+
+### 해결
+
+서비스 desired state를 수정한 뒤 다시 deployment를 요청합니다. 자세한 정책은 [보안 문서](security.md)를 확인하세요.
+
+## DB console query가 거부됨
+
+### 확인할 것
+
+- viewer role은 read-only query만 실행할 수 있습니다.
+- non-read SQL은 `db:query` permission과 `confirmed: true`가 모두 필요합니다.
+- live PostgreSQL query는 resource의 provider-owned connection URL이 필요합니다.
+- request-supplied connection URL/URI/DSN/JDBC 값은 무시되거나 제거됩니다.
+- SQLite는 provider-owned `.raibitserver-work/sqlite` root 밖의 파일을 열 수 없습니다.
+- SQLite는 `ATTACH`, `DETACH`, `VACUUM INTO`, `load_extension`, unsafe PRAGMA를 차단합니다.
+
+## 추가 확인 명령
+
+```sh
+pnpm test
+pnpm typecheck
+node scripts/check-structure.js
+pnpm e2e:dry
+```
+
+변경 영역별 명령은 [검증 명령 매트릭스](verification-commands.md)를 참고하세요.
