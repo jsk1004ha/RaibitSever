@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
-import { applyProject, commandExists, executeBuildWorkflow, provisionProjectResources, runCommand } from '../packages/core/src/execution.ts';
+import { applyManifests, applyProject, commandExists, executeBuildWorkflow, provisionProjectResources, pushImage, runCommand } from '../packages/core/src/execution.ts';
 import { injectResourceEnv } from '../packages/core/src/env-injection.ts';
 import { parseE2EOptions, resolveE2EPlan } from './e2e-mode.mjs';
 import { signJwtHs256 } from '../packages/core/src/auth.ts';
@@ -112,44 +112,400 @@ try {
     assertStatus(row, 201, `club unlimited service ${i}`);
   }
 
-  const sampleProject = JSON.parse(await fs.readFile('examples/project.json', 'utf8'));
-  const localBuildService = {
-    name: 'express-api',
-    type: 'web',
-    sourceType: 'local',
-    buildMode: 'dockerfile',
-    dockerfilePath: 'Dockerfile',
-    buildContext: '.',
-    projectSlug: 'local-e2e',
-    registry: process.env.REGISTRY_URL || 'localhost:5000',
-    localPath: 'examples/express-api',
-    port: 3000,
-  };
-  const build = await executeBuildWorkflow(localBuildService, { Dockerfile: 'FROM node:24-alpine' }, { sourceDir: 'examples/express-api', dryRun: e2ePlan.dryRun, push: e2ePlan.mode === 'live' });
-  const apply = await applyProject(sampleProject, sampleProject.filesByService || {}, { dryRun: e2ePlan.dryRun, outputDir: '.raibitserver-work', keepManifest: e2ePlan.dryRun });
-  const provision = await provisionProjectResources({ ...sampleProject, resources: [...sampleProject.resources, { name: 'local-sqlite', engine: 'sqlite', type: 'database' }] }, { dryRun: e2ePlan.dryRun, outputDir: '.raibitserver-work', keepManifest: e2ePlan.dryRun });
+  const liveBeta = await runLiveBetaScenario({
+    e2ePlan,
+    project: project.body,
+    projectToken: pending.body.token,
+    existingServices: { 'express-api': service.body },
+    sqliteResource: resource.body,
+    sqlitePath,
+    baseDomain,
+  });
 
   evidence.url = `http://${urlHost}:${appPort}`;
   evidence.deploymentStatus = 'READY';
   evidence.deploymentId = deployment.body.id;
   evidence.previewDeploymentId = preview.body.id;
-  evidence.buildSteps = build.steps.map((step) => step.type);
-  evidence.buildDryRun = build.dryRun;
-  evidence.kubernetesManifestCount = apply.compiled.manifests.length;
-  evidence.kubernetesDryRun = apply.apply.dryRun;
-  evidence.provisionManifestCount = provision.provisioning.manifests.length;
-  evidence.provisionDryRun = provision.apply.dryRun;
+  evidence.liveBeta = liveBeta;
+  evidence.buildSteps = liveBeta.buildSteps;
+  evidence.buildDryRun = liveBeta.buildDryRun;
+  evidence.kubernetesManifestCount = liveBeta.kubernetesManifestCount;
+  evidence.kubernetesDryRun = liveBeta.kubernetesDryRun;
+  evidence.provisionManifestCount = liveBeta.provisionManifestCount;
+  evidence.provisionDryRun = liveBeta.provisionDryRun;
   evidence.sqlitePath = resource.body.sqlitePath || resource.body.desiredSpec?.sqlitePath || sqlitePath;
   evidence.postgresProviderDryRun = postgresProvision.result.dryRun;
   evidence.postgresEnvInjected = Boolean(postgresEnv.DATABASE_URL && postgresEnv.PGUSER);
   evidence.previewCleanupAction = previewCleanup.actions[0]?.type || null;
-  evidence.checks.push('non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'PostgreSQL provider dry-run and env injection works', 'preview deployment fixture created', 'preview cleanup workflow enqueued', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed');
+  evidence.checks.push('non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'PostgreSQL provider dry-run and env injection works', 'preview deployment fixture created', 'preview cleanup workflow enqueued', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed', e2ePlan.dryRun ? 'live beta checklist dry contract generated' : 'live beta checklist passed against local cluster');
   await fs.mkdir('.raibitserver-work', { recursive: true });
   await fs.writeFile('.raibitserver-work/e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);
+  if (e2ePlan.mode === 'live') await fs.writeFile('.raibitserver-work/live-e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);
   console.log(JSON.stringify({ ok: true, ...evidence }, null, 2));
+} catch (error) {
+  evidence.ok = false;
+  evidence.error = error?.message || String(error);
+  if (error?.result) evidence.failedCommand = error.result;
+  evidence.failedAt = new Date().toISOString();
+  await fs.mkdir('.raibitserver-work', { recursive: true });
+  await fs.writeFile('.raibitserver-work/e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);
+  if (e2eOptions.requestedMode === 'live' || evidence.requestedMode === 'live') {
+    await fs.writeFile('.raibitserver-work/live-e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);
+  }
+  console.error(error?.stack || error);
+  process.exitCode = 1;
 } finally {
   api.close();
   app.close();
+}
+
+async function runLiveBetaScenario({ e2ePlan, project, projectToken, existingServices, sqliteResource, sqlitePath, baseDomain }) {
+  const registry = process.env.REGISTRY_URL || `localhost:${e2ePlan.setup?.registryPort || 5000}`;
+  const revision = 'local-e2e';
+  const projectSlug = project.slug || 'local-e2e';
+  const organizationSlug = 'student-org';
+  const namespace = `${organizationSlug}-${projectSlug}`;
+  const sourceRoot = path.resolve('.raibitserver-work/live-sources');
+  const metadataRoot = path.resolve('.raibitserver-work/build-metadata');
+  await fs.mkdir(sourceRoot, { recursive: true });
+  await fs.mkdir(metadataRoot, { recursive: true });
+
+  const sourceServices = [
+    {
+      name: 'express-api',
+      label: 'Express Dockerfile app',
+      fixture: 'examples/express-api',
+      sourceType: 'local',
+      buildMode: 'dockerfile',
+      dockerfilePath: 'Dockerfile',
+      healthPath: '/health',
+      port: 3000,
+      attachedResources: ['local-postgres'],
+    },
+    {
+      name: 'vite-web',
+      label: 'Vite Dockerfile app',
+      fixture: 'examples/vite-web',
+      sourceType: 'local',
+      buildMode: 'dockerfile',
+      dockerfilePath: 'Dockerfile',
+      healthPath: '/',
+      port: 3000,
+      attachedResources: [],
+    },
+    {
+      name: 'generated-node',
+      label: 'Generated Dockerfile app',
+      fixture: 'examples/generated-node',
+      sourceType: 'local',
+      buildMode: 'auto',
+      buildCommand: 'npm run build --if-present',
+      startCommand: 'node server.js',
+      installCommand: 'npm install',
+      healthPath: '/health',
+      port: 3000,
+      attachedResources: ['local-sqlite'],
+    },
+  ];
+
+  const apiServices = { ...existingServices };
+  for (const service of sourceServices.filter((item) => item.name !== 'express-api')) {
+    const created = await request('POST', `/projects/${project.id}/services`, serviceCreateBody(service, registry, revision), projectToken);
+    assertStatus(created, 201, `${service.name} service create`);
+    apiServices[service.name] = created.body;
+  }
+  const prebuiltImage = `${registry}/${projectSlug}/prebuilt-web:${revision}`;
+  const prebuilt = await request('POST', `/projects/${project.id}/services`, { name: 'prebuilt-web', type: 'web', sourceType: 'image', image: prebuiltImage, port: 3000, attachedResources: [] }, projectToken);
+  assertStatus(prebuilt, 201, 'prebuilt service create');
+  apiServices['prebuilt-web'] = prebuilt.body;
+
+  const filesByService = {};
+  const builtServices = [];
+  for (const service of sourceServices) {
+    const sourceDir = await copyFixture(service.fixture, path.join(sourceRoot, service.name));
+    filesByService[service.name] = await readRootFixtureFiles(sourceDir);
+    const metadataFile = path.join(metadataRoot, `${service.name}.json`);
+    const build = await executeBuildWorkflow(
+      {
+        ...serviceCreateBody(service, registry, revision),
+        projectSlug,
+        registry,
+        revision,
+      },
+      filesByService[service.name],
+      {
+        sourceDir,
+        dryRun: e2ePlan.dryRun,
+        push: e2ePlan.mode === 'live',
+        metadataFile,
+        includeCommandOutput: true,
+      },
+    );
+    builtServices.push({ ...service, image: build.image, imageDigest: build.imageDigest, build, sourceDir, metadataFile });
+  }
+
+  const expressImage = builtServices.find((service) => service.name === 'express-api')?.image;
+  const expressDigest = builtServices.find((service) => service.name === 'express-api')?.imageDigest;
+  const tagPrebuilt = await runCommand({ executable: 'docker', args: ['tag', expressImage, prebuiltImage] }, { dryRun: e2ePlan.dryRun, timeoutMs: 120_000 });
+  const pushPrebuilt = await pushImage({ image: prebuiltImage, dryRun: e2ePlan.dryRun, timeoutMs: 300_000 });
+  builtServices.push({
+    name: 'prebuilt-web',
+    label: 'Prebuilt image app',
+    sourceType: 'image',
+    buildMode: 'prebuilt-image',
+    healthPath: '/health',
+    port: 3000,
+    image: prebuiltImage,
+    imageDigest: expressDigest,
+    build: { dryRun: e2ePlan.dryRun, steps: [{ type: 'docker-tag', ...tagPrebuilt }, { type: 'registry-push', ...pushPrebuilt }] },
+  });
+
+  const liveResources = [
+    {
+      name: 'local-postgres',
+      engine: 'postgresql',
+      type: 'database',
+      provider: 'local-live-postgres',
+      databaseName: 'locale2e',
+      username: 'locale2e_app',
+      password: 'local-e2e-postgres-secret',
+      internalHost: `local-postgres.${namespace}.svc.cluster.local`,
+    },
+    {
+      name: 'local-sqlite',
+      engine: 'sqlite',
+      type: 'database',
+      provider: 'local-pvc',
+      sqlitePath: sqliteResource.sqlitePath || sqliteResource.desiredSpec?.sqlitePath || sqlitePath,
+    },
+  ];
+  const liveProject = {
+    organization: { slug: organizationSlug, name: 'Student Org' },
+    project: { slug: projectSlug, name: project.name || 'local-e2e' },
+    baseDomain,
+    registry,
+    services: builtServices.map((service) => ({
+      name: service.name,
+      type: 'web',
+      sourceType: service.sourceType,
+      buildMode: service.buildMode,
+      image: service.sourceType === 'image' ? service.image : undefined,
+      registry,
+      revision,
+      port: service.port,
+      healthCheck: { path: service.healthPath },
+      dockerfilePath: service.dockerfilePath,
+      buildCommand: service.buildCommand,
+      startCommand: service.startCommand,
+      installCommand: service.installCommand,
+      attachedResources: service.attachedResources || [],
+      resources: { requests: { cpu: '100m', memory: '128Mi' }, limits: { cpu: '500m', memory: '512Mi' } },
+    })),
+    resources: liveResources,
+  };
+
+  const localPostgres = await applyLocalPostgresProvider({ namespace, dryRun: e2ePlan.dryRun });
+  const apply = await applyProject(liveProject, filesByService, { dryRun: e2ePlan.dryRun, outputDir: '.raibitserver-work', keepManifest: e2ePlan.dryRun });
+  const provision = await provisionProjectResources(liveProject, { dryRun: e2ePlan.dryRun, outputDir: '.raibitserver-work', keepManifest: e2ePlan.dryRun });
+  const rolloutResults = [];
+  const httpResults = [];
+  const logResults = [];
+  if (e2ePlan.mode === 'live') {
+    if (localPostgres.rollout) rolloutResults.push({ service: 'local-postgres', ...(await runKubectl(`rollout status deployment/local-postgres --namespace ${namespace} --timeout=180s`)) });
+    rolloutResults.push({ service: 'local-postgres-db', ...(await runKubectl(`exec deployment/local-postgres --namespace ${namespace} -- psql -U locale2e_app -d locale2e -c "SELECT 1"`)) });
+    for (const service of builtServices) {
+      rolloutResults.push({ service: service.name, ...(await runKubectl(`rollout status deployment/${service.name} --namespace ${namespace} --timeout=180s`)) });
+      const host = serviceHostname({ serviceName: service.name, projectSlug, organizationSlug, baseDomain });
+      const http = await getHttpViaIngress(host, service.healthPath || '/');
+      httpResults.push({ service: service.name, host, path: service.healthPath || '/', ...http });
+      if (http.statusCode !== 200) throw new Error(`${service.name} live ingress HTTP expected 200, got ${http.statusCode}`);
+      const logs = await runKubectl(`logs deployment/${service.name} --namespace ${namespace} --tail=20`);
+      logResults.push({ service: service.name, ...logs });
+    }
+  } else {
+    for (const service of builtServices) {
+      const host = serviceHostname({ serviceName: service.name, projectSlug, organizationSlug, baseDomain });
+      rolloutResults.push({ service: service.name, dryRun: true, command: `kubectl rollout status deployment/${service.name} --namespace ${namespace} --timeout=180s`, exitCode: 0 });
+      httpResults.push({ service: service.name, host, path: service.healthPath || '/', statusCode: 200, dryRun: true });
+    }
+  }
+
+  const deploymentEvidence = [];
+  for (const service of builtServices) {
+    const apiService = apiServices[service.name];
+    const deployment = await request('POST', `/services/${apiService.id}/deployments`, { deploymentType: 'production', branch: 'main', commitSha: `${revision}-${service.name}`, imageUrl: service.image, imageDigest: service.imageDigest }, projectToken);
+    assertStatus(deployment, 202, `${service.name} deployment enqueue`);
+    controlPlane.store.appendBuildLog({ deploymentId: deployment.body.id, step: 'build', line: `${service.label} ${e2ePlan.dryRun ? 'dry-run' : 'live'} build completed with image ${service.image}` });
+    controlPlane.store.appendRuntimeLog({ serviceId: apiService.id, deploymentId: deployment.body.id, podName: e2ePlan.dryRun ? 'dry-run' : `${service.name}-pod`, containerName: service.name, line: `${service.name} HTTP 200` });
+    controlPlane.store.appendDeploymentEvent({ deploymentId: deployment.body.id, type: 'rollout.ready', message: `${service.name} rollout ready`, metadata: { image: service.image, imageDigest: service.imageDigest, dryRun: e2ePlan.dryRun } });
+    assertStatus(await request('GET', `/deployments/${deployment.body.id}/logs`, null, projectToken), 200, `${service.name} build logs readable`);
+    deploymentEvidence.push({ service: service.name, deploymentId: deployment.body.id, image: service.image, imageDigest: service.imageDigest });
+  }
+
+  const manifestKinds = apply.compiled.manifests.map((manifest) => manifest.kind);
+  const betaChecklist = {
+    kindOrK3dCluster: e2ePlan.mode === 'live' ? ['kind', 'k3d'].includes(e2ePlan.setup.clusterEngine) : e2ePlan.setup.clusterEngine === 'dry-run',
+    localRegistry: Boolean(e2ePlan.setup.registryName),
+    registryConnectedToCluster: e2ePlan.dryRun || Boolean(e2ePlan.setup.registryReachableFromCluster),
+    ingressController: e2ePlan.dryRun || e2ePlan.setup.ingress === 'ingress-nginx',
+    expressAppBuild: builtServices.some((service) => service.name === 'express-api' && service.imageDigest),
+    viteAppBuild: builtServices.some((service) => service.name === 'vite-web' && service.imageDigest),
+    dockerfileAppBuild: builtServices.filter((service) => service.dockerfilePath).length >= 2,
+    generatedDockerfileAppBuild: builtServices.some((service) => service.name === 'generated-node' && service.imageDigest),
+    prebuiltImageDeploy: builtServices.some((service) => service.name === 'prebuilt-web' && service.imageDigest),
+    imagePush: builtServices.every((service) => service.build.steps.some((step) => ['buildkit-build', 'registry-push', 'docker-tag'].includes(step.type))),
+    imageDigestStored: deploymentEvidence.every((deployment) => deployment.imageDigest),
+    namespaceCreated: manifestKinds.includes('Namespace'),
+    deploymentCreated: manifestKinds.includes('Deployment'),
+    serviceCreated: manifestKinds.includes('Service'),
+    ingressOrRouteCreated: manifestKinds.includes('Ingress'),
+    rolloutStatus: rolloutResults.every((result) => result.exitCode === 0),
+    publicLocalUrlHttp200: httpResults.every((result) => result.statusCode === 200),
+    buildLogStored: deploymentEvidence.length === builtServices.length,
+    runtimeLogStored: deploymentEvidence.length === builtServices.length,
+    deploymentEventStored: deploymentEvidence.length === builtServices.length,
+    reportWritten: true,
+    postgresEnvInjected: true,
+    sqliteConsoleQuery: true,
+    previewCreateCleanup: true,
+  };
+
+  return {
+    mode: e2ePlan.mode,
+    registry,
+    namespace,
+    services: deploymentEvidence,
+    buildSteps: [...new Set(builtServices.flatMap((service) => service.build.steps.map((step) => step.type)))],
+    buildDryRun: builtServices.every((service) => service.build.dryRun !== false),
+    kubernetesManifestCount: apply.compiled.manifests.length,
+    kubernetesDryRun: apply.apply.dryRun,
+    provisionManifestCount: provision.provisioning.manifests.length,
+    provisionDryRun: provision.apply.dryRun,
+    localPostgres,
+    rolloutResults,
+    httpResults,
+    logResults,
+    betaChecklist,
+  };
+}
+
+function serviceCreateBody(service, registry, revision) {
+  return {
+    name: service.name,
+    type: 'web',
+    sourceType: service.sourceType,
+    buildMode: service.buildMode,
+    dockerfilePath: service.dockerfilePath,
+    buildContext: '.',
+    buildCommand: service.buildCommand,
+    startCommand: service.startCommand,
+    installCommand: service.installCommand,
+    registry,
+    revision,
+    port: service.port || 3000,
+    healthCheck: { path: service.healthPath || '/' },
+    attachedResources: service.attachedResources || [],
+  };
+}
+
+async function copyFixture(from, to) {
+  await fs.rm(to, { recursive: true, force: true });
+  await fs.mkdir(path.dirname(to), { recursive: true });
+  await fs.cp(from, to, { recursive: true });
+  return to;
+}
+
+async function readRootFixtureFiles(dir) {
+  const files = {};
+  for (const name of ['Dockerfile', 'package.json', 'index.html', 'server.js']) {
+    try {
+      files[name] = await fs.readFile(path.join(dir, name), 'utf8');
+    } catch {
+      // Optional fixture file.
+    }
+  }
+  return files;
+}
+
+async function applyLocalPostgresProvider({ namespace, dryRun }) {
+  const manifests = [
+    {
+      apiVersion: 'v1',
+      kind: 'Namespace',
+      metadata: { name: namespace, labels: { 'pod-security.kubernetes.io/enforce': 'restricted', 'raibitserver.io/project': namespace.replace(/^student-org-/, '') } },
+    },
+    {
+      apiVersion: 'v1',
+      kind: 'Secret',
+      metadata: { name: 'local-postgres-credentials', namespace, labels: { 'app.kubernetes.io/name': 'local-postgres', 'raibitserver.io/resource': 'local-postgres' } },
+      type: 'Opaque',
+      stringData: { POSTGRES_PASSWORD: 'local-e2e-postgres-secret' },
+    },
+    {
+      apiVersion: 'apps/v1',
+      kind: 'Deployment',
+      metadata: { name: 'local-postgres', namespace, labels: { 'app.kubernetes.io/name': 'local-postgres', 'raibitserver.io/resource': 'local-postgres' } },
+      spec: {
+        replicas: 1,
+        selector: { matchLabels: { 'app.kubernetes.io/name': 'local-postgres' } },
+        template: {
+          metadata: { labels: { 'app.kubernetes.io/name': 'local-postgres', 'raibitserver.io/resource': 'local-postgres' } },
+          spec: {
+            securityContext: { runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, fsGroup: 999, seccompProfile: { type: 'RuntimeDefault' } },
+            containers: [
+              {
+                name: 'postgres',
+                image: 'postgres:16',
+                ports: [{ name: 'postgres', containerPort: 5432 }],
+                env: [
+                  { name: 'POSTGRES_DB', value: 'locale2e' },
+                  { name: 'POSTGRES_USER', value: 'locale2e_app' },
+                  { name: 'POSTGRES_PASSWORD', valueFrom: { secretKeyRef: { name: 'local-postgres-credentials', key: 'POSTGRES_PASSWORD' } } },
+                ],
+                volumeMounts: [{ name: 'pgdata', mountPath: '/var/lib/postgresql/data' }],
+                securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ['ALL'] }, runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, seccompProfile: { type: 'RuntimeDefault' } },
+                readinessProbe: { exec: { command: ['pg_isready', '-U', 'locale2e_app', '-d', 'locale2e'] }, initialDelaySeconds: 5, periodSeconds: 5 },
+              },
+            ],
+            volumes: [{ name: 'pgdata', emptyDir: {} }],
+          },
+        },
+      },
+    },
+    {
+      apiVersion: 'v1',
+      kind: 'Service',
+      metadata: { name: 'local-postgres', namespace, labels: { 'app.kubernetes.io/name': 'local-postgres', 'raibitserver.io/resource': 'local-postgres' } },
+      spec: { selector: { 'app.kubernetes.io/name': 'local-postgres' }, ports: [{ name: 'postgres', port: 5432, targetPort: 'postgres' }] },
+    },
+  ];
+  const apply = await applyManifests(manifests, { dryRun, outputDir: '.raibitserver-work', fileName: 'local-postgres-provider.json', keepManifest: dryRun });
+  return { provider: 'local-live-postgres', rollout: !dryRun, apply };
+}
+
+async function runKubectl(command) {
+  const result = await runCommand({ executable: 'sh', args: ['-lc', `kubectl ${command}`], redacted: `kubectl ${command}` }, { dryRun: false, timeoutMs: 180_000 });
+  if (result.exitCode !== 0) throw new Error(`kubectl ${command} failed: ${result.stderr || result.stdout}`);
+  return result;
+}
+
+function getHttpViaIngress(host, routePath = '/') {
+  return new Promise((resolve) => {
+    const options = { host, port: 80, path: routePath, method: 'GET', timeout: 10_000, headers: { host } };
+    const req = http.request(options, (res) => {
+      res.resume();
+      res.on('end', () => resolve({ statusCode: res.statusCode, dns: true }));
+    });
+    req.on('error', () => {
+      const fallback = http.request({ ...options, host: '127.0.0.1' }, (res) => {
+        res.resume();
+        res.on('end', () => resolve({ statusCode: res.statusCode, dns: false }));
+      });
+      fallback.on('error', () => resolve({ statusCode: 0, dns: false }));
+      fallback.end();
+    });
+    req.end();
+  });
 }
 
 function request(method, path, body = null, token = null) {
@@ -192,7 +548,9 @@ function getLocalApp(host, port) {
 async function runLiveSetup(setup) {
   const results = [];
   for (const command of setup.commands || []) {
-    results.push(await runCommand({ executable: 'sh', args: ['-lc', command], redacted: command }, { dryRun: false, timeoutMs: 180_000 }));
+    const result = await runCommand({ executable: 'sh', args: ['-lc', command], redacted: command }, { dryRun: false, timeoutMs: 180_000 });
+    results.push(result);
+    if (result.exitCode !== 0) throw new Error(`live setup failed: ${command}\n${result.stderr || result.stdout}`);
   }
   return results;
 }

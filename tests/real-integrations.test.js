@@ -60,14 +60,16 @@ test('git clone adapter can execute a real local clone when git is available', a
 });
 
 test('BuildKit/Docker and registry execution plans are real commands but dry-run by default', async () => {
-  const plan = buildExecutionPlan(service, { Dockerfile: 'FROM scratch' }, { sourceDir: '/workspace/demo', push: true, buildArgs: { SECRET_TOKEN: 'super-secret-value' } });
+  const plan = buildExecutionPlan(service, { Dockerfile: 'FROM scratch' }, { sourceDir: '/workspace/demo', push: true, buildArgs: { SECRET_TOKEN: 'super-secret-value' }, metadataFile: '/tmp/build-metadata.json' });
   assert.match(plan.buildCommand, /docker buildx build/);
   assert.match(plan.buildCommand, /--push/);
+  assert.match(plan.buildCommand, /--metadata-file/);
   assert.doesNotMatch(plan.buildCommand, /super-secret-value/);
   assert.equal(plan.push, true);
 
-  const result = await executeBuildWorkflow(service, { Dockerfile: 'FROM scratch' }, { sourceDir: '/workspace/demo', push: true, buildArgs: { SECRET_TOKEN: 'super-secret-value' } });
+  const result = await executeBuildWorkflow(service, { Dockerfile: 'FROM scratch' }, { sourceDir: '/workspace/demo', push: true, buildArgs: { SECRET_TOKEN: 'super-secret-value' }, metadataFile: '/tmp/build-metadata.json' });
   assert.equal(result.dryRun, true);
+  assert.match(result.imageDigest, /^sha256:[a-f0-9]{64}$/);
   assert.equal(result.steps.some((step) => step.type === 'git-clone'), true);
   const buildStep = result.steps.find((step) => step.type === 'buildkit-build');
   assert.equal(Boolean(buildStep), true);

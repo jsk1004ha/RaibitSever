@@ -113,7 +113,10 @@ export function liveE2ESetupPlan(tools = {}, options = {}) {
       `docker network inspect kind >/dev/null 2>&1 && docker network connect kind ${shellQuote(registryName)} 2>/dev/null || true`,
       kindLocalRegistryConfigMapCommand({ registryPort }),
     ] : []),
+    'kubectl apply -f infra/operators/manageddatabase-crd.yaml',
+    'kubectl apply -f infra/operators/managedresources-crd.yaml',
     'kubectl get namespace ingress-nginx || kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml',
+    'kubectl label namespace ingress-nginx raibitserver.io/ingress-gateway=true --overwrite',
     'kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=180s',
     `kubectl get nodes -o wide && kubectl get pods -A`,
   ];

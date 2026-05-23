@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
 import { resolveBuildStrategy } from './build-strategy.ts';
 import { SOURCE_TYPES } from './constants.ts';
 import { cloneRepository, sourceCheckoutPlan } from './source-control.ts';
@@ -8,10 +9,11 @@ import { pushImage, registryLogin } from './registry.ts';
 import { isSecretKey, maskSecretValue } from './secrets.ts';
 import { sanitizeLogRecord } from './security.ts';
 
-export function dockerBuildxCommand({ image, context = '.', dockerfile = 'Dockerfile', push = false, load = false, platforms = [], buildArgs = {}, target = null, cache = true }: Record<string, any>) {
+export function dockerBuildxCommand({ image, context = '.', dockerfile = 'Dockerfile', push = false, load = false, platforms = [], buildArgs = {}, target = null, cache = true, metadataFile = null }: Record<string, any>) {
   if (!image) throw new Error('image is required for docker buildx');
   const args = ['buildx', 'build', '--file', String(dockerfile), '--tag', String(image)];
   const redactedArgs = [...args];
+  if (metadataFile) { args.push('--metadata-file', String(metadataFile)); redactedArgs.push('--metadata-file', String(metadataFile)); }
   if (push) { args.push('--push'); redactedArgs.push('--push'); }
   if (load) { args.push('--load'); redactedArgs.push('--load'); }
   if (cache) { args.push('--cache-to', 'type=inline'); redactedArgs.push('--cache-to', 'type=inline'); }
@@ -50,7 +52,7 @@ export function buildExecutionPlan(service: Record<string, any>, files: Record<s
   const builder = options.builder || 'docker-buildx';
   const buildCommand = builder === 'buildctl'
     ? buildctlCommand({ image: buildPlan.image, context, dockerfile: path.dirname(dockerfilePath), push })
-    : dockerBuildxCommand({ image: buildPlan.image, context, dockerfile: dockerfilePath, push, load: !push, platforms: options.platforms || service.platforms || [], buildArgs: options.buildArgs || service.buildArgs || {}, target: options.target || service.target || null });
+    : dockerBuildxCommand({ image: buildPlan.image, context, dockerfile: dockerfilePath, push, load: !push, platforms: options.platforms || service.platforms || [], buildArgs: options.buildArgs || service.buildArgs || {}, target: options.target || service.target || null, metadataFile: options.metadataFile || service.metadataFile || null });
 
   return {
     service: buildPlan.service,
@@ -95,7 +97,8 @@ export async function executeBuildWorkflow(service: Record<string, any>, files: 
       steps.push({ type: 'docker-tag', command: tag.command, dryRun: tag.dryRun });
     }
     if (options.push) steps.push({ type: 'registry-push', ...(await pushImage({ image: plan.image, dryRun, timeoutMs: options.timeoutMs })) });
-    return { ...plan, sourceDir, dryRun, steps };
+    const imageDigest = options.imageDigest || (dryRun ? deterministicImageDigest(plan.image) : null);
+    return { ...plan, sourceDir, dryRun, imageDigest, steps };
   }
 
   if (options.registryUsername && options.registryPassword) {
@@ -104,15 +107,16 @@ export async function executeBuildWorkflow(service: Record<string, any>, files: 
 
   const buildCommand = options.builder === 'buildctl'
     ? buildctlCommand({ image: plan.image, context: plan.context, dockerfile: path.dirname(plan.dockerfile), push: plan.push })
-    : dockerBuildxCommand({ image: plan.image, context: plan.context, dockerfile: plan.dockerfile, push: plan.push, load: !plan.push, platforms: options.platforms || service.platforms || [], buildArgs: options.buildArgs || service.buildArgs || {}, target: options.target || service.target || null });
+    : dockerBuildxCommand({ image: plan.image, context: plan.context, dockerfile: plan.dockerfile, push: plan.push, load: !plan.push, platforms: options.platforms || service.platforms || [], buildArgs: options.buildArgs || service.buildArgs || {}, target: options.target || service.target || null, metadataFile: options.metadataFile || service.metadataFile || null });
   await ensureSyntheticDockerfileIfNeeded(plan, service, { dryRun });
   const result = await runCommand(buildCommand, { dryRun, timeoutMs: options.timeoutMs || 30 * 60 * 1000 });
-  steps.push({ type: 'buildkit-build', command: result.command, dryRun: result.dryRun, ...safeCommandOutput(result, options) });
+  const imageDigest = await resolveBuildDigest(options.metadataFile || service.metadataFile, plan.image, dryRun);
+  steps.push({ type: 'buildkit-build', command: result.command, dryRun: result.dryRun, imageDigest, ...safeCommandOutput(result, options) });
 
   if (!plan.push && options.pushAfterBuild) {
     steps.push({ type: 'registry-push', ...(await pushImage({ image: plan.image, dryRun, timeoutMs: options.timeoutMs })) });
   }
-  return { ...plan, sourceDir, dryRun, steps };
+  return { ...plan, sourceDir, dryRun, imageDigest, steps };
 }
 
 async function ensureSyntheticDockerfileIfNeeded(plan: Record<string, any>, service: Record<string, any>, { dryRun }: Record<string, any>) {
@@ -121,7 +125,9 @@ async function ensureSyntheticDockerfileIfNeeded(plan: Record<string, any>, serv
   await fs.mkdir(path.dirname(plan.dockerfile), { recursive: true });
   const start = service.startCommand || plan.buildPlan.runtime?.startCommand || 'npm start';
   const build = service.buildCommand || service.customBuildCommand || 'npm run build --if-present';
-  const dockerfile = `FROM node:24-alpine\nWORKDIR /app\nCOPY . .\nRUN ${build}\nENV NODE_ENV=production\nCMD ${JSON.stringify(['sh', '-lc', start])}\n`;
+  const install = service.installCommand || 'if [ -f package-lock.json ]; then npm ci; elif [ -f package.json ]; then npm install; fi';
+  const prune = service.pruneCommand || 'if [ -f package.json ]; then npm prune --omit=dev; fi';
+  const dockerfile = `FROM node:24-alpine\nWORKDIR /app\nCOPY . .\nRUN ${install}\nRUN ${build}\nRUN ${prune}\nRUN chown -R node:node /app\nENV NODE_ENV=production\nUSER node\nCMD ${JSON.stringify(['sh', '-lc', start])}\n`;
   await fs.writeFile(plan.dockerfile, dockerfile);
 }
 
@@ -137,4 +143,22 @@ function safeCommandOutput(result: Record<string, any>, options: Record<string, 
 function imageRegistry(image: string) {
   const first = String(image).split('/')[0];
   return first.includes('.') ? first : 'docker.io';
+}
+
+async function resolveBuildDigest(metadataFile: any, image: string, dryRun: boolean) {
+  if (metadataFile) {
+    try {
+      const metadata = JSON.parse(await fs.readFile(String(metadataFile), 'utf8'));
+      const digest = metadata['containerimage.digest'] || metadata['containerimage.descriptor']?.digest;
+      if (digest) return String(digest);
+    } catch {
+      // Buildx does not create a metadata file on dry-run or with builders that omit metadata.
+    }
+  }
+  if (dryRun) return deterministicImageDigest(image);
+  return null;
+}
+
+function deterministicImageDigest(image: string) {
+  return `sha256:${crypto.createHash('sha256').update(String(image)).digest('hex')}`;
 }

@@ -1,0 +1,9 @@
+{
+  "name": "raibitserver-generated-node-example",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node -e \"require('fs').mkdirSync('dist',{recursive:true}); require('fs').writeFileSync('dist/build.txt','ok')\"",
+    "start": "node server.js"
+  }
+}

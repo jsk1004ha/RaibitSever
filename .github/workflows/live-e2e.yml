@@ -43,5 +43,7 @@ jobs:
         if: always()
         with:
           name: raibitserver-live-e2e-report
-          path: .raibitserver-work/e2e-report.json
+          path: |
+            .raibitserver-work/e2e-report.json
+            .raibitserver-work/live-e2e-report.json
           if-no-files-found: ignore

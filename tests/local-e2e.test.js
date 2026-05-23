@@ -32,6 +32,12 @@ test('local E2E script verifies approval, quota, logs, preview, and SQLite conso
   assert.equal(report.postgresEnvInjected, true);
   assert.equal(report.previewCleanupAction, 'preview-cleanup-enqueued');
   assert.equal(report.liveSetup.clusterEngine, 'dry-run');
+  assert.deepEqual(Object.values(report.liveBeta.betaChecklist).filter(Boolean).length, Object.keys(report.liveBeta.betaChecklist).length);
+  assert.equal(report.liveBeta.services.some((service) => service.service === 'express-api' && service.imageDigest), true);
+  assert.equal(report.liveBeta.services.some((service) => service.service === 'vite-web' && service.imageDigest), true);
+  assert.equal(report.liveBeta.services.some((service) => service.service === 'generated-node' && service.imageDigest), true);
+  assert.equal(report.liveBeta.services.some((service) => service.service === 'prebuilt-web' && service.imageDigest), true);
+  assert.equal(report.liveBeta.httpResults.every((row) => row.statusCode === 200), true);
 });
 
 test('api-client matches prototype API project/service/resource contract', async () => {

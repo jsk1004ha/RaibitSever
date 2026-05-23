@@ -45,6 +45,9 @@ test('live setup plan chooses kind or k3d and includes registry plus ingress ste
   assert.equal(kindPlan.commands.some((command) => command.includes('containerdConfigPatches')), true);
   assert.equal(kindPlan.commands.some((command) => command.includes('docker network connect kind')), true);
   assert.equal(kindPlan.commands.some((command) => command.includes('local-registry-hosting')), true);
+  assert.equal(kindPlan.commands.some((command) => command.includes('manageddatabase-crd.yaml')), true);
+  assert.equal(kindPlan.commands.some((command) => command.includes('managedresources-crd.yaml')), true);
   assert.equal(kindPlan.commands.some((command) => command.includes('ingress-nginx')), true);
+  assert.equal(kindPlan.commands.some((command) => command.includes('raibitserver.io/ingress-gateway=true')), true);
   assert.equal(kindPlan.commands.some((command) => command.includes('kubectl wait')), true);
 });
