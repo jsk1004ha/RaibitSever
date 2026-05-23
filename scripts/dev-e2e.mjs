@@ -9,6 +9,7 @@ import { applyManifests, applyProject, commandExists, executeBuildWorkflow, prov
 import { injectResourceEnv } from '../packages/core/src/env-injection.ts';
 import { parseE2EOptions, resolveE2EPlan } from './e2e-mode.mjs';
 import { serviceHostname } from '../packages/core/src/domain-router.ts';
+import { createDeploymentWorkflowHandlers, reconcileDeploymentRollout } from '../packages/core/src/deployment-workflow.ts';
 
 const e2eOptions = parseE2EOptions(process.argv.slice(2), process.env);
 const jwtSecret = process.env.RAIBITSERVER_AUTH_JWT_SECRET || 'local-e2e-secret-at-least-32-chars';
@@ -84,10 +85,18 @@ try {
 
   const deployment = await request('POST', `/services/${service.body.id}/deployments`, { deploymentType: 'production', branch: 'main', commitSha: 'local-e2e' }, pending.body.token);
   assertStatus(deployment, 202, 'deployment enqueue');
-  controlPlane.store.appendBuildLog({ deploymentId: deployment.body.id, step: 'clone', line: 'local source ready' });
-  controlPlane.store.appendBuildLog({ deploymentId: deployment.body.id, step: 'build', line: 'generated Dockerfile build plan verified' });
-  controlPlane.store.appendRuntimeLog({ serviceId: service.body.id, deploymentId: deployment.body.id, podName: 'local-e2e-pod', containerName: 'app', line: 'GET / 200' });
-  controlPlane.store.appendDeploymentEvent({ deploymentId: deployment.body.id, type: 'rollout.ready', message: 'deterministic local rollout ready', metadata: { urlHost } });
+  const localBuild = await controlPlane.store.processNextWorkflowJob(createDeploymentWorkflowHandlers(controlPlane.store, {
+    dryRun: true,
+    filesByService: {
+      [service.body.id]: {
+        'package.json': JSON.stringify({ scripts: { start: 'node server.js' }, dependencies: { express: 'latest' } }),
+        'server.js': 'console.log("local-e2e")',
+      },
+    },
+  }), { workerId: 'local-e2e-builder' });
+  if (!localBuild.ok) throw new Error(`local builder workflow failed: ${localBuild.error}`);
+  const localRollout = await reconcileDeploymentRollout(controlPlane.store, deployment.body.id, { dryRun: true, host: urlHost });
+  if (localRollout.status !== 'READY') throw new Error(`local rollout did not become READY: ${localRollout.status}`);
   const logs = await request('GET', `/deployments/${deployment.body.id}/logs`, null, pending.body.token);
   assertStatus(logs, 200, 'build logs 조회');
   const runtimeLogs = await request('GET', `/services/${service.body.id}/logs`, null, pending.body.token);
@@ -128,7 +137,7 @@ try {
   });
 
   evidence.url = `http://${urlHost}:${appPort}`;
-  evidence.deploymentStatus = 'READY';
+  evidence.deploymentStatus = controlPlane.store.deployments.get(deployment.body.id)?.status || 'UNKNOWN';
   evidence.deploymentId = deployment.body.id;
   evidence.previewDeploymentId = preview.body.id;
   evidence.liveBeta = liveBeta;
@@ -341,10 +350,10 @@ async function runLiveBetaScenario({ e2ePlan, project, projectToken, existingSer
     const deployment = await request('POST', `/services/${apiService.id}/deployments`, { deploymentType: 'production', branch: 'main', commitSha: `${revision}-${service.name}`, imageUrl: service.image, imageDigest: service.imageDigest }, projectToken);
     assertStatus(deployment, 202, `${service.name} deployment enqueue`);
     controlPlane.store.appendBuildLog({ deploymentId: deployment.body.id, step: 'build', line: `${service.label} ${e2ePlan.dryRun ? 'dry-run' : 'live'} build completed with image ${service.image}` });
-    controlPlane.store.appendRuntimeLog({ serviceId: apiService.id, deploymentId: deployment.body.id, podName: e2ePlan.dryRun ? 'dry-run' : `${service.name}-pod`, containerName: service.name, line: `${service.name} HTTP 200` });
-    controlPlane.store.appendDeploymentEvent({ deploymentId: deployment.body.id, type: 'rollout.ready', message: `${service.name} rollout ready`, metadata: { image: service.image, imageDigest: service.imageDigest, dryRun: e2ePlan.dryRun } });
+    controlPlane.store.updateDeployment(deployment.body.id, { status: 'IMAGE_READY', imageUrl: service.image, imageDigest: service.imageDigest, buildFinishedAt: new Date().toISOString() });
+    await reconcileDeploymentRollout(controlPlane.store, deployment.body.id, { dryRun: e2ePlan.dryRun, host: serviceHostname({ serviceName: service.name, projectSlug, organizationSlug, baseDomain }) });
     assertStatus(await request('GET', `/deployments/${deployment.body.id}/logs`, null, projectToken), 200, `${service.name} build logs readable`);
-    deploymentEvidence.push({ service: service.name, deploymentId: deployment.body.id, image: service.image, imageDigest: service.imageDigest });
+    deploymentEvidence.push({ service: service.name, deploymentId: deployment.body.id, image: service.image, imageDigest: service.imageDigest, status: 'READY' });
   }
 
   const manifestKinds = apply.compiled.manifests.map((manifest) => manifest.kind);

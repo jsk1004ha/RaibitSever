@@ -91,6 +91,50 @@ test('repository creates deployment and workflow job as one operation', async ()
   assert.equal((await repository.snapshot()).workflowJobs.length, 1);
 });
 
+test('HTTP API exposes deployment detail, status transition, cancel, and rollback lifecycle routes', async () => {
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'disabled', allowDisabled: true } }));
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  try {
+    const org = controlPlane.store.createOrganization({ name: 'Deploy Org', slug: 'deploy-org' });
+    const project = controlPlane.store.createProject({ organizationId: org.id, name: 'demo', slug: 'demo' });
+    const service = controlPlane.store.createService({ projectId: project.id, name: 'api', sourceType: 'image', imageUrl: 'registry.local/demo/api:new' });
+    const previous = controlPlane.store.createDeployment({ serviceId: service.id, status: 'READY', imageUrl: 'registry.local/demo/api:old', imageDigest: 'sha256:old' });
+    const queued = controlPlane.store.createDeployment({ serviceId: service.id, status: 'queued', imageUrl: 'registry.local/demo/api:new' });
+
+    const detail = await requestWithStatus(port, 'GET', `/deployments/${queued.id}`);
+    assert.equal(detail.statusCode, 200);
+    assert.equal(detail.body.id, queued.id);
+
+    const building = await requestWithStatus(port, 'POST', `/deployments/${queued.id}/status`, { status: 'BUILDING' });
+    assert.equal(building.statusCode, 200);
+    assert.equal(building.body.status, 'BUILDING');
+    assert.ok(building.body.buildStartedAt);
+
+    const imageReady = await requestWithStatus(port, 'POST', `/deployments/${queued.id}/status`, { status: 'IMAGE_READY', imageDigest: 'sha256:new' });
+    assert.equal(imageReady.statusCode, 200);
+    assert.equal(imageReady.body.status, 'IMAGE_READY');
+    assert.equal(imageReady.body.imageDigest, 'sha256:new');
+    assert.ok(imageReady.body.buildFinishedAt);
+
+    const cancelled = await requestWithStatus(port, 'POST', `/deployments/${queued.id}/cancel`, { reason: 'user requested' });
+    assert.equal(cancelled.statusCode, 202);
+    assert.equal(cancelled.body.deployment.status, 'CANCELLED');
+    assert.equal(cancelled.body.workflowJob.type, 'deployment-cancel');
+
+    const rollback = await requestWithStatus(port, 'POST', `/deployments/${queued.id}/rollback`, {});
+    assert.equal(rollback.statusCode, 202);
+    assert.equal(rollback.body.deployment.status, 'IMAGE_READY');
+    assert.equal(rollback.body.deployment.imageUrl, previous.imageUrl);
+    assert.equal(rollback.body.workflowJob.type, 'rollback-deploy');
+    assert.equal(controlPlane.store.listDeploymentEvents(queued.id).some((event) => event.type === 'deployment.rollback.requested'), true);
+  } finally {
+    server.close();
+  }
+});
+
 test('HTTP deployment queue rejects workloads blocked by security policy', async () => {
   const controlPlane = new RAIBITSERVERControlPlane();
   const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'disabled', allowDisabled: true } }));

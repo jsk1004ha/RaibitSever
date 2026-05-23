@@ -7,6 +7,8 @@ import { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-co
 import { provisionPostgresProvider } from './resource-providers.ts';
 import { completeWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
 import { providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
+import { sanitizeLogRecord } from './security.ts';
+import { assertDeploymentTransition, normalizeDeploymentStatus } from './deployments.ts';
 
 export class InMemoryControlPlaneRepository {
   store: ControlPlaneStore;
@@ -24,11 +26,19 @@ export class InMemoryControlPlaneRepository {
   async addMember(input: Record<string, any>) { return this.store.addMember(input); }
   async listMembershipsForUser(userId: string) { return this.store.listMembershipsForUser(userId); }
   async createProject(input: Record<string, any>) { return this.store.createProject(input); }
+  async updateProject(projectId: string, updates: Record<string, any>) { return this.store.updateProject(projectId, updates); }
+  async deleteProject(projectId: string) { return this.store.deleteProject(projectId); }
   async createService(input: Record<string, any>) { return this.store.createService(input); }
+  async updateService(serviceId: string, updates: Record<string, any>) { return this.store.updateService(serviceId, updates); }
+  async deleteService(serviceId: string) { return this.store.deleteService(serviceId); }
   async createResource(input: Record<string, any>) { return this.store.createResource(input); }
   async attachProviderConnectionSecret(input: Record<string, any>) { return this.store.attachProviderConnectionSecret(input); }
   async provisionResourceProvider(input: Record<string, any>) { return this.store.provisionResourceProvider(input); }
   async createDeployment(input: Record<string, any>) { return this.store.createDeployment(input); }
+  async updateDeployment(deploymentId: string, updates: Record<string, any>, options: Record<string, any> = {}) { return this.store.updateDeployment(deploymentId, updates, options); }
+  async transitionDeployment(deploymentId: string, status: string, updates: Record<string, any> = {}, options: Record<string, any> = {}) { return this.store.transitionDeployment(deploymentId, status, updates, options); }
+  async cancelDeployment(deploymentId: string, input: Record<string, any> = {}) { return this.store.cancelDeployment(deploymentId, input); }
+  async rollbackDeployment(deploymentId: string, input: Record<string, any> = {}) { return this.store.rollbackDeployment(deploymentId, input); }
   async createSecret(input: Record<string, any>) { return this.store.createSecret(input); }
   async createDeploymentWorkflow(input: Record<string, any>) {
     const deployment = this.store.createDeployment(input.deployment || input);
@@ -170,6 +180,14 @@ export class PrismaControlPlaneRepository {
     });
   }
 
+  async updateProject(projectId: string, updates: Record<string, any>) {
+    return this.prisma.project.update({ where: { id: projectId }, data: projectUpdateData(updates) });
+  }
+
+  async deleteProject(projectId: string) {
+    return this.prisma.project.delete({ where: { id: projectId } });
+  }
+
   async createService(input: Record<string, any>) {
     return this.prisma.service.upsert({
       where: { projectId_slug: { projectId: input.projectId, slug: input.slug || slugInput(input.name) } },
@@ -217,7 +235,111 @@ export class PrismaControlPlaneRepository {
   }
 
   async createDeployment(input: Record<string, any>) {
-    return this.prisma.deployment.create({ data: deploymentData(input) });
+    let projectId = input.projectId;
+    if (!projectId && input.serviceId) {
+      const service = await this.prisma.service.findUnique({ where: { id: input.serviceId }, select: { projectId: true } });
+      projectId = service?.projectId;
+    }
+    return this.prisma.deployment.create({ data: deploymentData({ ...input, projectId }) });
+  }
+
+  async updateService(serviceId: string, updates: Record<string, any>) {
+    return this.prisma.service.update({ where: { id: serviceId }, data: serviceUpdateData(updates) });
+  }
+
+  async deleteService(serviceId: string) {
+    return this.prisma.service.delete({ where: { id: serviceId } });
+  }
+
+  async updateDeployment(deploymentId: string, updates: Record<string, any>, options: Record<string, any> = {}) {
+    const current = await this.prisma.deployment.findUnique({ where: { id: deploymentId } });
+    if (!current) throw notFoundError(`deployment not found: ${deploymentId}`);
+    if (current && Object.prototype.hasOwnProperty.call(updates || {}, 'status')) {
+      if (options.validateTransition === true) assertDeploymentTransition(current.status, updates.status);
+    }
+    const data = deploymentUpdateData(updates, current);
+    const deployment = await this.prisma.deployment.update({ where: { id: deploymentId }, data });
+    const statusChanged = Object.prototype.hasOwnProperty.call(data, 'status') && normalizeDeploymentStatus(current.status) !== normalizeDeploymentStatus(deployment.status);
+    if ((statusChanged || options.eventType) && options.appendEvent !== false) {
+      await this.appendDeploymentEvent({
+        deploymentId,
+        type: options.eventType || 'deployment.status.changed',
+        message: options.message || `Deployment status changed: ${normalizeDeploymentStatus(current.status)} -> ${normalizeDeploymentStatus(deployment.status)}`,
+        metadata: { from: normalizeDeploymentStatus(current.status), to: normalizeDeploymentStatus(deployment.status), imageUrl: deployment.imageUrl, imageDigest: deployment.imageDigest, errorCode: deployment.errorCode, ...(options.metadata || {}) },
+      });
+    }
+    return deployment;
+  }
+
+  async transitionDeployment(deploymentId: string, status: string, updates: Record<string, any> = {}, options: Record<string, any> = {}) {
+    const current = await this.prisma.deployment.findUnique({ where: { id: deploymentId } });
+    if (!current) throw notFoundError(`deployment not found: ${deploymentId}`);
+    const nextStatus = normalizeDeploymentStatus(status);
+    assertDeploymentTransition(current.status, nextStatus);
+    const deployment = await this.updateDeployment(deploymentId, { ...updates, status: nextStatus }, { ...options, appendEvent: false });
+    await this.appendDeploymentEvent({
+      deploymentId,
+      type: options.eventType || 'deployment.status.changed',
+      message: options.message || `Deployment status changed: ${normalizeDeploymentStatus(current.status)} -> ${nextStatus}`,
+      metadata: { from: normalizeDeploymentStatus(current.status), to: nextStatus, ...(options.metadata || {}) },
+    });
+    return deployment;
+  }
+
+  async cancelDeployment(deploymentId: string, input: Record<string, any> = {}) {
+    const deployment = await this.transitionDeployment(deploymentId, 'CANCELLED', {
+      finishedAt: new Date(),
+      errorCode: input.errorCode || 'DEPLOYMENT_CANCELLED',
+      errorMessage: input.reason || input.errorMessage || 'Deployment cancellation requested',
+    }, {
+      eventType: 'deployment.cancelled',
+      message: input.reason || 'Deployment cancellation requested',
+    });
+    const workflowJob = await this.enqueueWorkflowJob({
+      type: 'deployment-cancel',
+      targetType: 'deployment',
+      targetId: deployment.id,
+      payload: { deploymentId: deployment.id, serviceId: deployment.serviceId, projectId: deployment.projectId, reason: input.reason || 'requested' },
+    });
+    return { deployment, workflowJob };
+  }
+
+  async rollbackDeployment(deploymentId: string, input: Record<string, any> = {}) {
+    const current = await this.getDeployment(deploymentId);
+    if (!current) throw notFoundError(`deployment not found: ${deploymentId}`);
+    const previous = input.previousDeploymentId
+      ? await this.getDeployment(String(input.previousDeploymentId))
+      : await this.prisma.deployment.findFirst({
+          where: { serviceId: current.serviceId, id: { not: current.id }, status: 'READY', imageUrl: { not: null } },
+          orderBy: [{ deployedAt: 'desc' }, { finishedAt: 'desc' }, { createdAt: 'desc' }],
+        });
+    const imageUrl = input.imageUrl || previous?.imageUrl || null;
+    if (!imageUrl) {
+      const error = new Error('no previous READY deployment image is available for rollback');
+      (error as any).statusCode = 409;
+      throw error;
+    }
+    const imageDigest = input.imageDigest || previous?.imageDigest || null;
+    const rollback = await this.createDeployment({
+      serviceId: current.serviceId,
+      projectId: current.projectId,
+      commitSha: previous?.commitSha || current.commitSha || null,
+      imageUrl,
+      imageDigest,
+      status: 'IMAGE_READY',
+      deploymentType: current.deploymentType || 'production',
+      triggerType: 'rollback',
+      branch: input.branch || current.branch || previous?.branch || 'main',
+    });
+    await this.appendDeploymentEvent({ deploymentId: current.id, type: 'deployment.rollback.requested', message: `Rollback requested to ${imageUrl}`, metadata: { rollbackDeploymentId: rollback.id, previousDeploymentId: previous?.id || null, imageUrl, imageDigest } });
+    await this.appendDeploymentEvent({ deploymentId: rollback.id, type: 'deployment.rollback.created', message: `Rollback deployment created from ${current.id}`, metadata: { rollbackOfDeploymentId: current.id, previousDeploymentId: previous?.id || null, imageUrl, imageDigest } });
+    const workflowJob = await this.enqueueWorkflowJob({
+      type: 'rollback-deploy',
+      targetType: 'deployment',
+      targetId: rollback.id,
+      payload: { deploymentId: rollback.id, rollbackOfDeploymentId: current.id, previousDeploymentId: previous?.id || null, serviceId: rollback.serviceId, projectId: rollback.projectId, imageUrl, imageDigest },
+    });
+    return { deployment: rollback, rollbackOfDeploymentId: current.id, previousDeployment: previous || null, workflowJob };
   }
 
   async createDeploymentWorkflow(input: Record<string, any>) {
@@ -571,6 +693,18 @@ export class PrismaControlPlaneRepository {
     };
   }
 
+  async appendBuildLog(input: Record<string, any>) {
+    return this.prisma.buildLog.create({ data: { deploymentId: input.deploymentId, step: input.step || 'build', line: maskLogLine(input.line), level: input.level || 'info' } });
+  }
+
+  async appendRuntimeLog(input: Record<string, any>) {
+    return this.prisma.runtimeLog.create({ data: { serviceId: input.serviceId, deploymentId: input.deploymentId || null, podName: input.podName || 'local-pod', containerName: input.containerName || 'app', line: maskLogLine(input.line), level: input.level || 'info' } });
+  }
+
+  async appendDeploymentEvent(input: Record<string, any>) {
+    return this.prisma.deploymentEvent.create({ data: { deploymentId: input.deploymentId, type: input.type || 'deployment.event', message: maskLogLine(input.message), metadata: sanitizeJson(input.metadata || {}) } });
+  }
+
   async listDeploymentLogs(deploymentId: string) { return this.prisma.buildLog.findMany({ where: { deploymentId }, orderBy: { timestamp: 'asc' } }); }
   async listRuntimeLogs(serviceId: string) { return this.prisma.runtimeLog.findMany({ where: { serviceId }, orderBy: { timestamp: 'asc' } }); }
   async listDeploymentEvents(deploymentId: string) { return this.prisma.deploymentEvent.findMany({ where: { deploymentId }, orderBy: { timestamp: 'asc' } }); }
@@ -722,6 +856,15 @@ function slugInput(value: any) {
   return String(value || 'item').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'item';
 }
 
+function projectUpdateData(input: Record<string, any> = {}) {
+  const data: Record<string, any> = {};
+  if (input.name !== undefined) data.name = input.name;
+  if (input.slug !== undefined) data.slug = slugInput(input.slug);
+  if (input.description !== undefined) data.description = input.description || '';
+  if (input.status !== undefined) data.status = input.status;
+  return data;
+}
+
 async function resolveDesiredOrganization(tx: any, orgInput: Record<string, any> | null, requestedOrganizationId: any, organizationSlug: any) {
   if (requestedOrganizationId) {
     const byId = await tx.organization.findUnique({ where: { id: String(requestedOrganizationId) } });
@@ -785,24 +928,82 @@ function resourceData(input: Record<string, any>, options: Record<string, any> =
   };
 }
 
+
+function serviceUpdateData(input: Record<string, any> = {}) {
+  const allowed = ['name', 'type', 'runtimeType', 'sourceType', 'buildMode', 'repoUrl', 'githubRepositoryId', 'branch', 'rootDirectory', 'buildContext', 'dockerfilePath', 'installCommand', 'buildCommand', 'startCommand', 'outputDirectory', 'image', 'imageUrl', 'port', 'status'];
+  const data: Record<string, any> = {};
+  for (const key of allowed) {
+    if (!Object.prototype.hasOwnProperty.call(input || {}, key)) continue;
+    const value = input[key] === '' ? null : input[key];
+    data[key] = key === 'port' && value !== null && value !== undefined ? Number(value) : value;
+  }
+  if (input.slug !== undefined) data.slug = slugInput(input.slug);
+  if (input.image && !input.imageUrl) data.imageUrl = input.image;
+  if (input.imageUrl && !input.image) data.image = input.imageUrl;
+  if (Object.prototype.hasOwnProperty.call(input || {}, 'desiredSpec')) data.desiredSpec = sanitizeJson(input.desiredSpec || {});
+  if (Object.prototype.hasOwnProperty.call(input || {}, 'desiredState')) data.desiredState = sanitizeJson(input.desiredState || {});
+  if (Object.keys(input || {}).length && !data.desiredState) data.desiredState = sanitizeJson(input);
+  return data;
+}
+
+function deploymentUpdateData(input: Record<string, any> = {}, current: Record<string, any> = {}) {
+  const allowed = ['imageUrl', 'imageDigest', 'buildStartedAt', 'buildFinishedAt', 'deployedAt', 'finishedAt', 'errorCode', 'errorMessage', 'previewUrl'];
+  const data: Record<string, any> = {};
+  if (input.image && !input.imageUrl) data.imageUrl = input.image;
+  if (Object.prototype.hasOwnProperty.call(input || {}, 'status')) {
+    const status = normalizeDeploymentStatus(input.status);
+    data.status = status;
+    const now = new Date();
+    if (status === 'BUILDING' && !current.buildStartedAt && !input.buildStartedAt) data.buildStartedAt = now;
+    if (status === 'IMAGE_READY' && !input.buildFinishedAt) data.buildFinishedAt = now;
+    if (status === 'DEPLOYING' && !current.deployedAt && !input.deployedAt) data.deployedAt = now;
+    if (status === 'READY') {
+      if (!input.deployedAt) data.deployedAt = current.deployedAt || now;
+      if (!input.finishedAt) data.finishedAt = now;
+      if (!Object.prototype.hasOwnProperty.call(input, 'errorCode')) data.errorCode = null;
+      if (!Object.prototype.hasOwnProperty.call(input, 'errorMessage')) data.errorMessage = null;
+    }
+    if ((status === 'FAILED' || status === 'BUILD_FAILED' || status === 'CANCELLED') && !input.finishedAt) data.finishedAt = now;
+  }
+  for (const key of allowed) {
+    if (!Object.prototype.hasOwnProperty.call(input || {}, key)) continue;
+    if (['buildStartedAt', 'buildFinishedAt', 'deployedAt', 'finishedAt'].includes(key)) data[key] = input[key] ? new Date(input[key]) : null;
+    else data[key] = key === 'errorMessage' ? maskLogLine(input[key]) : (input[key] === '' ? null : input[key]);
+  }
+  return data;
+}
+
+function maskLogLine(value: any) {
+  return sanitizeLogRecord(String(value ?? ''));
+}
+
 function deploymentData(input: Record<string, any>) {
   if (!input.projectId) throw new Error('projectId is required for deployment persistence');
-  return {
+  return compactData({
+    id: input.id,
     serviceId: input.serviceId,
     projectId: input.projectId,
     commitSha: input.commitSha || input.commitHash || null,
     commitHash: input.commitHash || input.commitSha || null,
     imageUrl: input.imageUrl || input.image || null,
     imageDigest: input.imageDigest || null,
-    status: input.status || 'queued',
+    status: normalizeDeploymentStatus(input.status || 'queued'),
     deploymentType: input.deploymentType || 'production',
     triggerType: input.triggerType || 'manual',
     branch: input.branch || 'main',
     pullRequestNumber: input.pullRequestNumber ? Number(input.pullRequestNumber) : null,
     previewUrl: input.previewUrl || null,
     errorCode: input.errorCode || null,
-    errorMessage: input.errorMessage || null,
-  };
+    errorMessage: input.errorMessage ? maskLogLine(input.errorMessage) : null,
+    buildStartedAt: input.buildStartedAt ? new Date(input.buildStartedAt) : undefined,
+    buildFinishedAt: input.buildFinishedAt ? new Date(input.buildFinishedAt) : undefined,
+    deployedAt: input.deployedAt ? new Date(input.deployedAt) : undefined,
+    finishedAt: input.finishedAt ? new Date(input.finishedAt) : undefined,
+  });
+}
+
+function compactData(input: Record<string, any>) {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 }
 
 function uniquePrismaRepositories(services: Array<Record<string, any>>) {
@@ -977,6 +1178,12 @@ function organizationScopeArray(input: Record<string, any> = {}) {
 function forbiddenError(message: string) {
   const error = new Error(message);
   (error as any).statusCode = 403;
+  return error;
+}
+
+function notFoundError(message: string) {
+  const error = new Error(message);
+  (error as any).statusCode = 404;
   return error;
 }
 

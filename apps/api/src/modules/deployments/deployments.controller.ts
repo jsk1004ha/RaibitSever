@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Patch, Post, Req } from '@nestjs/common';
 import { RequirePermission } from '../../auth/permissions.decorator';
 import { RAIBITSERVERService } from '../../raibitserver.service';
 
@@ -41,6 +41,38 @@ export class ServiceDeploymentsController {
 @Controller()
 export class DeploymentLogsController {
   constructor(private readonly raibitServer: RAIBITSERVERService) {}
+
+  @RequirePermission('project:read')
+  @Get('deployments/:deploymentId')
+  get(@Param('deploymentId') deploymentId: string, @Req() req: any) {
+    return this.raibitServer.getDeployment(deploymentId, req.raibitSubject);
+  }
+
+  @RequirePermission('deploy:run')
+  @Patch('deployments/:deploymentId/status')
+  statusPatch(@Param('deploymentId') deploymentId: string, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.raibitServer.updateDeploymentStatus(deploymentId, input || {}, req.raibitSubject);
+  }
+
+  @RequirePermission('deploy:run')
+  @Post('deployments/:deploymentId/status')
+  statusPost(@Param('deploymentId') deploymentId: string, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.raibitServer.updateDeploymentStatus(deploymentId, input || {}, req.raibitSubject);
+  }
+
+  @RequirePermission('deploy:run')
+  @Post('deployments/:deploymentId/cancel')
+  @HttpCode(202)
+  cancel(@Param('deploymentId') deploymentId: string, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.raibitServer.cancelDeployment(deploymentId, input || {}, req.raibitSubject);
+  }
+
+  @RequirePermission('deploy:run')
+  @Post('deployments/:deploymentId/rollback')
+  @HttpCode(202)
+  rollback(@Param('deploymentId') deploymentId: string, @Body() input: Record<string, any>, @Req() req: any) {
+    return this.raibitServer.rollbackDeployment(deploymentId, input || {}, req.raibitSubject);
+  }
 
   @RequirePermission('logs:read')
   @Get('deployments/:deploymentId/logs')

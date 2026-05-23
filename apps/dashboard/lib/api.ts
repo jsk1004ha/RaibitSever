@@ -69,13 +69,14 @@ export async function loadProjectConsole(projectId: string, context = dashboardA
     return { service, deployments: deployments.body?.deployments || [] };
   }));
   const deployments = deploymentsByService.flatMap((row) => row.deployments.map((deployment: any) => ({ ...deployment, serviceName: row.service.name || row.service.slug })));
-  const firstDeployment = deployments[0];
-  const firstService = services[0];
-  const [buildLogs, deploymentEvents, runtimeLogs] = await Promise.all([
-    firstDeployment ? getJson(`/deployments/${encodeURIComponent(firstDeployment.id)}/logs`, { logs: [] }, context) : Promise.resolve({ ok: true, body: { logs: [] } }),
-    firstDeployment ? getJson(`/deployments/${encodeURIComponent(firstDeployment.id)}/events`, { events: [] }, context) : Promise.resolve({ ok: true, body: { events: [] } }),
-    firstService ? getJson(`/services/${encodeURIComponent(firstService.id)}/logs`, { logs: [] }, context) : Promise.resolve({ ok: true, body: { logs: [] } }),
+  const [buildLogResults, deploymentEventResults, runtimeLogResults] = await Promise.all([
+    Promise.all(deployments.map(async (deployment: any) => ({ deploymentId: deployment.id, serviceName: deployment.serviceName, result: await getJson(`/deployments/${encodeURIComponent(deployment.id)}/logs`, { logs: [] }, context) }))),
+    Promise.all(deployments.map(async (deployment: any) => ({ deploymentId: deployment.id, serviceName: deployment.serviceName, result: await getJson(`/deployments/${encodeURIComponent(deployment.id)}/events`, { events: [] }, context) }))),
+    Promise.all(services.map(async (service: any) => ({ serviceId: service.id, serviceName: service.name || service.slug, result: await getJson(`/services/${encodeURIComponent(service.id)}/logs`, { logs: [] }, context) }))),
   ]);
+  const buildLogs = buildLogResults.flatMap((row) => (row.result.body?.logs || []).map((log: any) => ({ ...log, deploymentId: row.deploymentId, serviceName: row.serviceName })));
+  const deploymentEvents = deploymentEventResults.flatMap((row) => (row.result.body?.events || []).map((event: any) => ({ ...event, deploymentId: row.deploymentId, serviceName: row.serviceName })));
+  const runtimeLogs = runtimeLogResults.flatMap((row) => (row.result.body?.logs || []).map((log: any) => ({ ...log, serviceId: row.serviceId, serviceName: row.serviceName })));
   const resourceConsoles = await Promise.all(resources.map(async (resource: any) => {
     const [schema, browse] = await Promise.all([
       getJson(`/resources/${encodeURIComponent(resource.id)}/console/schema`, { schema: {} }, context),
@@ -83,7 +84,7 @@ export async function loadProjectConsole(projectId: string, context = dashboardA
     ]);
     return { resource, schema: schema.body, browse: browse.body };
   }));
-  return { context, project, services, resources, deployments, previewDeployments: deployments.filter((deployment: any) => String(deployment.deploymentType || '').toLowerCase() === 'preview'), buildLogs: buildLogs.body?.logs || [], deploymentEvents: deploymentEvents.body?.events || [], runtimeLogs: runtimeLogs.body?.logs || [], resourceConsoles };
+  return { context, project, services, resources, deployments, previewDeployments: deployments.filter((deployment: any) => String(deployment.deploymentType || '').toLowerCase() === 'preview'), buildLogs, deploymentEvents, runtimeLogs, resourceConsoles };
 }
 
 export async function loadAdminConsole(context = dashboardApiContext()) {

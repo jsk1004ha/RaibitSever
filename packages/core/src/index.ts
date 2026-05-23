@@ -17,6 +17,8 @@ export { registryPushPlan } from './registry.ts';
 export { kubernetesApplyPlan } from './kubernetes.ts';
 export { compileResourceProvisioningPlan, compileProjectProvisioning, provisionProjectResources } from './provisioner.ts';
 export { createWorkflowJobRecord, processNextWorkflowJob, processWorkflowQueue, claimWorkflowJobRecord, completeWorkflowJobRecord, failWorkflowJobRecord, WORKFLOW_TYPES, WORKFLOW_STATUSES } from './workflows.ts';
+export { DEPLOYMENT_STATUSES, normalizeDeploymentStatus, canTransitionDeployment, assertDeploymentTransition, isDeploymentTerminal } from './deployments.ts';
+export { createDeploymentWorkflowHandlers, processBuilderWorkflowJob, processBuildAndRolloutWorkflowJob, reconcileDeploymentRollout } from './deployment-workflow.ts';
 export { organizationScopeFromProjectInput, projectScopeFromInput } from './scope.ts';
 export { signJwtHs256, verifyJwtHs256, authorizeRequest, subjectFromRequest, requireAction, requireScope } from './auth.ts';
 export { hashPassword, verifyPassword, normalizeEmail, createSessionToken, sessionPayloadForUser, personalOrganizationSlug, configuredAdminEmails, signupPolicyForAccount, shouldPromoteFirstLogin } from './identity.ts';

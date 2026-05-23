@@ -8,7 +8,7 @@ test('dashboard project detail is API-backed instead of hardcoded prototype arra
   const detail = await fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/page.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(detail, /const\s+services\s*=\s*\[/);
   assert.doesNotMatch(detail, /const\s+resources\s*=\s*\[/);
-  for (const marker of ['loadProjectConsole', '/deployments', '/console/schema', '/console/query', 'Create service', 'Create resource', 'Deploy production', 'Build logs', 'Runtime logs']) {
+  for (const marker of ['loadProjectConsole', '/deployments', '/console/schema', '/console/query', 'Create service', 'sourceType', 'imageUrl', 'dockerfilePath', 'Create resource', 'Deploy production', 'Preview deployment list', 'Build logs', 'Runtime logs']) {
     assert.ok(detail.includes(marker), `${marker} missing from project console page`);
   }
 });
@@ -22,8 +22,17 @@ test('dashboard exposes auth, admin, GitHub, deployment log, and resource consol
     fs.readFile(new URL('../apps/dashboard/app/org/[orgSlug]/projects/[projectId]/resources/[resourceId]/console/page.tsx', import.meta.url), 'utf8'),
   ]);
   const combined = files.join('\n');
-  for (const marker of ['/auth/login', '/auth/signup', '/auth/github/login', '/auth/github/callback', '/admin/users/', '/github/repositories/import', '/integrations/github', '/deployments/', '/console/command', '/console/tables', '/console/keys']) {
+  for (const marker of ['/auth/login', '/auth/signup', '/auth/github/login', '/auth/github/callback', '/admin/users/', '/github/repositories/import', '/integrations/github', '/deployments/', '/status', '/cancel', '/rollback', 'Image digest', 'errorCode', '/console/command', '/console/tables', '/console/keys']) {
     assert.ok(combined.includes(marker), `${marker} missing from dashboard routes`);
+  }
+});
+
+test('dashboard avoids default workspace link and aggregates logs across deployments/services', async () => {
+  const home = await fs.readFile(new URL('../apps/dashboard/app/page.tsx', import.meta.url), 'utf8');
+  const api = await fs.readFile(new URL('../apps/dashboard/lib/api.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(home, /href="\/org\/default\/projects\/new"/);
+  for (const marker of ['createOrgSlug', 'buildLogResults', 'deploymentEventResults', 'runtimeLogResults']) {
+    assert.ok(`${home}\n${api}`.includes(marker), `${marker} missing from dashboard API-backed log aggregation`);
   }
 });
 

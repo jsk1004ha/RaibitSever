@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
 import { createControlPlaneRepository, createSessionToken, deterministicGitHubCallbackAllowed, githubOAuthLoginPlan, hashPassword, normalizeEmail, organizationScopeFromProjectInput, personalOrganizationSlug, requireScope, shouldPromoteFirstLogin, signupPolicyForAccount, validateServiceSecurity, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 
@@ -91,6 +91,30 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     return snapshot.projects.filter((project: Record<string, any>) => organizationIds.has(String(project.organizationId)));
   }
 
+  async getProject(projectId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    await assertProjectAccess(repository, projectId, subject);
+    const project = repository.getProject ? await repository.getProject(projectId) : (await repository.snapshot()).projects.find((candidate: Record<string, any>) => String(candidate.id) === String(projectId));
+    if (!project) throw new NotFoundException(`project not found: ${projectId}`);
+    return project;
+  }
+
+  async updateProject(projectId: string, updates: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    await assertProjectAccess(repository, projectId, subject);
+    const project = repository.updateProject ? await repository.updateProject(projectId, updates || {}) : repository.store.updateProject(projectId, updates || {});
+    if (!project) throw new NotFoundException(`project not found: ${projectId}`);
+    return project;
+  }
+
+  async deleteProject(projectId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    await assertProjectAccess(repository, projectId, subject);
+    const project = repository.deleteProject ? await repository.deleteProject(projectId) : repository.store.deleteProject(projectId);
+    if (!project) throw new NotFoundException(`project not found: ${projectId}`);
+    return { deleted: true, projectId: project.id || projectId };
+  }
+
   async listServices(projectId: string, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     await assertProjectAccess(repository, projectId, subject);
@@ -103,6 +127,34 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     await assertProjectAccess(repository, projectId, subject);
     if (repository.enforceUserCan) await repository.enforceUserCan({ userId: subject.id, action: 'service:create', metric: 'maxServices', increment: 1 });
     return repository.createService({ ...service, projectId });
+  }
+
+  async getService(serviceId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const service = await repository.getService(serviceId);
+    if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
+    await assertProjectAccess(repository, service.projectId, subject);
+    return service;
+  }
+
+  async updateService(serviceId: string, updates: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const current = await repository.getService(serviceId);
+    if (!current) throw new NotFoundException(`service not found: ${serviceId}`);
+    await assertProjectAccess(repository, current.projectId, subject);
+    const service = repository.updateService ? await repository.updateService(serviceId, updates || {}) : repository.store.updateService(serviceId, updates || {});
+    if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
+    return service;
+  }
+
+  async deleteService(serviceId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const current = await repository.getService(serviceId);
+    if (!current) throw new NotFoundException(`service not found: ${serviceId}`);
+    await assertProjectAccess(repository, current.projectId, subject);
+    const service = repository.deleteService ? await repository.deleteService(serviceId) : repository.store.deleteService(serviceId);
+    if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
+    return { deleted: true, serviceId: service.id || serviceId };
   }
 
   async listResources(projectId: string, subject: Record<string, any>) {
@@ -148,6 +200,54 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       desiredStateWritten: true,
       workflowJob,
     };
+  }
+
+  async getDeployment(deploymentId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const deployment = repository.getDeployment ? await repository.getDeployment(deploymentId) : (await repository.snapshot()).deployments.find((candidate: Record<string, any>) => String(candidate.id) === String(deploymentId));
+    if (!deployment) throw new NotFoundException(`deployment not found: ${deploymentId}`);
+    await assertProjectAccess(repository, deployment.projectId, subject);
+    return deployment;
+  }
+
+  async updateDeploymentStatus(deploymentId: string, input: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const deployment = await this.getDeployment(deploymentId, subject);
+    const updates = { ...input };
+    delete updates.workflowJob;
+    let updated;
+    if (Object.prototype.hasOwnProperty.call(updates, 'status')) {
+      const { status, ...statusUpdates } = updates;
+      updated = repository.transitionDeployment
+        ? await repository.transitionDeployment(deploymentId, status, statusUpdates, { actorUserId: subject.id, eventType: input.eventType, message: input.message })
+        : repository.store.transitionDeployment(deploymentId, status, statusUpdates, { actorUserId: subject.id, eventType: input.eventType, message: input.message });
+    } else {
+      updated = repository.updateDeployment
+        ? await repository.updateDeployment(deploymentId, updates, { actorUserId: subject.id, eventType: input.eventType, message: input.message })
+        : repository.store.updateDeployment(deploymentId, updates, { actorUserId: subject.id, eventType: input.eventType, message: input.message });
+    }
+    return { ...updated, projectId: deployment.projectId };
+  }
+
+  async cancelDeployment(deploymentId: string, input: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    await this.getDeployment(deploymentId, subject);
+    return repository.cancelDeployment
+      ? repository.cancelDeployment(deploymentId, { ...input, actorUserId: subject.id })
+      : repository.store.cancelDeployment(deploymentId, { ...input, actorUserId: subject.id });
+  }
+
+  async rollbackDeployment(deploymentId: string, input: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    await this.getDeployment(deploymentId, subject);
+    try {
+      return repository.rollbackDeployment
+        ? await repository.rollbackDeployment(deploymentId, { ...input, actorUserId: subject.id })
+        : repository.store.rollbackDeployment(deploymentId, { ...input, actorUserId: subject.id });
+    } catch (error) {
+      if ((error as any)?.statusCode === 409) throw new ConflictException(error instanceof Error ? error.message : 'rollback conflict');
+      throw error;
+    }
   }
 
   async createDeploymentForService(serviceId: string, input: Record<string, any>, subject: Record<string, any>) {

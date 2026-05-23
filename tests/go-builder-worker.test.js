@@ -30,5 +30,10 @@ test('Go builder worker contract is executable when Go exists or statically pres
   assert.match(worker, /git.*clone/s);
   assert.match(worker, /docker.*buildx.*build/s);
   assert.match(worker, /DeploymentStatusImageReady/);
+  assert.match(worker, /DeploymentStatusBuildFailed/);
+  assert.match(worker, /errorCode/);
+  assert.match(worker, /errorMessage/);
   assert.match(worker, /imageDigest/);
+  assert.match(worker, /generated Dockerfile/);
+  assert.match(worker, /credentialed git URLs are not allowed/);
 });

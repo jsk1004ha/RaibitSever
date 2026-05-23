@@ -6,6 +6,7 @@ export default async function HomePage() {
   const user = state.me.body?.user;
   const subject = state.me.body?.subject;
   const projects = state.projects || [];
+  const createOrgSlug = projects[0]?.organizationSlug || projects[0]?.organizationId || subject?.organizationSlug || subject?.organizationId || 'default';
   return (
     <main style={pageStyle}>
       <header style={heroStyle}>
@@ -38,7 +39,7 @@ export default async function HomePage() {
       <section style={cardStyle}>
         <div style={sectionHeaderStyle}>
           <h2>Project consoles</h2>
-          <a href="/org/default/projects/new">Create project</a>
+          <a href={`/org/${createOrgSlug}/projects/new`}>Create project</a>
         </div>
         <div style={gridStyle}>
           {projects.length ? projects.map((project: any) => (

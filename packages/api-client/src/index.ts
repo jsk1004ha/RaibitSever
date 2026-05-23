@@ -39,11 +39,26 @@ export class RAIBITSERVERClient {
     return this.request(path, { method: 'POST', body: project });
   }
 
+  getProject(projectId: string): Promise<ProjectSpec> { return this.request(`/projects/${encodeURIComponent(projectId)}`); }
+  updateProject(projectId: string, project: Partial<ProjectSpec> & Record<string, unknown>): Promise<ProjectSpec> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}`, { method: 'PATCH', body: project });
+  }
+  deleteProject(projectId: string): Promise<Record<string, unknown>> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' });
+  }
+
   createService(projectId: string, service: Partial<ServiceSpec> & Record<string, unknown>): Promise<ServiceSpec> {
     return this.request(`/projects/${encodeURIComponent(projectId)}/services`, { method: 'POST', body: service });
   }
 
   listServices(projectId: string): Promise<ServiceListResponse> { return this.request(`/projects/${encodeURIComponent(projectId)}/services`); }
+  getService(serviceId: string): Promise<ServiceSpec> { return this.request(`/services/${encodeURIComponent(serviceId)}`); }
+  updateService(serviceId: string, service: Partial<ServiceSpec> & Record<string, unknown>): Promise<ServiceSpec> {
+    return this.request(`/services/${encodeURIComponent(serviceId)}`, { method: 'PATCH', body: service });
+  }
+  deleteService(serviceId: string): Promise<Record<string, unknown>> {
+    return this.request(`/services/${encodeURIComponent(serviceId)}`, { method: 'DELETE' });
+  }
 
   createResource(projectId: string, resource: Partial<ResourceSpec> & Record<string, unknown>): Promise<ResourceSpec> {
     return this.request(`/projects/${encodeURIComponent(projectId)}/resources`, { method: 'POST', body: resource });
@@ -72,6 +87,16 @@ export class RAIBITSERVERClient {
   listDeploymentLogs(deploymentId: string): Promise<Record<string, unknown>> { return this.request(`/deployments/${encodeURIComponent(deploymentId)}/logs`); }
   listDeploymentEvents(deploymentId: string): Promise<Record<string, unknown>> { return this.request(`/deployments/${encodeURIComponent(deploymentId)}/events`); }
   listRuntimeLogs(serviceId: string): Promise<Record<string, unknown>> { return this.request(`/services/${encodeURIComponent(serviceId)}/logs`); }
+  getDeployment(deploymentId: string): Promise<DeploymentSpec> { return this.request(`/deployments/${encodeURIComponent(deploymentId)}`); }
+  updateDeploymentStatus(deploymentId: string, input: Record<string, unknown>): Promise<DeploymentSpec> {
+    return this.request(`/deployments/${encodeURIComponent(deploymentId)}/status`, { method: 'PATCH', body: input });
+  }
+  cancelDeployment(deploymentId: string, input: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    return this.request(`/deployments/${encodeURIComponent(deploymentId)}/cancel`, { method: 'POST', body: input });
+  }
+  rollbackDeployment(deploymentId: string, input: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    return this.request(`/deployments/${encodeURIComponent(deploymentId)}/rollback`, { method: 'POST', body: input });
+  }
 
   uploadEnvFile(projectId: string, serviceId: string, filename: string, content: string): Promise<Record<string, unknown>> {
     return this.request(`/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}/env-file`, { method: 'POST', body: { filename, content } });

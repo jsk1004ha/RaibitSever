@@ -38,7 +38,13 @@ test('api client uses project-scoped deployment route and keeps legacy fallback'
 test('OpenAPI and Nest controller surface expose client contract routes', async () => {
   const openapi = YAML.parse(await fs.readFile(new URL('../openapi/raibitserver.yaml', import.meta.url), 'utf8'));
   for (const route of [
+    '/projects/{projectId}',
+    '/services/{serviceId}',
     '/projects/{projectId}/services/{serviceId}/deployments',
+    '/deployments/{deploymentId}',
+    '/deployments/{deploymentId}/status',
+    '/deployments/{deploymentId}/cancel',
+    '/deployments/{deploymentId}/rollback',
     '/projects/{projectId}/services/{serviceId}/env',
     '/projects/{projectId}/services/{serviceId}/env-file',
     '/auth/github/login',
@@ -69,6 +75,8 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   assert.match(appModule, /UsageController/);
 
   const servicesController = await fs.readFile(new URL('../apps/api/src/modules/services/services.controller.ts', import.meta.url), 'utf8');
+  const projectsController = await fs.readFile(new URL('../apps/api/src/modules/projects/projects.controller.ts', import.meta.url), 'utf8');
+  const deploymentsController = await fs.readFile(new URL('../apps/api/src/modules/deployments/deployments.controller.ts', import.meta.url), 'utf8');
   const resourcesController = await fs.readFile(new URL('../apps/api/src/modules/resources/resources.controller.ts', import.meta.url), 'utf8');
   const resourceConsoleController = await fs.readFile(new URL('../apps/api/src/modules/resources/resource-console.controller.ts', import.meta.url), 'utf8');
   const githubController = await fs.readFile(new URL('../apps/api/src/modules/integrations/github.controller.ts', import.meta.url), 'utf8');
@@ -77,6 +85,12 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   const persistence = await fs.readFile(new URL('../packages/core/src/persistence.ts', import.meta.url), 'utf8');
   const apiClient = await fs.readFile(new URL('../packages/api-client/src/index.ts', import.meta.url), 'utf8');
   assert.match(servicesController, /@Get\(\)/);
+  assert.match(projectsController, /@Get\(':projectId'\)/);
+  assert.match(projectsController, /@Patch\(':projectId'\)/);
+  assert.match(projectsController, /@Delete\(':projectId'\)/);
+  assert.match(servicesController, /ServiceDetailController/);
+  assert.match(servicesController, /@Patch\(\)/);
+  for (const marker of ["@Get('deployments/:deploymentId')", "@Patch('deployments/:deploymentId/status')", "@Post('deployments/:deploymentId/status')", "@Post('deployments/:deploymentId/cancel')", "@Post('deployments/:deploymentId/rollback')"]) assert.ok(deploymentsController.includes(marker), `${marker} missing from Deployments controller`);
   assert.match(resourcesController, /@Get\(\)/);
   for (const marker of ["@Get('schema')", "@Get('tables')", "@Get('collections')", "@Get('keys')", "@Post('query')", "@Post('command')", "@Post('browse')"]) assert.ok(resourceConsoleController.includes(marker), `${marker} missing from ResourceConsoleController`);
   for (const marker of ["@Get('github/installations')", "@Get('github/installations/:installationId/repositories')", "@Post('github/webhooks')", "@Post('github/repositories/import')", "@Post('github/repositories/:repositoryId/sync')"]) assert.ok(githubController.includes(marker), `${marker} missing from GitHub controller`);
@@ -86,7 +100,7 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   assert.ok(!persistence.includes('integrationIds.length === 0 || integrationIds.includes'), 'Prisma GitHub installation repository listing must not use broad fallback matching');
   assert.ok(authController.includes("@Get('github/login')"));
   assert.ok(authController.includes("@Get('github/callback')"));
-  for (const method of ['resourceSchema', 'resourceTables', 'resourceCollections', 'resourceKeys', 'commandResource', 'listGitHubInstallations', 'listGitHubInstallationRepositories', 'importGitHubRepository', 'syncGitHubRepository']) assert.match(apiClient, new RegExp(method));
+  for (const method of ['getProject', 'updateProject', 'deleteProject', 'getService', 'updateService', 'deleteService', 'getDeployment', 'updateDeploymentStatus', 'cancelDeployment', 'rollbackDeployment', 'resourceSchema', 'resourceTables', 'resourceCollections', 'resourceKeys', 'commandResource', 'listGitHubInstallations', 'listGitHubInstallationRepositories', 'importGitHubRepository', 'syncGitHubRepository']) assert.match(apiClient, new RegExp(method));
 });
 
 test('production persistence defaults to Prisma and rejects unsafe memory/secret gaps', () => {

@@ -60,6 +60,7 @@ pnpm dev:down
 
 ```sh
 node --test \
+  tests/project-service-deployment-builder-beta.test.js \
   tests/api-store.test.js \
   tests/api-contract-sync.test.js \
   tests/api-contract-github-resource-console.test.js \

@@ -1,5 +1,6 @@
 import { deepClone, nowIso, stableId, slugify } from './ids.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
+import { sanitizeLogRecord } from './security.ts';
 import { claimNextWorkflowJobFromList, completeWorkflowJobRecord, createWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
 import { normalizeEnvEntries, parseDotEnv, maskEnvEntries } from './env-file.ts';
 import { githubIntegrationSummary, githubWebhookActionPlan, githubWebhookOutboundPlan, parseGitHubRepository, verifyGitHubWebhookSignature } from './github-integration.ts';
@@ -7,6 +8,7 @@ import { openSecret, publicSecretRecord, sealSecret, secureRandomSecret } from '
 import { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
 import { provisionPostgresProvider } from './resource-providers.ts';
 import { providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
+import { assertDeploymentTransition, normalizeDeploymentStatus } from './deployments.ts';
 
 export class ControlPlaneStore {
   organizations: Map<string, any>;
@@ -115,13 +117,42 @@ export class ControlPlaneStore {
   }
 
   createProject({ organizationId, name, slug, description = '', status = 'active' }: Record<string, any>) {
-    const project = { id: stableId('prj', organizationId, slug || name), organizationId, name, slug: slugify(slug || name), description, status, createdAt: nowIso() };
+    const project = { id: stableId('prj', organizationId, slug || name), organizationId, name, slug: slugify(slug || name), description, status, createdAt: nowIso(), updatedAt: nowIso() };
     this.projects.set(project.id, project);
     this.audit('system', 'project:create', 'project', project.id, { organizationId, slug: project.slug });
     return deepClone(project);
   }
 
-  createService({ projectId, name, type = 'web', runtimeType = 'container', sourceType = 'github', ...rest }: Record<string, any>) {
+  getProject(projectId: string) {
+    return deepClone(this.projects.get(projectId) || null);
+  }
+
+  updateProject(projectId: string, updates: Record<string, any> = {}) {
+    const current = this.projects.get(projectId);
+    if (!current) return null;
+    const next = {
+      ...current,
+      ...maskSecrets(updates),
+      slug: updates.slug ? slugify(updates.slug) : current.slug,
+      updatedAt: nowIso(),
+    };
+    this.projects.set(projectId, next);
+    this.audit('system', 'project:update', 'project', projectId, maskSecrets(updates));
+    return deepClone(next);
+  }
+
+  deleteProject(projectId: string) {
+    const current = this.projects.get(projectId);
+    if (!current) return null;
+    for (const service of [...this.services.values()].filter((service) => String(service.projectId) === String(projectId))) this.deleteService(service.id);
+    for (const resource of [...this.resources.values()].filter((resource) => String(resource.projectId) === String(projectId))) this.resources.delete(resource.id);
+    this.projects.delete(projectId);
+    this.audit('system', 'project:delete', 'project', projectId, { organizationId: current.organizationId });
+    return deepClone(current);
+  }
+
+  createService({ projectId, name, type = 'web', runtimeType = 'container', sourceType = 'github', image = null, imageUrl = null, ...rest }: Record<string, any>) {
+    const resolvedImageUrl = imageUrl || image || undefined;
     const service = {
       id: stableId('svc', projectId, name),
       projectId,
@@ -130,6 +161,8 @@ export class ControlPlaneStore {
       type,
       runtimeType,
       sourceType,
+      image: image || imageUrl || undefined,
+      imageUrl: resolvedImageUrl,
       status: 'created',
       createdAt: nowIso(),
       ...rest,
@@ -139,13 +172,38 @@ export class ControlPlaneStore {
     return deepClone(service);
   }
 
+  getService(serviceId: string) {
+    return deepClone(this.services.get(serviceId) || null);
+  }
+
   updateService(serviceId: string, updates: Record<string, any>) {
     const current = this.services.get(serviceId);
     if (!current) return null;
-    const next = { ...current, ...updates, updatedAt: nowIso() };
+    const normalized = maskSecrets({ ...updates });
+    if (normalized.slug) normalized.slug = slugify(normalized.slug);
+    if (normalized.image && !normalized.imageUrl) normalized.imageUrl = normalized.image;
+    if (normalized.imageUrl && !normalized.image) normalized.image = normalized.imageUrl;
+    const next = { ...current, ...normalized, updatedAt: nowIso() };
     this.services.set(serviceId, next);
     this.audit('system', 'service:update', 'service', serviceId, maskSecrets(updates));
     return deepClone(next);
+  }
+
+  deleteService(serviceId: string) {
+    const current = this.services.get(serviceId);
+    if (!current) return null;
+    const deploymentIds = new Set([...this.deployments.values()]
+      .filter((deployment) => String(deployment.serviceId) === String(serviceId))
+      .map((deployment) => String(deployment.id)));
+    for (const deploymentId of deploymentIds) this.deployments.delete(deploymentId);
+    this.buildLogs = this.buildLogs.filter((row) => !deploymentIds.has(String(row.deploymentId)));
+    this.deploymentEvents = this.deploymentEvents.filter((row) => !deploymentIds.has(String(row.deploymentId)));
+    this.runtimeLogs = this.runtimeLogs.filter((row) => String(row.serviceId) !== String(serviceId));
+    for (const [id, row] of this.environmentVariables.entries()) if (String(row.serviceId) === String(serviceId)) this.environmentVariables.delete(id);
+    this.resourceAttachments = this.resourceAttachments.filter((row) => String(row.serviceId) !== String(serviceId));
+    this.services.delete(serviceId);
+    this.audit('system', 'service:delete', 'service', serviceId, { projectId: current.projectId });
+    return deepClone(current);
   }
 
   createResource({ projectId, name, type = 'database', engine, provider = 'kubernetes-operator', plan = 'shared-small', region = 'local', status = 'provisioning', ...rest }: Record<string, any>) {
@@ -171,30 +229,159 @@ export class ControlPlaneStore {
     return deepClone(row);
   }
 
-  createDeployment({ serviceId, commitHash = null, commitSha = null, imageUrl, imageDigest = null, status = 'queued', deploymentType = 'production', branch = 'main', previewUrl = null, triggerType = 'manual', pullRequestNumber = null, errorCode = null, errorMessage = null }: Record<string, any>) {
+  createDeployment({ id = null, serviceId, commitHash = null, commitSha = null, imageUrl, image = null, imageDigest = null, status = 'queued', deploymentType = 'production', branch = 'main', previewUrl = null, triggerType = 'manual', pullRequestNumber = null, errorCode = null, errorMessage = null, ...rest }: Record<string, any>) {
     const service = this.services.get(serviceId);
     const sha = commitSha || commitHash || null;
-    const deployment = { id: stableId('dep', serviceId, sha || imageUrl || Date.now()), serviceId, projectId: service?.projectId || null, commitHash: commitHash || sha, commitSha: sha, imageUrl, imageDigest, status, deploymentType, branch, previewUrl, triggerType, pullRequestNumber: pullRequestNumber ? Number(pullRequestNumber) : null, errorCode, errorMessage, startedAt: nowIso(), createdAt: nowIso(), updatedAt: nowIso(), finishedAt: null };
+    const resolvedImageUrl = imageUrl || image || null;
+    const deployment = {
+      id: id || stableId('dep', serviceId, sha || resolvedImageUrl || Date.now()),
+      serviceId,
+      projectId: rest.projectId || service?.projectId || null,
+      commitHash: commitHash || sha,
+      commitSha: sha,
+      imageUrl: resolvedImageUrl,
+      imageDigest,
+      status: normalizeDeploymentStatus(status),
+      deploymentType,
+      branch,
+      previewUrl,
+      triggerType,
+      pullRequestNumber: pullRequestNumber ? Number(pullRequestNumber) : null,
+      errorCode,
+      errorMessage: errorMessage ? sanitizeLogRecord(errorMessage) : null,
+      buildStartedAt: null,
+      buildFinishedAt: null,
+      deployedAt: null,
+      startedAt: nowIso(),
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      finishedAt: null,
+      ...maskSecrets(rest),
+    };
     this.deployments.set(deployment.id, deployment);
     this.audit('system', 'deployment:create', 'deployment', deployment.id, { serviceId, status });
     this.appendDeploymentEvent({ deploymentId: deployment.id, type: 'deployment.queued', message: `Deployment queued for ${serviceId}` });
     return deepClone(deployment);
   }
 
+  getDeployment(deploymentId: string) {
+    return deepClone(this.deployments.get(deploymentId) || null);
+  }
+
+
+
+  updateDeployment(deploymentId: string, updates: Record<string, any>, options: Record<string, any> = {}) {
+    const current = this.deployments.get(deploymentId);
+    if (!current) return null;
+    const safeUpdates = maskSecrets(updates || {});
+    const nextUpdates = normalizeDeploymentUpdates(safeUpdates, current);
+    if (Object.prototype.hasOwnProperty.call(nextUpdates, 'status')) {
+      const nextStatus = normalizeDeploymentStatus(nextUpdates.status);
+      if (options.validateTransition === true) assertDeploymentTransition(current.status, nextStatus);
+      nextUpdates.status = nextStatus;
+    }
+    if (Object.prototype.hasOwnProperty.call(nextUpdates, 'errorMessage')) nextUpdates.errorMessage = sanitizeLogRecord(nextUpdates.errorMessage || '');
+    const next = { ...current, ...nextUpdates, updatedAt: nowIso() };
+    this.deployments.set(deploymentId, next);
+    this.audit(options.actorUserId || 'system', 'deployment:update', 'deployment', deploymentId, { updates: nextUpdates });
+    const statusChanged = Object.prototype.hasOwnProperty.call(nextUpdates, 'status') && normalizeDeploymentStatus(current.status) !== normalizeDeploymentStatus(next.status);
+    if ((statusChanged || options.eventType) && options.appendEvent !== false) {
+      this.appendDeploymentEvent({
+        deploymentId,
+        type: options.eventType || 'deployment.status.changed',
+        message: options.message || `Deployment status changed: ${normalizeDeploymentStatus(current.status)} -> ${normalizeDeploymentStatus(next.status)}`,
+        metadata: { from: normalizeDeploymentStatus(current.status), to: normalizeDeploymentStatus(next.status), imageUrl: next.imageUrl || null, imageDigest: next.imageDigest || null, errorCode: next.errorCode || null, ...(options.metadata || {}) },
+      });
+    }
+    return deepClone(next);
+  }
+
+  transitionDeployment(deploymentId: string, status: string, updates: Record<string, any> = {}, options: Record<string, any> = {}) {
+    const current = this.deployments.get(deploymentId);
+    if (!current) throw notFound(`deployment not found: ${deploymentId}`);
+    const nextStatus = normalizeDeploymentStatus(status);
+    assertDeploymentTransition(current.status, nextStatus);
+    const deployment = this.updateDeployment(deploymentId, { ...updates, status: nextStatus }, { ...options, validateTransition: false, appendEvent: false });
+    this.appendDeploymentEvent({
+      deploymentId,
+      type: options.eventType || 'deployment.status.changed',
+      message: options.message || `Deployment status changed: ${normalizeDeploymentStatus(current.status)} -> ${nextStatus}`,
+      metadata: { from: normalizeDeploymentStatus(current.status), to: nextStatus, ...(options.metadata || {}) },
+    });
+    return deployment;
+  }
+
+  cancelDeployment(deploymentId: string, input: Record<string, any> = {}) {
+    const deployment = this.transitionDeployment(deploymentId, 'CANCELLED', {
+      finishedAt: nowIso(),
+      errorCode: input.errorCode || 'DEPLOYMENT_CANCELLED',
+      errorMessage: input.reason || input.errorMessage || 'Deployment cancellation requested',
+    }, {
+      actorUserId: input.actorUserId || 'system',
+      eventType: 'deployment.cancelled',
+      message: input.reason || 'Deployment cancellation requested',
+    });
+    const workflowJob = this.enqueueWorkflowJob({
+      type: 'deployment-cancel',
+      targetType: 'deployment',
+      targetId: deployment.id,
+      payload: { deploymentId: deployment.id, serviceId: deployment.serviceId, projectId: deployment.projectId, reason: input.reason || 'requested' },
+    });
+    return { deployment, workflowJob };
+  }
+
+  rollbackDeployment(deploymentId: string, input: Record<string, any> = {}) {
+    const current = this.deployments.get(deploymentId);
+    if (!current) throw notFound(`deployment not found: ${deploymentId}`);
+    const previous = input.previousDeploymentId
+      ? this.deployments.get(String(input.previousDeploymentId))
+      : latestReadyDeploymentForService([...this.deployments.values()], current);
+    const imageUrl = input.imageUrl || previous?.imageUrl || previous?.image || null;
+    if (!imageUrl) {
+      const error = new Error('no previous READY deployment image is available for rollback');
+      (error as any).statusCode = 409;
+      throw error;
+    }
+    const imageDigest = input.imageDigest || previous?.imageDigest || null;
+    const rollback = this.createDeployment({
+      id: stableId('dep', current.serviceId, 'rollback', current.id, nowIso()),
+      serviceId: current.serviceId,
+      projectId: current.projectId,
+      commitSha: previous?.commitSha || current.commitSha || null,
+      imageUrl,
+      imageDigest,
+      status: 'IMAGE_READY',
+      deploymentType: current.deploymentType || 'production',
+      triggerType: 'rollback',
+      branch: input.branch || current.branch || previous?.branch || 'main',
+      previousDeploymentId: previous?.id || null,
+      rollbackOfDeploymentId: current.id,
+    });
+    this.appendDeploymentEvent({ deploymentId: current.id, type: 'deployment.rollback.requested', message: `Rollback requested to ${imageUrl}`, metadata: { rollbackDeploymentId: rollback.id, previousDeploymentId: previous?.id || null, imageUrl, imageDigest } });
+    this.appendDeploymentEvent({ deploymentId: rollback.id, type: 'deployment.rollback.created', message: `Rollback deployment created from ${current.id}`, metadata: { rollbackOfDeploymentId: current.id, previousDeploymentId: previous?.id || null, imageUrl, imageDigest } });
+    const workflowJob = this.enqueueWorkflowJob({
+      type: 'rollback-deploy',
+      targetType: 'deployment',
+      targetId: rollback.id,
+      payload: { deploymentId: rollback.id, rollbackOfDeploymentId: current.id, previousDeploymentId: previous?.id || null, serviceId: rollback.serviceId, projectId: rollback.projectId, imageUrl, imageDigest },
+    });
+    return { deployment: rollback, rollbackOfDeploymentId: current.id, previousDeployment: previous ? deepClone(previous) : null, workflowJob };
+  }
+
   appendBuildLog({ deploymentId, step = 'build', line, level = 'info' }: Record<string, any>) {
-    const row = { id: stableId('blog', deploymentId, this.buildLogs.length), deploymentId, step, line: String(line ?? ''), level, timestamp: nowIso() };
+    const row = { id: stableId('blog', deploymentId, this.buildLogs.length), deploymentId, step, line: sanitizeLogRecord(String(line ?? '')), level, timestamp: nowIso() };
     this.buildLogs.push(row);
     return deepClone(row);
   }
 
   appendRuntimeLog({ serviceId, deploymentId = null, podName = 'local-pod', containerName = 'app', line, level = 'info' }: Record<string, any>) {
-    const row = { id: stableId('rlog', serviceId, this.runtimeLogs.length), serviceId, deploymentId, podName, containerName, line: String(line ?? ''), level, timestamp: nowIso() };
+    const row = { id: stableId('rlog', serviceId, this.runtimeLogs.length), serviceId, deploymentId, podName, containerName, line: sanitizeLogRecord(String(line ?? '')), level, timestamp: nowIso() };
     this.runtimeLogs.push(row);
     return deepClone(row);
   }
 
   appendDeploymentEvent({ deploymentId, type, message, metadata = {} }: Record<string, any>) {
-    const row = { id: stableId('devevt', deploymentId, this.deploymentEvents.length), deploymentId, type, message, metadata: maskSecrets(metadata), timestamp: nowIso() };
+    const row = { id: stableId('devevt', deploymentId, this.deploymentEvents.length), deploymentId, type, message: sanitizeLogRecord(String(message ?? '')), metadata: maskSecrets(metadata), timestamp: nowIso() };
     this.deploymentEvents.push(row);
     return deepClone(row);
   }
@@ -670,6 +857,39 @@ function deploymentRuntimeHours(deployment: Record<string, any>) {
   const start = dateMs(deployment.deployedAt);
   const end = dateMs(deployment.finishedAt) || Date.now();
   return start && end > start ? (end - start) / 3_600_000 : 0;
+}
+
+function normalizeDeploymentUpdates(updates: Record<string, any>, current: Record<string, any>) {
+  const normalized: Record<string, any> = {};
+  for (const [key, value] of Object.entries(updates || {})) {
+    normalized[key] = value === '' ? null : value;
+  }
+  if (normalized.image && !normalized.imageUrl) normalized.imageUrl = normalized.image;
+  if (Object.prototype.hasOwnProperty.call(normalized, 'status')) {
+    const status = normalizeDeploymentStatus(normalized.status);
+    normalized.status = status;
+    const timestamp = nowIso();
+    if (status === 'BUILDING' && !current.buildStartedAt && !normalized.buildStartedAt) normalized.buildStartedAt = timestamp;
+    if (status === 'IMAGE_READY' && !normalized.buildFinishedAt) normalized.buildFinishedAt = timestamp;
+    if (status === 'DEPLOYING' && !current.deployedAt && !normalized.deployedAt) normalized.deployedAt = timestamp;
+    if (status === 'READY') {
+      if (!normalized.deployedAt) normalized.deployedAt = current.deployedAt || timestamp;
+      if (!normalized.finishedAt) normalized.finishedAt = timestamp;
+      if (!Object.prototype.hasOwnProperty.call(updates, 'errorCode')) normalized.errorCode = null;
+      if (!Object.prototype.hasOwnProperty.call(updates, 'errorMessage')) normalized.errorMessage = null;
+    }
+    if ((status === 'FAILED' || status === 'BUILD_FAILED' || status === 'CANCELLED') && !normalized.finishedAt) normalized.finishedAt = timestamp;
+  }
+  return normalized;
+}
+
+function latestReadyDeploymentForService(deployments: Array<Record<string, any>>, current: Record<string, any>) {
+  return deployments
+    .filter((deployment) => String(deployment.id) !== String(current.id)
+      && String(deployment.serviceId) === String(current.serviceId)
+      && normalizeDeploymentStatus(deployment.status) === 'READY'
+      && (deployment.imageUrl || deployment.image))
+    .sort((left, right) => dateMs(right.deployedAt || right.finishedAt || right.createdAt) - dateMs(left.deployedAt || left.finishedAt || left.createdAt))[0] || null;
 }
 
 function serviceCpuMillicores(service: Record<string, any>) {

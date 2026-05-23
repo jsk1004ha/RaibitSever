@@ -22,7 +22,12 @@ export default async function ProjectDetailPage({ params }: { params: { orgSlug:
           <h2>Create service</h2>
           <input name="name" placeholder="web" required />
           <select name="type" defaultValue="web"><option>web</option><option>private</option><option>worker</option><option>cron</option><option>job</option></select>
+          <select name="sourceType" defaultValue="github"><option value="github">GitHub / git source</option><option value="image">Prebuilt image</option><option value="local">Local generated Dockerfile</option></select>
           <input name="repoUrl" placeholder="https://github.com/org/repo.git" />
+          <input name="branch" placeholder="main" />
+          <input name="imageUrl" placeholder="registry.example.com/team/web:tag for prebuilt image" />
+          <input name="dockerfilePath" placeholder="Dockerfile (Dockerfile-first)" />
+          <input name="buildContext" placeholder="." />
           <button type="submit">POST /projects/:id/services</button>
         </form>
         <form method="post" action={apiAction(`/projects/${params.projectId}/resources`, state.context)} style={cardStyle}>
@@ -55,7 +60,9 @@ export default async function ProjectDetailPage({ params }: { params: { orgSlug:
 
       <section style={cardStyle}>
         <h2>Deployments</h2>
-        {state.deployments.length ? <table style={tableStyle}><tbody>{state.deployments.map((deployment: any) => <tr key={deployment.id}><td>{deployment.serviceName}</td><td>{deployment.deploymentType}</td><td>{deployment.status}</td><td><a href={`/org/${params.orgSlug}/projects/${params.projectId}/deployments/${deployment.id}`}>logs/events</a></td></tr>)}</tbody></table> : <p>No deployments yet.</p>}
+        {state.deployments.length ? <table style={tableStyle}><tbody>{state.deployments.map((deployment: any) => <tr key={deployment.id}><td>{deployment.serviceName}</td><td>{deployment.deploymentType}</td><td>{deployment.status}</td><td>{deployment.imageDigest || deployment.imageUrl || 'image pending'}</td><td>{deployment.errorCode || deployment.errorMessage || 'no error'}</td><td><a href={`/org/${params.orgSlug}/projects/${params.projectId}/deployments/${deployment.id}`}>deployment detail logs/events</a></td></tr>)}</tbody></table> : <p>No deployments yet.</p>}
+        <h3>Preview deployment list</h3>
+        {state.previewDeployments.length ? <ul>{state.previewDeployments.map((deployment: any) => <li key={deployment.id}><a href={`/org/${params.orgSlug}/projects/${params.projectId}/deployments/${deployment.id}`}>{deployment.serviceName} PR #{deployment.pullRequestNumber || 'manual'} · {deployment.status}</a></li>)}</ul> : <p>No preview deployments returned.</p>}
       </section>
 
       <section style={cardStyle}>

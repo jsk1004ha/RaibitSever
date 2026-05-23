@@ -195,6 +195,29 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'project:create', metric: 'maxProjects', increment: 1 });
         return send(res, 201, controlPlane.store.createProject({ ...body, organizationId }));
       }
+      const projectMatch = url.pathname.match(/^\/projects\/([^/]+)$/);
+      if (projectMatch && method === 'GET') {
+        const subject = authorizeAction(req, 'project:read', auth);
+        const projectId = decodeURIComponent(projectMatch[1]);
+        const project = await assertProjectAccess(controlPlane.store, projectId, subject);
+        return send(res, 200, project);
+      }
+      if (projectMatch && method === 'PATCH') {
+        const subject = authorizeAction(req, 'project:create', auth);
+        const projectId = decodeURIComponent(projectMatch[1]);
+        await assertProjectAccess(controlPlane.store, projectId, subject);
+        const project = controlPlane.store.updateProject(projectId, await readJson(req));
+        if (!project) return send(res, 404, { error: 'project_not_found' });
+        return send(res, 200, project);
+      }
+      if (projectMatch && method === 'DELETE') {
+        const subject = authorizeAction(req, 'project:delete', auth);
+        const projectId = decodeURIComponent(projectMatch[1]);
+        await assertProjectAccess(controlPlane.store, projectId, subject);
+        const project = controlPlane.store.deleteProject(projectId);
+        if (!project) return send(res, 404, { error: 'project_not_found' });
+        return send(res, 200, { deleted: true, projectId: project.id });
+      }
       const projectServicesMatch = url.pathname.match(/^\/projects\/([^/]+)\/services$/);
       if (projectServicesMatch && method === 'GET') {
         const subject = authorizeAction(req, 'project:read', auth);
@@ -216,6 +239,32 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         await assertProjectAccess(controlPlane.store, body.projectId, subject);
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'service:create', metric: 'maxServices', increment: 1 });
         return send(res, 201, controlPlane.store.createService(body));
+      }
+      const serviceMatch = url.pathname.match(/^\/services\/([^/]+)$/);
+      if (serviceMatch && method === 'GET') {
+        const subject = authorizeAction(req, 'project:read', auth);
+        const serviceId = decodeURIComponent(serviceMatch[1]);
+        const service = controlPlane.store.getService(serviceId);
+        if (!service) return send(res, 404, { error: 'service_not_found' });
+        await assertProjectAccess(controlPlane.store, service.projectId, subject);
+        return send(res, 200, service);
+      }
+      if (serviceMatch && method === 'PATCH') {
+        const subject = authorizeAction(req, 'deploy:run', auth);
+        const serviceId = decodeURIComponent(serviceMatch[1]);
+        const service = controlPlane.store.getService(serviceId);
+        if (!service) return send(res, 404, { error: 'service_not_found' });
+        await assertProjectAccess(controlPlane.store, service.projectId, subject);
+        return send(res, 200, controlPlane.store.updateService(serviceId, await readJson(req)));
+      }
+      if (serviceMatch && method === 'DELETE') {
+        const subject = authorizeAction(req, 'project:delete', auth);
+        const serviceId = decodeURIComponent(serviceMatch[1]);
+        const service = controlPlane.store.getService(serviceId);
+        if (!service) return send(res, 404, { error: 'service_not_found' });
+        await assertProjectAccess(controlPlane.store, service.projectId, subject);
+        const deleted = controlPlane.store.deleteService(serviceId);
+        return send(res, 200, { deleted: true, serviceId: deleted.id });
       }
       const projectResourcesMatch = url.pathname.match(/^\/projects\/([^/]+)\/resources$/);
       if (projectResourcesMatch && method === 'GET') {
@@ -253,7 +302,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const security = validateServiceSecurity(service.desiredState || service.desiredSpec || service);
         if (!security.ok) return send(res, 403, { error: 'security_policy_violation', findings: security.findings });
         const deployment = controlPlane.store.createDeployment({ ...body, serviceId, deploymentType });
-        const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId: service.projectId, deploymentId: deployment.id } });
+        const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId: service.projectId, deploymentId: deployment.id, branch: body.branch || 'main', commitSha: body.commitSha || body.commitHash || null } });
         return send(res, 202, { ...deployment, workflowJob });
       }
       const projectServiceDeploymentsMatch = url.pathname.match(/^\/projects\/([^/]+)\/services\/([^/]+)\/deployments$/);
@@ -269,8 +318,44 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const security = validateServiceSecurity(service?.desiredState || service?.desiredSpec || service || {});
         if (!security.ok) return send(res, 403, { error: 'security_policy_violation', findings: security.findings });
         const deployment = controlPlane.store.createDeployment({ ...body, serviceId, deploymentType });
-        const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId, deploymentId: deployment.id } });
+        const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId, deploymentId: deployment.id, branch: body.branch || 'main', commitSha: body.commitSha || body.commitHash || null } });
         return send(res, 202, { ...deployment, workflowJob });
+      }
+      const deploymentMatch = url.pathname.match(/^\/deployments\/([^/]+)$/);
+      if (deploymentMatch && method === 'GET') {
+        const subject = authorizeAction(req, 'project:read', auth);
+        const deploymentId = decodeURIComponent(deploymentMatch[1]);
+        const deployment = controlPlane.store.getDeployment(deploymentId);
+        if (!deployment) return send(res, 404, { error: 'deployment_not_found' });
+        await assertProjectAccess(controlPlane.store, deployment.projectId, subject);
+        return send(res, 200, deployment);
+      }
+      const deploymentStatusMatch = url.pathname.match(/^\/deployments\/([^/]+)\/status$/);
+      if (deploymentStatusMatch && (method === 'PATCH' || method === 'POST')) {
+        const subject = authorizeAction(req, 'deploy:run', auth);
+        const deploymentId = decodeURIComponent(deploymentStatusMatch[1]);
+        const deployment = controlPlane.store.getDeployment(deploymentId);
+        if (!deployment) return send(res, 404, { error: 'deployment_not_found' });
+        await assertProjectAccess(controlPlane.store, deployment.projectId, subject);
+        const body = await readJson(req);
+        if (Object.prototype.hasOwnProperty.call(body, 'status')) {
+          const { status, ...updates } = body;
+          return send(res, 200, controlPlane.store.transitionDeployment(deploymentId, status, updates, { actorUserId: subject.id }));
+        }
+        return send(res, 200, controlPlane.store.updateDeployment(deploymentId, body, { actorUserId: subject.id }));
+      }
+      const deploymentActionMatch = url.pathname.match(/^\/deployments\/([^/]+)\/(cancel|rollback)$/);
+      if (deploymentActionMatch && method === 'POST') {
+        const subject = authorizeAction(req, 'deploy:run', auth);
+        const [deploymentId, action] = deploymentActionMatch.slice(1).map(decodeURIComponent);
+        const deployment = controlPlane.store.getDeployment(deploymentId);
+        if (!deployment) return send(res, 404, { error: 'deployment_not_found' });
+        await assertProjectAccess(controlPlane.store, deployment.projectId, subject);
+        const body = await readJson(req);
+        const result = action === 'cancel'
+          ? controlPlane.store.cancelDeployment(deploymentId, { ...body, actorUserId: subject.id })
+          : controlPlane.store.rollbackDeployment(deploymentId, { ...body, actorUserId: subject.id });
+        return send(res, 202, result);
       }
       const deploymentLogsMatch = url.pathname.match(/^\/deployments\/([^/]+)\/(logs|events)$/);
       if (deploymentLogsMatch && method === 'GET') {
