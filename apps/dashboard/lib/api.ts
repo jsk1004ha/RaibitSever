@@ -87,6 +87,19 @@ export async function loadProjectConsole(projectId: string, context = dashboardA
   return { context, project, services, resources, deployments, previewDeployments: deployments.filter((deployment: any) => String(deployment.deploymentType || '').toLowerCase() === 'preview'), buildLogs, deploymentEvents, runtimeLogs, resourceConsoles };
 }
 
+
+export async function loadResourceConsole(resourceId: string, context = dashboardApiContext()) {
+  const [resource, schema, tables, collections, keys, browse] = await Promise.all([
+    getJson(`/resources/${encodeURIComponent(resourceId)}`, { id: resourceId }, context),
+    getJson(`/resources/${encodeURIComponent(resourceId)}/console/schema`, { schema: {} }, context),
+    getJson(`/resources/${encodeURIComponent(resourceId)}/console/tables`, { tables: [] }, context),
+    getJson(`/resources/${encodeURIComponent(resourceId)}/console/collections`, { collections: [] }, context),
+    getJson(`/resources/${encodeURIComponent(resourceId)}/console/keys`, { keys: [] }, context),
+    postJson(`/resources/${encodeURIComponent(resourceId)}/console/browse`, {}, {}, context),
+  ]);
+  return { context, resource: resource.body, schema: schema.body, tables: tables.body, collections: collections.body, keys: keys.body, browse: browse.body };
+}
+
 export async function loadAdminConsole(context = dashboardApiContext()) {
   const [snapshot, usage] = await Promise.all([
     getJson('/snapshot', { users: [], quotas: [], auditLogs: [] }, context),

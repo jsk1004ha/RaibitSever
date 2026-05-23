@@ -41,12 +41,16 @@ type ResourceProvider interface {
 func DefaultCatalog() map[string]string {
     return map[string]string{
         "postgresql":     "CloudNativePG",
+        "sqlite":         "PVC-backed file provider",
         "mysql":          "Percona Operator",
         "mariadb":        "MariaDB Operator",
         "mongodb":        "MongoDB/Atlas Operator",
         "redis":          "Redis Operator/Upstash adapter",
+        "valkey":         "Valkey/Redis-compatible adapter",
         "object-storage": "MinIO/S3 adapter",
+        "qdrant":         "Qdrant local/provider adapter",
         "vector-db":      "Qdrant/Weaviate/Milvus adapter",
+        "nats":           "NATS local/provider adapter",
         "message-queue":  "NATS/Kafka/Redpanda/RabbitMQ adapter",
     }
 }

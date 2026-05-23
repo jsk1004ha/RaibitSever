@@ -4,7 +4,7 @@ import { slugify } from './ids.ts';
 import { applyManifests } from './kubernetes.ts';
 import { splitEnvForSecret } from './security.ts';
 import { maskSecrets } from './secrets.ts';
-import { buildPostgresProviderPlan, provisionPostgresProvider, providerConsoleSurface, publicProviderPlan } from './resource-providers.ts';
+import { buildPostgresProviderPlan, buildResourceProviderPlan, provisionResourceProvider, providerConsoleSurface, publicProviderPlan, publicResourceProviderPlan } from './resource-providers.ts';
 
 export function compileResourceProvisioningPlan(resource: Record<string, any>, { namespace = 'default', projectSlug = 'project', organizationSlug = 'org' } = {}) {
   const engine = normalizeResourceEngine(resource.engine || resource.type);
@@ -34,8 +34,8 @@ export function compileResourceProvisioningPlan(resource: Record<string, any>, {
         storageGb: Number(resource.storageGb || defaultStorageGb(entry.key)),
         databaseName: databaseLike(entry.type) ? (resource.databaseName || slugify(resource.database || resource.name || 'app')) : undefined,
         bucket: entry.key === 'object-storage' ? (resource.bucket || slugify(resource.name || 'bucket')) : undefined,
-        collection: entry.key === 'vector-db' ? (resource.collection || slugify(resource.name || 'collection')) : undefined,
-        topic: entry.key === 'message-queue' ? (resource.topic || slugify(resource.name || 'events')) : undefined,
+        collection: ['vector-db', 'qdrant'].includes(entry.key) ? (resource.collection || slugify(resource.name || 'collection')) : undefined,
+        topic: ['message-queue', 'nats'].includes(entry.key) ? (resource.topic || slugify(resource.name || 'events')) : undefined,
         username: supportsUsername(entry.type) ? (resource.username || slugify(resource.username || resource.name || 'app')) : undefined,
         provider: resource.provider || 'kubernetes-operator',
         backup: resource.backup || defaultBackup(entry.type),
@@ -91,9 +91,7 @@ export async function provisionProjectResources(projectSpec: Record<string, any>
   const providerResults = [];
   if (options.providerMode === 'direct' || options.directProviders === true) {
     for (const resource of projectSpec.resources || []) {
-      if (normalizeResourceEngine(resource.engine || resource.type) === 'postgresql') {
-        providerResults.push(await provisionPostgresProvider({ ...resource, projectSlug: provisioning.projectSlug }, options.postgres || options));
-      }
+      providerResults.push(await provisionResourceProvider({ ...resource, projectSlug: provisioning.projectSlug }, options[normalizeResourceEngine(resource.engine || resource.type)] || options));
     }
   }
   return { provisioning: maskSecrets(provisioning), apply, providerResults: maskSecrets(providerResults) };
@@ -123,7 +121,7 @@ function defaultBackup(type: string) {
 
 function defaultStorageGb(engine: string) {
   if (['postgresql', 'mysql', 'mariadb', 'mongodb'].includes(engine)) return 10;
-  if (engine === 'redis') return 1;
+  if (engine === 'redis' || engine === 'valkey') return 1;
   return 5;
 }
 
@@ -134,5 +132,5 @@ function providerLifecycle(engine: string, provider: any) {
 
 function providerPlanForResource(engine: string, resource: Record<string, any>) {
   if (engine === 'postgresql') return publicProviderPlan(buildPostgresProviderPlan(resource));
-  return providerConsoleSurface(resource);
+  return publicResourceProviderPlan(buildResourceProviderPlan(resource));
 }

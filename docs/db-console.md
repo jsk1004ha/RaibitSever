@@ -10,12 +10,12 @@
 
 | 엔진 | Console contract |
 | --- | --- |
-| PostgreSQL | schema/table/query, provider-backed execution |
-| MySQL/MariaDB | schema/table/query contract |
+| PostgreSQL | schema/table/query, provider-backed execution 또는 provider-contract plan |
+| MySQL/MariaDB | `SELECT 1`, schema/table browser, backup/restore/delete command contract |
 | SQLite | `node:sqlite` 기반 local executable console, table browse, guarded query |
-| MongoDB | collection/document browse contract |
-| Redis/Valkey | key/value/TTL browse contract |
-| Object Storage | bucket browser contract |
+| MongoDB | collection/document browse, `find` query contract |
+| Redis/Valkey | key/value/TTL browse, guarded delete command contract |
+| Object Storage | bucket/object browser, upload/download/delete command contract |
 | Qdrant/vector | collection/search-test contract |
 | NATS/queue | connection info, subject contract |
 
@@ -39,9 +39,21 @@ SQLite는 실행 전에 다음을 차단합니다.
 
 SQLite parent directory는 provider-owned `.raibitserver-work/sqlite` local console root 아래에서만 생성합니다.
 
+## Online manager 화면
+
+Dashboard resource console은 다음 API를 사용합니다.
+
+- `GET /resources/:resourceId` — resource 상태와 masked connection info 확인
+- `POST /resources/:resourceId/provision` — provider plan 생성 및 provider-owned secret 저장
+- `POST /resources/:resourceId/attach` — service secret env 자동 주입
+- `GET /resources/:resourceId/console/schema|tables|collections|keys` — browser view
+- `POST /resources/:resourceId/console/query|command|browse` — guarded query/command 실행
+
+요청 body의 connection URL/URI/DSN/JDBC 값은 사용하지 않고, provider-owned secret에서 복원한 값만 console adapter에 전달합니다.
+
 ## 로컬 검증
 
-`pnpm e2e:dry`가 SQLite query와 table browse 동작을 검증합니다.
+`pnpm e2e:dry`가 SQLite query/table browse와 Beta DB/resource provider-contract evidence를 검증합니다. 세부 회귀 테스트는 `tests/db-resource-beta.test.js`, `tests/db-console.test.js`, `tests/resource-providers.test.js`입니다.
 
 ## 관련 문서
 

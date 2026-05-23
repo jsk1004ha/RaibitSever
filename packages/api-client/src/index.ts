@@ -65,6 +65,11 @@ export class RAIBITSERVERClient {
   }
 
   listResources(projectId: string): Promise<ResourceListResponse> { return this.request(`/projects/${encodeURIComponent(projectId)}/resources`); }
+  getResource(resourceId: string): Promise<ResourceSpec> { return this.request(`/resources/${encodeURIComponent(resourceId)}`); }
+  updateResource(resourceId: string, input: Partial<ResourceSpec> & Record<string, unknown>): Promise<ResourceSpec> { return this.request(`/resources/${encodeURIComponent(resourceId)}`, { method: 'PATCH', body: input }); }
+  deleteResource(resourceId: string): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}`, { method: 'DELETE' }); }
+  attachResource(resourceId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/attach`, { method: 'POST', body: input }); }
+  provisionResource(resourceId: string, input: Record<string, unknown> = {}): Promise<Record<string, unknown>> { return this.request(`/resources/${encodeURIComponent(resourceId)}/provision`, { method: 'POST', body: input }); }
 
   createDeployment(projectId: string, serviceId: string, request?: DeploymentRequest): Promise<DeploymentSpec>;
   createDeployment(serviceId: string, request?: DeploymentRequest): Promise<DeploymentSpec>;

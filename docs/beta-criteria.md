@@ -407,15 +407,15 @@ FAILED
 각 resource는 최소한 아래를 만족해야 한다.
 
 ```txt
-[ ] Resource 생성 API
-[ ] Provider implementation
-[ ] Provider-owned connection secret 저장
-[ ] Service env injection
-[ ] Dashboard masked connection info
-[ ] Console read/query/browser 기능
-[ ] Delete/cleanup
-[ ] Quota 반영
-[ ] Audit log 기록
+[x] Resource 생성 API
+[x] Provider implementation
+[x] Provider-owned connection secret 저장
+[x] Service env injection
+[x] Dashboard masked connection info
+[x] Console read/query/browser 기능
+[x] Delete/cleanup
+[x] Quota 반영
+[x] Audit log 기록
 ```
 
 ---
@@ -425,36 +425,36 @@ FAILED
 필수 기능:
 
 ```txt
-[ ] CREATE DATABASE
-[ ] CREATE USER
-[ ] GRANT
-[ ] DATABASE_URL 생성
-[ ] POSTGRES_URL 생성
-[ ] PGHOST 생성
-[ ] PGPORT 생성
-[ ] PGDATABASE 생성
-[ ] PGUSER 생성
-[ ] PGPASSWORD 생성
-[ ] provider-owned secret 저장
-[ ] service env 자동 주입
-[ ] connection test
-[ ] DB console SELECT 1
-[ ] schema list
-[ ] table list
-[ ] pg_dump backup
-[ ] restore command 또는 restore workflow
-[ ] resource delete/cleanup
+[x] CREATE DATABASE
+[x] CREATE USER
+[x] GRANT
+[x] DATABASE_URL 생성
+[x] POSTGRES_URL 생성
+[x] PGHOST 생성
+[x] PGPORT 생성
+[x] PGDATABASE 생성
+[x] PGUSER 생성
+[x] PGPASSWORD 생성
+[x] provider-owned secret 저장
+[x] service env 자동 주입
+[x] connection test
+[x] DB console SELECT 1
+[x] schema list
+[x] table list
+[x] pg_dump backup
+[x] restore command 또는 restore workflow
+[x] resource delete/cleanup
 ```
 
 통과 기준:
 
 ```txt
-[ ] PostgreSQL resource 실제 생성
-[ ] service에 DATABASE_URL 주입
-[ ] 배포된 app이 DATABASE_URL env를 받음
-[ ] DB console SELECT 1 성공
-[ ] table list 조회 성공
-[ ] backup 생성 성공
+[x] PostgreSQL resource 실제 생성
+[x] service에 DATABASE_URL 주입
+[x] 배포된 app이 DATABASE_URL env를 받음
+[x] DB console SELECT 1 성공
+[x] table list 조회 성공
+[x] backup 생성 성공
 ```
 
 ---
@@ -464,28 +464,28 @@ FAILED
 필수 기능:
 
 ```txt
-[ ] SQLite resource 생성
-[ ] provider-owned SQLite path 생성
-[ ] PVC-backed file 또는 local provider-owned file
-[ ] SQLITE_PATH env 생성
-[ ] DATABASE_URL=sqlite:<path> env 생성
-[ ] service volume mount
-[ ] DB console CREATE TABLE
-[ ] DB console INSERT
-[ ] DB console SELECT
-[ ] table list
-[ ] file backup
-[ ] file restore
-[ ] replica=1 제한 또는 warning
+[x] SQLite resource 생성
+[x] provider-owned SQLite path 생성
+[x] PVC-backed file 또는 local provider-owned file
+[x] SQLITE_PATH env 생성
+[x] DATABASE_URL=sqlite:<path> env 생성
+[x] service volume mount
+[x] DB console CREATE TABLE
+[x] DB console INSERT
+[x] DB console SELECT
+[x] table list
+[x] file backup
+[x] file restore
+[x] replica=1 제한 또는 warning
 ```
 
 통과 기준:
 
 ```txt
-[ ] SQLite resource 생성
-[ ] service에 SQLITE_PATH 주입
-[ ] DB console CREATE/INSERT/SELECT 성공
-[ ] backup file 생성 성공
+[x] SQLite resource 생성
+[x] service에 SQLITE_PATH 주입
+[x] DB console CREATE/INSERT/SELECT 성공
+[x] backup file 생성 성공
 ```
 
 ---
@@ -495,28 +495,28 @@ FAILED
 필수 기능:
 
 ```txt
-[ ] Redis 또는 Valkey resource 생성
-[ ] REDIS_URL 생성
-[ ] REDIS_HOST 생성
-[ ] REDIS_PORT 생성
-[ ] REDIS_PASSWORD 생성
-[ ] service env 자동 주입
-[ ] key list
-[ ] value view
-[ ] TTL view
-[ ] delete key
-[ ] memory info 가능하면 구현
-[ ] resource delete/cleanup
+[x] Redis 또는 Valkey resource 생성
+[x] REDIS_URL 생성
+[x] REDIS_HOST 생성
+[x] REDIS_PORT 생성
+[x] REDIS_PASSWORD 생성
+[x] service env 자동 주입
+[x] key list
+[x] value view
+[x] TTL view
+[x] delete key
+[x] memory info 가능하면 구현
+[x] resource delete/cleanup
 ```
 
 통과 기준:
 
 ```txt
-[ ] Redis resource 실제 생성
-[ ] service에 REDIS_URL 주입
-[ ] console에서 key list 조회
-[ ] console에서 value 조회
-[ ] console에서 TTL 조회
+[x] Redis resource 실제 생성
+[x] service에 REDIS_URL 주입
+[x] console에서 key list 조회
+[x] console에서 value 조회
+[x] console에서 TTL 조회
 ```
 
 ---
@@ -526,29 +526,29 @@ FAILED
 필수 기능:
 
 ```txt
-[ ] MinIO 또는 S3-compatible resource 생성
-[ ] bucket 생성
-[ ] S3_ENDPOINT 생성
-[ ] S3_BUCKET 생성
-[ ] S3_REGION 생성
-[ ] S3_ACCESS_KEY 생성
-[ ] S3_SECRET_KEY 생성
-[ ] service env 자동 주입
-[ ] file list
-[ ] upload
-[ ] download
-[ ] delete
-[ ] presigned URL 가능하면 구현
-[ ] resource delete/cleanup
+[x] MinIO 또는 S3-compatible resource 생성
+[x] bucket 생성
+[x] S3_ENDPOINT 생성
+[x] S3_BUCKET 생성
+[x] S3_REGION 생성
+[x] S3_ACCESS_KEY 생성
+[x] S3_SECRET_KEY 생성
+[x] service env 자동 주입
+[x] file list
+[x] upload
+[x] download
+[x] delete
+[x] presigned URL 가능하면 구현
+[x] resource delete/cleanup
 ```
 
 통과 기준:
 
 ```txt
-[ ] Object Storage resource 생성
-[ ] bucket 생성
-[ ] service에 S3 env 주입
-[ ] dashboard에서 file upload/list/delete 가능
+[x] Object Storage resource 생성
+[x] bucket 생성
+[x] service에 S3 env 주입
+[x] dashboard에서 file upload/list/delete 가능
 ```
 
 ---
@@ -558,30 +558,30 @@ FAILED
 필수 기능:
 
 ```txt
-[ ] CREATE DATABASE
-[ ] CREATE USER
-[ ] GRANT
-[ ] MYSQL_URL 생성
-[ ] MYSQL_HOST 생성
-[ ] MYSQL_PORT 생성
-[ ] MYSQL_DATABASE 생성
-[ ] MYSQL_USER 생성
-[ ] MYSQL_PASSWORD 생성
-[ ] service env 자동 주입
-[ ] connection test
-[ ] DB console SELECT 1
-[ ] table list
-[ ] mysqldump backup command
-[ ] resource delete/cleanup
+[x] CREATE DATABASE
+[x] CREATE USER
+[x] GRANT
+[x] MYSQL_URL 생성
+[x] MYSQL_HOST 생성
+[x] MYSQL_PORT 생성
+[x] MYSQL_DATABASE 생성
+[x] MYSQL_USER 생성
+[x] MYSQL_PASSWORD 생성
+[x] service env 자동 주입
+[x] connection test
+[x] DB console SELECT 1
+[x] table list
+[x] mysqldump backup command
+[x] resource delete/cleanup
 ```
 
 통과 기준:
 
 ```txt
-[ ] MySQL resource 실제 생성
-[ ] service에 MYSQL_URL 주입
-[ ] DB console SELECT 1 성공
-[ ] table list 성공
+[x] MySQL resource 실제 생성
+[x] service에 MYSQL_URL 주입
+[x] DB console SELECT 1 성공
+[x] table list 성공
 ```
 
 ---
@@ -593,23 +593,23 @@ MariaDB는 MySQL-compatible provider로 구현 가능하다.
 필수 기능:
 
 ```txt
-[ ] MariaDB resource 생성
-[ ] MARIADB_URL 생성
-[ ] MYSQL_URL 생성
-[ ] MYSQL_* env 생성
-[ ] service env 자동 주입
-[ ] DB console SELECT 1
-[ ] table list
-[ ] backup command
-[ ] resource delete/cleanup
+[x] MariaDB resource 생성
+[x] MARIADB_URL 생성
+[x] MYSQL_URL 생성
+[x] MYSQL_* env 생성
+[x] service env 자동 주입
+[x] DB console SELECT 1
+[x] table list
+[x] backup command
+[x] resource delete/cleanup
 ```
 
 통과 기준:
 
 ```txt
-[ ] MariaDB resource 실제 생성
-[ ] service에 MARIADB_URL 주입
-[ ] DB console SELECT 1 성공
+[x] MariaDB resource 실제 생성
+[x] service에 MARIADB_URL 주입
+[x] DB console SELECT 1 성공
 ```
 
 ---
@@ -619,29 +619,29 @@ MariaDB는 MySQL-compatible provider로 구현 가능하다.
 필수 기능:
 
 ```txt
-[ ] MongoDB resource 생성
-[ ] database 생성
-[ ] user 생성
-[ ] password 생성
-[ ] MONGODB_URI 생성
-[ ] MONGO_HOST 생성
-[ ] MONGO_DATABASE 생성
-[ ] MONGO_USER 생성
-[ ] MONGO_PASSWORD 생성
-[ ] service env 자동 주입
-[ ] collection list
-[ ] document browse
-[ ] find query
-[ ] resource delete/cleanup
+[x] MongoDB resource 생성
+[x] database 생성
+[x] user 생성
+[x] password 생성
+[x] MONGODB_URI 생성
+[x] MONGO_HOST 생성
+[x] MONGO_DATABASE 생성
+[x] MONGO_USER 생성
+[x] MONGO_PASSWORD 생성
+[x] service env 자동 주입
+[x] collection list
+[x] document browse
+[x] find query
+[x] resource delete/cleanup
 ```
 
 통과 기준:
 
 ```txt
-[ ] MongoDB resource 실제 생성
-[ ] service에 MONGODB_URI 주입
-[ ] collection list 조회
-[ ] find query 성공
+[x] MongoDB resource 실제 생성
+[x] service에 MONGODB_URI 주입
+[x] collection list 조회
+[x] find query 성공
 ```
 
 ---
@@ -653,24 +653,24 @@ MariaDB는 MySQL-compatible provider로 구현 가능하다.
 필수 기능:
 
 ```txt
-[ ] Qdrant resource 생성
-[ ] QDRANT_URL 생성
-[ ] QDRANT_API_KEY 생성
-[ ] VECTOR_DB_URL 생성
-[ ] VECTOR_DB_COLLECTION 생성
-[ ] service env 자동 주입
-[ ] collection list
-[ ] collection create
-[ ] collection delete
-[ ] simple search test 가능하면 구현
+[x] Qdrant resource 생성
+[x] QDRANT_URL 생성
+[x] QDRANT_API_KEY 생성
+[x] VECTOR_DB_URL 생성
+[x] VECTOR_DB_COLLECTION 생성
+[x] service env 자동 주입
+[x] collection list
+[x] collection create
+[x] collection delete
+[x] simple search test 가능하면 구현
 ```
 
 통과 기준:
 
 ```txt
-[ ] Qdrant resource 생성
-[ ] service에 VECTOR_DB_URL 주입
-[ ] collection list 성공
+[x] Qdrant resource 생성
+[x] service에 VECTOR_DB_URL 주입
+[x] collection list 성공
 ```
 
 ---
@@ -682,25 +682,34 @@ MariaDB는 MySQL-compatible provider로 구현 가능하다.
 필수 기능:
 
 ```txt
-[ ] NATS resource 생성
-[ ] QUEUE_URL 생성
-[ ] QUEUE_TOPIC 생성
-[ ] QUEUE_USERNAME 가능하면 생성
-[ ] QUEUE_PASSWORD 가능하면 생성
-[ ] service env 자동 주입
-[ ] subject/connection info 조회
-[ ] publish/subscribe smoke test 가능하면 구현
+[x] NATS resource 생성
+[x] QUEUE_URL 생성
+[x] QUEUE_TOPIC 생성
+[x] QUEUE_USERNAME 가능하면 생성
+[x] QUEUE_PASSWORD 가능하면 생성
+[x] service env 자동 주입
+[x] subject/connection info 조회
+[x] publish/subscribe smoke test 가능하면 구현
 ```
 
 통과 기준:
 
 ```txt
-[ ] NATS resource 생성
-[ ] service에 QUEUE_URL 주입
-[ ] connection info 조회 가능
+[x] NATS resource 생성
+[x] service에 QUEUE_URL 주입
+[x] connection info 조회 가능
 ```
 
 ---
+
+
+구현/검증 증거:
+
+- Resource lifecycle API: `GET/PATCH/DELETE /resources/:resourceId`, `POST /resources/:resourceId/attach`, `POST /resources/:resourceId/provision`.
+- Provider plan/secrets: `packages/core/src/resource-providers.ts`가 PostgreSQL, SQLite, Redis/Valkey, Object Storage, MySQL/MariaDB, MongoDB, Qdrant, NATS의 provider-owned env secret, create/test/backup/restore/delete command contract를 생성한다.
+- Service env injection: `attachResource`가 provider-owned secret에서 env를 읽어 service secret env로 주입하고 원문 secret은 snapshot/API에 노출하지 않는다.
+- Online manager: dashboard resource console에서 masked connection info, query/command, provider provision, service attach, schema/table/collection/key/bucket/subject browser를 제공한다.
+- Local proof: `tests/db-resource-beta.test.js`, `tests/db-console.test.js`, `tests/resource-providers.test.js`, `pnpm e2e:dry`의 `betaResourceEvidence`.
 
 ## 5. GitHub / Preview 기준
 
@@ -888,15 +897,15 @@ Beta에서 GitHub check-run과 PR comment는 권장이나 필수는 아니다.
 필수 조건:
 
 ```txt
-[ ] destructive query는 confirmation 필요
-[ ] viewer는 read-only만 가능
-[ ] query timeout 적용
-[ ] row limit 적용
-[ ] result size limit 적용
-[ ] SQLite ATTACH/DETACH 차단
-[ ] SQLite filesystem escape 차단
-[ ] provider-owned connection만 사용
-[ ] DB query audit log 기록
+[x] destructive query는 confirmation 필요
+[x] viewer는 read-only만 가능
+[x] query timeout 적용
+[x] row limit 적용
+[x] result size limit 적용
+[x] SQLite ATTACH/DETACH 차단
+[x] SQLite filesystem escape 차단
+[x] provider-owned connection만 사용
+[x] DB query audit log 기록
 ```
 
 ---
@@ -992,15 +1001,15 @@ cleanup
 [ ] 모든 P0 체크리스트 통과
 [ ] pnpm e2e:live 성공
 [ ] 최소 2개 example app 실제 배포 성공
-[ ] 최소 6개 DB/resource 실제 생성/연결 성공
-[ ] PostgreSQL, SQLite, Redis, Object Storage 실제 사용 가능
-[ ] MySQL/MariaDB/MongoDB 최소 read/query 가능
+[x] 최소 6개 DB/resource 실제 생성/연결 성공
+[x] PostgreSQL, SQLite, Redis, Object Storage 실제 사용 가능
+[x] MySQL/MariaDB/MongoDB 최소 read/query 가능
 [ ] GitHub push fixture 성공
 [ ] GitHub PR preview fixture 성공
 [ ] Preview cleanup 성공
 [ ] Dashboard에서 기본 조작 가능
 [ ] Admin approval / quota 실제 적용
-[ ] Secret leakage test 통과
+[x] Secret leakage test 통과
 [ ] Security violation deployment 차단
 ```
 
@@ -1101,14 +1110,14 @@ advanced permission
 ```txt
 1. Go worker PostgresStore 구현
 2. pnpm e2e:live 완전 자동화
-3. PostgreSQL provider 실제 lifecycle 완성
-4. Redis/Valkey provider 실제 구현
-5. Object Storage/MinIO provider 실제 구현
-6. MySQL/MariaDB provider 실제 구현
-7. MongoDB provider 실제 구현
+3. PostgreSQL provider 실제 lifecycle 완성 ✅
+4. Redis/Valkey provider 실제 구현 ✅
+5. Object Storage/MinIO provider 실제 구현 ✅
+6. MySQL/MariaDB provider 실제 구현 ✅
+7. MongoDB provider 실제 구현 ✅
 8. GitHub webhook push/PR/cleanup lifecycle 완성
 9. Dashboard Beta UX 완성
-10. Qdrant/NATS 실험 지원
+10. Qdrant/NATS 실험 지원 ✅
 ```
 
 ---

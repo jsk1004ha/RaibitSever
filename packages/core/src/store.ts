@@ -6,8 +6,9 @@ import { normalizeEnvEntries, parseDotEnv, maskEnvEntries } from './env-file.ts'
 import { githubIntegrationSummary, githubWebhookActionPlan, githubWebhookOutboundPlan, parseGitHubRepository, verifyGitHubWebhookSignature } from './github-integration.ts';
 import { openSecret, publicSecretRecord, sealSecret, secureRandomSecret } from './secret-vault.ts';
 import { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
-import { provisionPostgresProvider } from './resource-providers.ts';
+import { providerConnectionEnvForResource, provisionResourceProvider as provisionAnyResourceProvider } from './resource-providers.ts';
 import { providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
+import { normalizeResourceEngine } from './catalog.ts';
 import { assertDeploymentTransition, normalizeDeploymentStatus } from './deployments.ts';
 
 export class ControlPlaneStore {
@@ -145,7 +146,7 @@ export class ControlPlaneStore {
     const current = this.projects.get(projectId);
     if (!current) return null;
     for (const service of [...this.services.values()].filter((service) => String(service.projectId) === String(projectId))) this.deleteService(service.id);
-    for (const resource of [...this.resources.values()].filter((resource) => String(resource.projectId) === String(projectId))) this.resources.delete(resource.id);
+    for (const resource of [...this.resources.values()].filter((resource) => String(resource.projectId) === String(projectId))) this.deleteResource(resource.id);
     this.projects.delete(projectId);
     this.audit('system', 'project:delete', 'project', projectId, { organizationId: current.organizationId });
     return deepClone(current);
@@ -208,25 +209,97 @@ export class ControlPlaneStore {
 
   createResource({ projectId, name, type = 'database', engine, provider = 'kubernetes-operator', plan = 'shared-small', region = 'local', status = 'provisioning', ...rest }: Record<string, any>) {
     const safe = sanitizeTenantResourceInput({ projectId, name, type, engine, provider, plan, region, status, ...rest });
+    const normalizedEngine = normalizeResourceEngine(safe.engine || safe.type);
     const id = stableId('res', safe.projectId, safe.name);
-    const sqlitePath = String(safe.engine || '').toLowerCase() === 'sqlite' ? providerOwnedSqlitePath(id) : null;
-    const desiredSpec = sqlitePath ? { ...(safe.desiredSpec || {}), sqlitePath } : safe.desiredSpec;
-    const resource = { id, projectId: safe.projectId, type: safe.type || 'database', name: safe.name, slug: slugify(safe.name), engine: safe.engine, provider: safe.provider || 'kubernetes-operator', status: safe.status || 'provisioning', plan: safe.plan || 'shared-small', region: safe.region || 'local', createdAt: nowIso(), ...safe, desiredSpec, sqlitePath: sqlitePath || undefined };
+    const sqlitePath = normalizedEngine === 'sqlite' ? providerOwnedSqlitePath(id) : null;
+    const desiredSpec = sqlitePath ? { ...(safe.desiredSpec || {}), sqlitePath } : { ...(safe.desiredSpec || {}) };
+    const desiredState = { ...safe, engine: normalizedEngine, desiredSpec, sqlitePath: sqlitePath || undefined };
+    const resource = {
+      id,
+      projectId: safe.projectId,
+      type: safe.type || resourceTypeForEngine(normalizedEngine),
+      name: safe.name,
+      slug: slugify(safe.slug || safe.name),
+      engine: normalizedEngine,
+      provider: safe.provider || provider,
+      status: safe.status || status,
+      plan: safe.plan || plan,
+      region: safe.region || region,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      ...safe,
+      desiredSpec,
+      desiredState,
+      sqlitePath: sqlitePath || undefined,
+    };
     this.resources.set(resource.id, resource);
+    this.attachProviderConnectionSecrets({ resourceId: resource.id, env: providerConnectionEnvForResource(resource), actorUserId: 'system', live: false, providerMode: 'provider-contract' });
     this.audit('system', 'resource:create', 'resource', resource.id, { projectId: resource.projectId, engine: resource.engine, provider: resource.provider });
-    return deepClone(resource);
+    return deepClone(this.resources.get(resource.id));
   }
 
-  attachResource({ resourceId, serviceId, envPrefix = null, injectedEnv = {} }: Record<string, any>) {
+  getResource(resourceId: string) {
+    return deepClone(this.resources.get(resourceId) || null);
+  }
+
+  updateResource(resourceId: string, updates: Record<string, any> = {}) {
+    const current = this.resources.get(resourceId);
+    if (!current) return null;
+    const safe = sanitizeTenantResourceInput({ ...updates, projectId: current.projectId, name: updates.name || current.name, engine: updates.engine || current.engine, type: updates.type || current.type });
+    const engine = normalizeResourceEngine(safe.engine || current.engine);
+    const sqlitePath = engine === 'sqlite' ? (current.sqlitePath || providerOwnedSqlitePath(resourceId)) : undefined;
+    const desiredSpec = sqlitePath ? { ...(current.desiredSpec || {}), ...(safe.desiredSpec || {}), sqlitePath } : { ...(current.desiredSpec || {}), ...(safe.desiredSpec || {}) };
+    const next = {
+      ...current,
+      ...safe,
+      engine,
+      slug: safe.slug ? slugify(safe.slug) : (safe.name ? slugify(safe.name) : current.slug),
+      desiredSpec,
+      desiredState: { ...(current.desiredState || {}), ...safe, desiredSpec, sqlitePath },
+      sqlitePath,
+      updatedAt: nowIso(),
+    };
+    this.resources.set(resourceId, next);
+    if (updates.engine || updates.name || updates.provider || updates.desiredSpec) this.attachProviderConnectionSecrets({ resourceId, env: providerConnectionEnvForResource(next), actorUserId: 'system', live: false, providerMode: 'provider-contract' });
+    this.audit('system', 'resource:update', 'resource', resourceId, maskSecrets(updates));
+    return deepClone(this.resources.get(resourceId));
+  }
+
+  deleteResource(resourceId: string) {
+    const current = this.resources.get(resourceId);
+    if (!current) return null;
+    const attachments = this.resourceAttachments.filter((row) => String(row.resourceId) === String(resourceId));
+    for (const attachment of attachments) this.removeResourceInjectedEnvironment(attachment);
+    this.resourceAttachments = this.resourceAttachments.filter((row) => String(row.resourceId) !== String(resourceId));
+    for (const [id, secret] of [...this.secrets.entries()]) {
+      if (secret.scopeType === 'resource-provider-connection' && String(secret.scopeId) === String(resourceId)) this.secrets.delete(id);
+    }
+    this.resources.delete(resourceId);
+    this.audit('system', 'resource:delete', 'resource', resourceId, { projectId: current.projectId, engine: current.engine });
+    return deepClone(current);
+  }
+
+  attachResource({ resourceId, serviceId, envPrefix = null, actorUserId = 'system' }: Record<string, any>) {
     const resource = this.resources.get(resourceId);
     const service = this.services.get(serviceId);
     if (!resource) throw notFound(`resource not found: ${resourceId}`);
     if (!service) throw notFound(`service not found: ${serviceId}`);
     if (resource.projectId !== service.projectId) throw forbidden('resource and service must be in the same project');
-    const row = { id: stableId('attach', resourceId, serviceId), resourceId, serviceId, envPrefix, injectedEnv: maskSecrets(injectedEnv), createdAt: nowIso() };
-    this.resourceAttachments.push(row);
-    this.audit('system', 'resource:attach', 'service', serviceId, { resourceId, envPrefix });
-    return deepClone(row);
+    const providerEnv = providerEnvFromConnection(this.resourceForConsole(resource), resource);
+    const injectedEnv = prefixEnv(providerEnv, envPrefix);
+    const row = { id: stableId('attach', resourceId, serviceId), resourceId, serviceId, envPrefix, injectedEnv: maskSecrets(injectedEnv), createdAt: nowIso(), updatedAt: nowIso() };
+    const existingIndex = this.resourceAttachments.findIndex((candidate) => String(candidate.resourceId) === String(resourceId) && String(candidate.serviceId) === String(serviceId));
+    if (existingIndex === -1) this.resourceAttachments.push(row);
+    else this.resourceAttachments[existingIndex] = { ...this.resourceAttachments[existingIndex], ...row, createdAt: this.resourceAttachments[existingIndex].createdAt || row.createdAt };
+    this.upsertServiceEnvironment({
+      projectId: service.projectId,
+      serviceId,
+      entries: Object.entries(injectedEnv).map(([key, value]) => ({ key, value: String(value), isSecret: true, source: `resource:${resourceId}` })),
+      actorUserId,
+      source: `resource:${resourceId}`,
+    });
+    this.audit(actorUserId, 'resource:attach', 'service', serviceId, { resourceId, envPrefix, envKeys: Object.keys(injectedEnv) });
+    return deepClone(existingIndex === -1 ? row : this.resourceAttachments[existingIndex]);
   }
 
   createDeployment({ id = null, serviceId, commitHash = null, commitSha = null, imageUrl, image = null, imageDigest = null, status = 'queued', deploymentType = 'production', branch = 'main', previewUrl = null, triggerType = 'manual', pullRequestNumber = null, errorCode = null, errorMessage = null, ...rest }: Record<string, any>) {
@@ -451,25 +524,33 @@ export class ControlPlaneStore {
   async provisionResourceProvider({ resourceId, actorUserId = 'provider', ...options }: Record<string, any>) {
     const resource = this.resources.get(resourceId);
     if (!resource) throw notFound(`resource not found: ${resourceId}`);
-    const engine = String(resource.engine || '').toLowerCase();
-    if (engine !== 'postgresql' && engine !== 'postgres') throw new Error(`direct provider is not implemented for ${engine}`);
-    const result = await provisionPostgresProvider(resource, options);
-    const attached = this.attachProviderConnectionSecret({ resourceId, databaseUrl: result.databaseUrl, actorUserId });
+    const result = await provisionAnyResourceProvider(resource, options);
+    const attached = this.attachProviderConnectionSecrets({ resourceId, env: (result as any).connectionEnv || providerConnectionEnvForResource(resource), actorUserId, live: options.execute === true && options.dryRun === false, providerMode: result.dryRun ? 'provider-contract' : 'live-provider' });
     const next = { ...attached, status: 'ready', provider: result.provider, desiredState: { ...(attached.desiredState || {}), providerResult: result.plan }, updatedAt: nowIso() };
     this.resources.set(resourceId, next);
-    this.audit(actorUserId, 'resource.provider:provision', 'resource', resourceId, { engine, provider: result.provider, dryRun: result.dryRun, databaseUrl: result.databaseUrlMasked });
-    return { resource: deepClone(next), result: maskSecrets({ ...result, databaseUrl: undefined }) };
+    this.audit(actorUserId, 'resource.provider:provision', 'resource', resourceId, { engine: result.engine, provider: result.provider, dryRun: result.dryRun, connectionSecret: result.connectionSecret });
+    return { resource: deepClone(next), result: maskSecrets({ ...result, databaseUrl: undefined, connectionEnv: undefined }) };
   }
 
-  attachProviderConnectionSecret({ resourceId, databaseUrl, connectionUrl, actorUserId = 'provider' }: Record<string, any>) {
-    const resource = this.resources.get(resourceId);
-    if (!resource) throw notFound(`resource not found: ${resourceId}`);
+  attachProviderConnectionSecret({ resourceId, databaseUrl, connectionUrl, actorUserId = 'provider', key = 'DATABASE_URL', live = true }: Record<string, any>) {
     const value = databaseUrl || connectionUrl;
     if (!value) throw new Error('provider connection URL is required');
-    const secret = this.createSecret({ scopeType: 'resource-provider-connection', scopeId: resourceId, key: 'DATABASE_URL', value, actorUserId });
-    const next = { ...resource, connectionSecretName: secret.id, updatedAt: nowIso() };
+    return this.attachProviderConnectionSecrets({ resourceId, env: { [key]: value }, actorUserId, live, providerMode: live === false ? 'provider-contract' : 'live-provider' });
+  }
+
+  attachProviderConnectionSecrets({ resourceId, env = {}, actorUserId = 'provider', live = false, providerMode = 'provider-contract' }: Record<string, any>) {
+    const resource = this.resources.get(resourceId);
+    if (!resource) throw notFound(`resource not found: ${resourceId}`);
+    const entries = Object.entries(env || {}).filter(([, value]) => value !== undefined && value !== null && String(value).length > 0);
+    if (!entries.length) throw new Error('provider connection env is required');
+    let firstSecretId = resource.connectionSecretName || null;
+    for (const [key, value] of entries) {
+      const secret = this.createSecret({ scopeType: 'resource-provider-connection', scopeId: resourceId, key, value: String(value), actorUserId, metadata: { providerOwned: true, live: live === true, providerMode } });
+      if (!firstSecretId) firstSecretId = secret.id;
+    }
+    const next = { ...resource, connectionSecretName: firstSecretId, updatedAt: nowIso() };
     this.resources.set(resourceId, next);
-    this.audit(actorUserId, 'resource.provider-connection:attach', 'resource', resourceId, { connectionSecretName: secret.id });
+    this.audit(actorUserId, 'resource.provider-connection:attach', 'resource', resourceId, { connectionSecretName: firstSecretId, envKeys: entries.map(([key]) => key), providerMode });
     return deepClone(next);
   }
 
@@ -766,13 +847,31 @@ export class ControlPlaneStore {
     return resourceConsoleView(this.resourceForConsole(resource), view, options);
   }
 
+  removeResourceInjectedEnvironment(attachment: Record<string, any>) {
+    const service = this.services.get(attachment.serviceId);
+    const environment = { ...(service?.environment || {}) };
+    for (const key of Object.keys(attachment.injectedEnv || {})) {
+      const id = stableId('env', attachment.serviceId, key);
+      const row = this.environmentVariables.get(id);
+      if (row?.source === `resource:${attachment.resourceId}`) {
+        if (row.secretRef || row.secretId) this.secrets.delete(row.secretRef || row.secretId);
+        this.environmentVariables.delete(id);
+        delete environment[key];
+      }
+    }
+    if (service) this.services.set(service.id, { ...service, environment, updatedAt: nowIso() });
+  }
+
   resourceForConsole(resource: Record<string, any>) {
-    if (!resource.connectionSecretName) return resource;
-    const secret = this.secrets.get(resource.connectionSecretName);
-    if (!isProviderConnectionSecret(secret, resource.id)) return resource;
-    const databaseUrl = secret.sealedValue ? openSecret(secret.sealedValue) : null;
-    if (!databaseUrl) return resource;
-    return { ...resource, providerConnection: { databaseUrl } };
+    const env: Record<string, string> = {};
+    let live = false;
+    for (const secret of this.secrets.values()) {
+      if (!isProviderConnectionSecret(secret, resource.id)) continue;
+      if (secret.sealedValue) env[secret.key] = openSecret(secret.sealedValue);
+      if (secret.metadata?.live === true) live = true;
+    }
+    if (!Object.keys(env).length) return resource;
+    return { ...resource, providerConnection: providerConnectionFromEnv(env, resource.engine, live) };
   }
 
   audit(actorUserId: any, action: string, targetType: string, targetId: any, metadata: Record<string, any> = {}) {
@@ -814,6 +913,45 @@ export class ControlPlaneStore {
   }
 }
 
+
+function resourceTypeForEngine(engine: string) {
+  if (['redis', 'valkey'].includes(engine)) return 'cache';
+  if (engine === 'object-storage') return 'storage';
+  if (['qdrant', 'vector-db'].includes(engine)) return 'vector';
+  if (['nats', 'message-queue'].includes(engine)) return 'queue';
+  return 'database';
+}
+
+function prefixEnv(env: Record<string, any>, envPrefix: any) {
+  const prefix = String(envPrefix || '').trim().replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase();
+  if (!prefix) return { ...env };
+  return Object.fromEntries(Object.entries(env).map(([key, value]) => [`${prefix}_${key}`, value]));
+}
+
+function providerEnvFromConnection(consoleResource: Record<string, any>, resource: Record<string, any>) {
+  const providerConnection = consoleResource.providerConnection || {};
+  const env = Object.fromEntries(Object.entries(providerConnection).filter(([key, value]) => /^[A-Z0-9_]+$/.test(key) && typeof value === 'string'));
+  if (Object.keys(env).length) return env;
+  return providerConnectionEnvForResource(resource);
+}
+
+function providerConnectionFromEnv(env: Record<string, string>, engine: any, live: boolean) {
+  const normalized = normalizeResourceEngine(engine);
+  const connection: Record<string, any> = { ...env, live, mode: live ? 'live-provider' : 'provider-contract' };
+  const first = (...keys: string[]) => keys.map((key) => env[key]).find(Boolean);
+  if (normalized === 'postgresql') connection.databaseUrl = first('DATABASE_URL', 'POSTGRES_URL', 'POSTGRESQL_URL');
+  else if (normalized === 'mysql') connection.url = first('MYSQL_URL');
+  else if (normalized === 'mariadb') connection.url = first('MARIADB_URL', 'MYSQL_URL');
+  else if (normalized === 'mongodb') connection.uri = first('MONGODB_URI', 'MONGO_URL');
+  else if (normalized === 'redis') connection.url = first('REDIS_URL');
+  else if (normalized === 'valkey') connection.url = first('VALKEY_URL', 'REDIS_URL');
+  else if (normalized === 'sqlite') connection.databaseUrl = first('DATABASE_URL');
+  else if (normalized === 'object-storage') connection.url = first('S3_ENDPOINT');
+  else if (normalized === 'qdrant' || normalized === 'vector-db') connection.url = first('VECTOR_DB_URL', 'QDRANT_URL');
+  else if (normalized === 'nats' || normalized === 'message-queue') connection.url = first('QUEUE_URL', 'NATS_URL');
+  return connection;
+}
+
 function publicSecret(row: Record<string, any>) {
   return publicSecretRecord(row);
 }
@@ -822,7 +960,7 @@ function isProviderConnectionSecret(secret: any, resourceId: string) {
   return secret
     && secret.scopeType === 'resource-provider-connection'
     && String(secret.scopeId) === String(resourceId)
-    && secret.key === 'DATABASE_URL';
+    && Boolean(secret.key);
 }
 
 function redactUser(user: Record<string, any>) {

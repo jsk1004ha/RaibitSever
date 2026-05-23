@@ -1,35 +1,20 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { guardDatabaseQuery, isReadOnlyDatabaseQuery } from './security.ts';
+import { can } from './rbac.ts';
 import { isProviderOwnedSqlitePath } from './resource-sanitizer.ts';
 import { providerConsoleSurface } from './resource-providers.ts';
 
 export async function runDbConsoleQuery(resource: Record<string, any>, query: string, options: Record<string, any> = {}) {
   const engine = String(resource.engine || resource.desiredSpec?.engine || '').toLowerCase();
-  if (engine !== 'sqlite' && engine !== 'postgresql' && engine !== 'postgres') {
-    const surface = providerConsoleSurface(resource, options);
-    return {
-      engine,
-      mode: surface.mode || 'connection-info',
-      rows: [],
-      fields: [],
-      warning: surface.warning || `${engine} console requires a live provider connection; local deterministic mode verified the provider command path`,
-      command: surface.command,
-      guard: { allowed: true, readOnly: true, providerCommand: true },
-    };
-  }
-  const guard = guardDatabaseQuery(query, { role: options.role || 'developer', confirmed: options.confirmed === true });
-  if (!guard.allowed) {
-    const error = new Error(guard.reason);
-    (error as any).statusCode = 403;
-    (error as any).guard = guard;
-    throw error;
-  }
-  if (engine === 'sqlite') return runSqlite(resource, query, options);
+  if (engine !== 'sqlite' && engine !== 'postgresql' && engine !== 'postgres') return runProviderConsole(resource, query, options);
+  const guard = guardDatabaseQuery(query, { role: options.role || 'developer', confirmed: options.confirmed === true || options.confirmed === 'true' });
+  if (!guard.allowed) throwGuard(guard);
+  if (engine === 'sqlite') return runSqlite(resource, query, options, guard);
   return runPostgres(resource, query, options, guard);
 }
 
-async function runSqlite(resource: Record<string, any>, query: string, options: Record<string, any>) {
+async function runSqlite(resource: Record<string, any>, query: string, options: Record<string, any>, guard: Record<string, any>) {
   const sqlite = await import('node:sqlite');
   const dbPath = providerSqlitePath(resource);
   await ensureSqliteDirectory(dbPath);
@@ -41,16 +26,16 @@ async function runSqlite(resource: Record<string, any>, query: string, options: 
     if (/^SELECT\b/i.test(text)) {
       const limited = /\bLIMIT\b/i.test(text) ? text.replace(/;$/, '') : `${text.replace(/;$/, '')} LIMIT ${Math.min(Number(options.limit || 100), 500)}`;
       const stmt = db.prepare(limited);
-      const rows = stmt.all();
-      return { engine: 'sqlite', dbPath, rows, fields: rows[0] ? Object.keys(rows[0]) : [], rowCount: rows.length };
+      const rows = trimResultRows(stmt.all(), options.maxResultBytes);
+      return { engine: 'sqlite', dbPath, rows, fields: rows[0] ? Object.keys(rows[0]) : [], rowCount: rows.length, guard };
     }
     if (/^PRAGMA\b/i.test(text)) {
       const stmt = db.prepare(text.replace(/;$/, ''));
-      const rows = stmt.all();
-      return { engine: 'sqlite', dbPath, rows, fields: rows[0] ? Object.keys(rows[0]) : [], rowCount: rows.length };
+      const rows = trimResultRows(stmt.all(), options.maxResultBytes);
+      return { engine: 'sqlite', dbPath, rows, fields: rows[0] ? Object.keys(rows[0]) : [], rowCount: rows.length, guard };
     }
     db.exec(text);
-    return { engine: 'sqlite', dbPath, rows: [], fields: [], rowCount: 0, changed: true };
+    return { engine: 'sqlite', dbPath, rows: [], fields: [], rowCount: 0, changed: true, guard };
   } finally {
     db.close();
   }
@@ -142,16 +127,18 @@ export async function resourceConsoleView(resource: Record<string, any>, view: s
         collections: surface.collections || [],
         keys: surface.keys || [],
         buckets: surface.buckets || [],
+        objects: surface.objects || [],
         streams: surface.streams || [],
         subjects: surface.subjects || [],
       },
+      connectionInfo: surface.connectionInfo,
       warning: surface.warning,
       mode: surface.mode,
     };
   }
-  if (view === 'tables') return { engine, schemas: surface.schemas || [], tables: surface.tables || [], warning: surface.warning, mode: surface.mode };
-  if (view === 'collections') return { engine, collections: surface.collections || [], warning: surface.warning, mode: surface.mode };
-  if (view === 'keys') return { engine, keys: surface.keys || [], warning: surface.warning, mode: surface.mode, command: surface.command };
+  if (view === 'tables') return { engine, schemas: surface.schemas || [], tables: surface.tables || [], connectionInfo: surface.connectionInfo, warning: surface.warning, mode: surface.mode };
+  if (view === 'collections') return { engine, collections: surface.collections || [], connectionInfo: surface.connectionInfo, warning: surface.warning, mode: surface.mode };
+  if (view === 'keys') return { engine, keys: surface.keys || [], connectionInfo: surface.connectionInfo, warning: surface.warning, mode: surface.mode, command: surface.command };
   return surface;
 }
 
@@ -192,7 +179,7 @@ async function runPostgres(resource: Record<string, any>, query: string, options
 
 async function browsePostgres(resource: Record<string, any>, options: Record<string, any> = {}) {
   const connectionUrl = resourceConnectionUrl(resource, options, ['DATABASE_URL', 'POSTGRES_URL', 'POSTGRESQL_URL']);
-  if (!connectionUrl) return { engine: 'postgresql', tables: [], schemas: [], warning: 'PostgreSQL browser requires provider-owned DATABASE_URL/POSTGRES_URL on the resource' };
+  if (!connectionUrl) return { engine: 'postgresql', tables: [], schemas: [], connectionInfo: providerConsoleSurface(resource).connectionInfo, warning: 'PostgreSQL browser requires provider-owned live DATABASE_URL/POSTGRES_URL on the resource' };
   const client = await prismaClientFor(connectionUrl);
   try {
     const timeoutMs = clampNumber(options.timeoutMs, 250, 30_000, 5_000);
@@ -204,10 +191,127 @@ async function browsePostgres(resource: Record<string, any>, options: Record<str
       LIMIT ${clampNumber(options.limit, 1, 500, 100)}
     `, timeoutMs);
     const schemas = [...new Set((tables as Record<string, any>[]).map((table) => table.schema))];
-    return { engine: 'postgresql', schemas, tables };
+    return { engine: 'postgresql', schemas, tables, connectionInfo: providerConsoleSurface(resource).connectionInfo };
   } finally {
     await client.$disconnect();
   }
+}
+
+function runProviderConsole(resource: Record<string, any>, command: string, options: Record<string, any>) {
+  const engine = String(resource.engine || resource.desiredSpec?.engine || '').toLowerCase();
+  const text = String(command || '').trim();
+  const guard = guardProviderCommand(text, options);
+  if (!guard.allowed) throwGuard(guard);
+  if (engine === 'mysql' || engine === 'mariadb') return runSqlContract(resource, text, options, guard, engine);
+  if (engine === 'redis' || engine === 'valkey') return runRedisContract(resource, text, options, guard, engine);
+  if (engine === 'mongodb') return runMongoContract(resource, text, options, guard);
+  if (engine === 'object-storage') return runObjectStorageContract(resource, text, options, guard);
+  if (engine === 'qdrant' || engine === 'vector-db') return runVectorContract(resource, text, options, guard, engine);
+  if (engine === 'nats' || engine === 'message-queue') return runQueueContract(resource, text, options, guard, engine);
+  const surface = providerConsoleSurface(resource, options);
+  return { engine, mode: surface.mode || 'provider-contract', rows: [], fields: [], warning: surface.warning || `${engine} console uses provider-owned adapter contract`, command: surface.command, connectionInfo: surface.connectionInfo, guard };
+}
+
+function runSqlContract(resource: Record<string, any>, query: string, options: Record<string, any>, providerGuard: Record<string, any>, engine: string) {
+  const sqlGuard = guardDatabaseQuery(query, { role: options.role || 'developer', confirmed: options.confirmed === true || options.confirmed === 'true' });
+  if (!sqlGuard.allowed) throwGuard(sqlGuard);
+  const surface = providerConsoleSurface(resource, options);
+  const upper = query.replace(/;+\s*$/, '').trim().toUpperCase();
+  let rows: Record<string, any>[] = [];
+  if (/^SELECT\s+1(?:\s+AS\s+([A-Z_][A-Z0-9_]*))?$/.test(upper)) rows = [{ raibitserver_connection_test: 1 }];
+  else if (/^SHOW\s+TABLES/.test(upper)) rows = (surface.tables || []).map((table: any) => ({ table: typeof table === 'string' ? table : table.name || String(table) }));
+  else if (/^SHOW\s+DATABASES|^SHOW\s+SCHEMAS/.test(upper)) rows = (surface.schemas || []).map((schema: any) => ({ schema }));
+  return { engine, mode: 'provider-contract', rows, fields: rows[0] ? Object.keys(rows[0]) : [], rowCount: rows.length, warning: surface.warning, connectionInfo: surface.connectionInfo, guard: { ...providerGuard, sql: sqlGuard } };
+}
+
+function runRedisContract(resource: Record<string, any>, command: string, options: Record<string, any>, guard: Record<string, any>, engine: string) {
+  const state = desired(resource);
+  const keys = arrayStrings(state.keys);
+  const values = state.values || {};
+  const ttl = state.ttl || {};
+  const [verb, ...rest] = command.split(/\s+/);
+  const upper = String(verb || '').toUpperCase();
+  let rows: Record<string, any>[] = [];
+  if (['SCAN', 'KEYS'].includes(upper)) rows = keys.slice(0, clampNumber(options.limit, 1, 1000, 100)).map((key) => ({ key }));
+  else if (upper === 'GET') {
+    const key = rest[0] || keys[0] || 'health:ready';
+    rows = [{ key, value: values[key] ?? '<provider-owned-value>' }];
+  } else if (upper === 'TTL') {
+    const key = rest[0] || keys[0] || 'health:ready';
+    rows = [{ key, ttl: Number.isFinite(Number(ttl[key])) ? Number(ttl[key]) : -1 }];
+  } else if (upper === 'INFO') rows = [{ section: rest[0] || 'memory', used_memory_human: state.memory || 'provider-managed' }];
+  else if (upper === 'DEL') rows = [{ deleted: rest.length, keys: rest }];
+  const surface = providerConsoleSurface(resource, options);
+  return { engine, mode: surface.mode || 'provider-contract', rows, fields: rows[0] ? Object.keys(rows[0]) : [], rowCount: rows.length, keys, command: surface.command, warning: surface.warning, connectionInfo: surface.connectionInfo, guard };
+}
+
+function runMongoContract(resource: Record<string, any>, command: string, options: Record<string, any>, guard: Record<string, any>) {
+  const surface = providerConsoleSurface(resource, options);
+  const desiredState = desired(resource);
+  const collections = arrayStrings(surface.collections || desiredState.collections);
+  const match = command.match(/(?:db\.)?([a-zA-Z0-9_-]+)\.find\s*\(/) || command.match(/^find\s+([a-zA-Z0-9_-]+)/i);
+  const collection = match?.[1] || collections[0] || 'documents';
+  const documents = desiredState.documents?.[collection] || desiredState.documents || [];
+  const rows = /getCollectionNames|collections|show\s+collections/i.test(command)
+    ? collections.map((name) => ({ collection: name }))
+    : (Array.isArray(documents) ? documents : []).slice(0, clampNumber(options.limit, 1, 500, 100));
+  return { engine: 'mongodb', mode: surface.mode || 'provider-contract', rows, fields: rows[0] ? Object.keys(rows[0]) : [], rowCount: rows.length, collections, warning: surface.warning, connectionInfo: surface.connectionInfo, guard };
+}
+
+function runObjectStorageContract(resource: Record<string, any>, command: string, options: Record<string, any>, guard: Record<string, any>) {
+  const surface = providerConsoleSurface(resource, options);
+  const buckets = arrayStrings(surface.buckets);
+  const objects = Array.isArray(surface.objects) ? surface.objects : [];
+  const lower = command.toLowerCase();
+  let rows: Record<string, any>[];
+  if (/upload|put|cp/.test(lower)) rows = [{ uploaded: true, bucket: buckets[0] || 'bucket', key: options.key || 'object' }];
+  else if (/delete|rm/.test(lower)) rows = [{ deleted: true, bucket: buckets[0] || 'bucket', key: options.key || 'object' }];
+  else rows = objects.map((object: any) => (typeof object === 'string' ? { key: object } : object));
+  return { engine: 'object-storage', mode: surface.mode || 'provider-contract', rows, fields: rows[0] ? Object.keys(rows[0]) : [], rowCount: rows.length, buckets, objects, warning: surface.warning, connectionInfo: surface.connectionInfo, guard };
+}
+
+function runVectorContract(resource: Record<string, any>, command: string, options: Record<string, any>, guard: Record<string, any>, engine: string) {
+  const surface = providerConsoleSurface(resource, options);
+  const collections = arrayStrings(surface.collections);
+  const lower = command.toLowerCase();
+  const rows = /search/.test(lower)
+    ? [{ collection: collections[0] || 'default', score: 1, id: 'contract-vector-1' }]
+    : collections.map((collection) => ({ collection }));
+  return { engine: engine === 'vector-db' ? 'qdrant' : engine, mode: surface.mode || 'provider-contract', rows, fields: rows[0] ? Object.keys(rows[0]) : [], rowCount: rows.length, collections, warning: surface.warning, connectionInfo: surface.connectionInfo, guard };
+}
+
+function runQueueContract(resource: Record<string, any>, command: string, options: Record<string, any>, guard: Record<string, any>, engine: string) {
+  const surface = providerConsoleSurface(resource, options);
+  const subjects = arrayStrings(surface.subjects);
+  const streams = arrayStrings(surface.streams);
+  const lower = command.toLowerCase();
+  const rows = /publish|pub/.test(lower)
+    ? [{ published: true, subject: subjects[0] || 'events' }]
+    : [{ connected: true, subjects, streams }];
+  return { engine: engine === 'message-queue' ? 'nats' : engine, mode: surface.mode || 'provider-contract', rows, fields: rows[0] ? Object.keys(rows[0]) : [], rowCount: rows.length, subjects, streams, warning: surface.warning, connectionInfo: surface.connectionInfo, guard };
+}
+
+function guardProviderCommand(command: string, options: Record<string, any>) {
+  const role = options.role || 'developer';
+  const readOnly = isProviderReadOnly(command);
+  if (!command) return { allowed: false, reason: 'query is required', destructive: false, readOnly: false, providerCommand: true };
+  if (role === 'viewer' && !readOnly) return { allowed: false, reason: 'viewer role can only run read-only queries', destructive: true, readOnly, providerCommand: true };
+  if (!readOnly && !can(role, 'db:query')) return { allowed: false, reason: `role ${role} requires db:query permission for destructive queries`, destructive: true, readOnly, providerCommand: true };
+  if (!readOnly && options.confirmed !== true && options.confirmed !== 'true') return { allowed: false, reason: 'destructive query requires explicit confirmation', destructive: true, readOnly, providerCommand: true };
+  return { allowed: true, reason: 'provider console command accepted', destructive: !readOnly, readOnly, providerCommand: true };
+}
+
+function isProviderReadOnly(command: string) {
+  const text = String(command || '').trim().toUpperCase();
+  return /^(SCAN|KEYS|GET|TTL|INFO|SELECT|SHOW|DESCRIBE|EXPLAIN|FIND|LIST|LS|BROWSE|COLLECTIONS|SUBJECTS|STREAMS|DB\.GETCOLLECTIONNAMES|DB\.[A-Z0-9_-]+\.FIND|NATS\s+(STREAM\s+LS|SUB\s+LS|SERVER\s+CHECK)|CURL\s+(-X\s+GET\s+)?)/.test(text)
+    && !/\b(DELETE|DEL|DROP|UPDATE|INSERT|CREATE|ALTER|TRUNCATE|FLUSH|PUT|POST|UPLOAD|RM|PUBLISH|PUB)\b/.test(text);
+}
+
+function throwGuard(guard: Record<string, any>): never {
+  const error = new Error(guard.reason);
+  (error as any).statusCode = 403;
+  (error as any).guard = guard;
+  throw error;
 }
 
 async function queryPostgresReadOnly(client: any, sql: string, timeoutMs: number) {
@@ -227,6 +331,7 @@ async function prismaClientFor(connectionUrl: string) {
 
 function resourceConnectionUrl(resource: Record<string, any>, options: Record<string, any>, envKeys: string[]) {
   const providerConnection = resource.providerConnection || {};
+  if (providerConnection.live === false || providerConnection.mode === 'provider-contract') return null;
   const candidates = [
     providerConnection.connectionUrl,
     providerConnection.databaseUrl,
@@ -272,6 +377,14 @@ function trimResultRows(rows: any, maxBytes: any) {
     used += bytes + 1;
   }
   return kept;
+}
+
+function desired(resource: Record<string, any>) {
+  return { ...(resource.desiredSpec || {}), ...(resource.desiredState || {}) };
+}
+
+function arrayStrings(value: any) {
+  return Array.isArray(value) ? value.map(String) : [];
 }
 
 function clampNumber(value: any, min: number, max: number, defaultValue: number) {

@@ -25,7 +25,7 @@ export { hashPassword, verifyPassword, normalizeEmail, createSessionToken, sessi
 export { runtimeConfigStatus, assertRuntimeKeys, secretEncryptionConfigured } from './config.ts';
 export { sealSecret, openSecret, secureRandomSecret, publicSecretRecord } from './secret-vault.ts';
 export { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
-export { buildPostgresProviderPlan, provisionPostgresProvider, providerConsoleSurface } from './resource-providers.ts';
+export { buildPostgresProviderPlan, buildResourceProviderPlan, provisionPostgresProvider, provisionResourceProvider, providerConnectionEnvForResource, providerConsoleSurface } from './resource-providers.ts';
 export { parseGitHubRepository, githubIntegrationSummary, githubCloneOptionsFromIntegration, verifyGitHubWebhookSignature, githubWebhookActionPlan, githubWebhookOutboundPlan, githubOAuthLoginPlan, deterministicGitHubCallbackAllowed } from './github-integration.ts';
 export { createControlPlaneRepository, resolveControlPlaneRepositoryConfig, InMemoryControlPlaneRepository, PrismaControlPlaneRepository } from './persistence.ts';
 export type * from './types.ts';

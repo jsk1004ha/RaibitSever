@@ -171,6 +171,46 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     return repository.createResource({ ...resource, projectId });
   }
 
+  async getResource(resourceId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const resource = repository.getResource ? await repository.getResource(resourceId) : (await repository.snapshot()).resources.find((candidate: Record<string, any>) => String(candidate.id) === String(resourceId));
+    if (!resource) throw new NotFoundException(`resource not found: ${resourceId}`);
+    await assertProjectAccess(repository, resource.projectId, subject);
+    return resource;
+  }
+
+  async updateResource(resourceId: string, updates: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const current = await this.getResource(resourceId, subject);
+    const resource = repository.updateResource ? await repository.updateResource(resourceId, updates) : repository.store.updateResource(resourceId, updates);
+    if (!resource) throw new NotFoundException(`resource not found: ${resourceId}`);
+    return resource;
+  }
+
+  async deleteResource(resourceId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const current = await this.getResource(resourceId, subject);
+    const resource = repository.deleteResource ? await repository.deleteResource(resourceId) : repository.store.deleteResource(resourceId);
+    if (!resource) throw new NotFoundException(`resource not found: ${resourceId}`);
+    return { deleted: true, resourceId: current.id || resourceId };
+  }
+
+  async attachResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const resource = await this.getResource(resourceId, subject);
+    const service = repository.getService ? await repository.getService(input.serviceId) : (await repository.snapshot()).services.find((candidate: Record<string, any>) => String(candidate.id) === String(input.serviceId));
+    if (!service) throw new NotFoundException(`service not found: ${input.serviceId}`);
+    await assertProjectAccess(repository, resource.projectId, subject);
+    if (String(service.projectId) !== String(resource.projectId)) throw new ForbiddenException('resource and service must be in the same project');
+    return repository.attachResource({ ...input, resourceId, actorUserId: subject.id });
+  }
+
+  async provisionResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    await this.getResource(resourceId, subject);
+    return repository.provisionResourceProvider({ ...input, resourceId, actorUserId: subject.id });
+  }
+
   async listDeployments(projectId: string, serviceId: string, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     await assertServiceInProject(repository, projectId, serviceId);

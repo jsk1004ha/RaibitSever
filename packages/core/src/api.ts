@@ -288,6 +288,51 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'resource:create', metric: resourceQuotaMetric(body), increment: Number(body.storageMb || body.storageGb || 1) });
         return send(res, 201, controlPlane.store.createResource(body));
       }
+      const resourceMatch = url.pathname.match(/^\/resources\/([^/]+)$/);
+      if (resourceMatch && method === 'GET') {
+        const subject = authorizeAction(req, 'project:read', auth);
+        const resourceId = decodeURIComponent(resourceMatch[1]);
+        const resource = controlPlane.store.getResource(resourceId);
+        if (!resource) return send(res, 404, { error: 'resource_not_found' });
+        await assertProjectAccess(controlPlane.store, resource.projectId, subject);
+        return send(res, 200, resource);
+      }
+      if (resourceMatch && method === 'PATCH') {
+        const subject = authorizeAction(req, 'db:create', auth);
+        const resourceId = decodeURIComponent(resourceMatch[1]);
+        const resource = controlPlane.store.getResource(resourceId);
+        if (!resource) return send(res, 404, { error: 'resource_not_found' });
+        await assertProjectAccess(controlPlane.store, resource.projectId, subject);
+        return send(res, 200, controlPlane.store.updateResource(resourceId, await readJson(req)));
+      }
+      if (resourceMatch && method === 'DELETE') {
+        const subject = authorizeAction(req, 'db:delete', auth);
+        const resourceId = decodeURIComponent(resourceMatch[1]);
+        const resource = controlPlane.store.getResource(resourceId);
+        if (!resource) return send(res, 404, { error: 'resource_not_found' });
+        await assertProjectAccess(controlPlane.store, resource.projectId, subject);
+        const deleted = controlPlane.store.deleteResource(resourceId);
+        return send(res, 200, { deleted: true, resourceId: deleted.id });
+      }
+      const resourceProvisionMatch = url.pathname.match(/^\/resources\/([^/]+)\/provision$/);
+      if (resourceProvisionMatch && method === 'POST') {
+        const subject = authorizeAction(req, 'db:create', auth);
+        const resourceId = decodeURIComponent(resourceProvisionMatch[1]);
+        const resource = controlPlane.store.getResource(resourceId);
+        if (!resource) return send(res, 404, { error: 'resource_not_found' });
+        await assertProjectAccess(controlPlane.store, resource.projectId, subject);
+        return send(res, 202, await controlPlane.store.provisionResourceProvider({ ...(await readJson(req)), resourceId, actorUserId: subject.id }));
+      }
+      const resourceAttachMatch = url.pathname.match(/^\/resources\/([^/]+)\/attach$/);
+      if (resourceAttachMatch && method === 'POST') {
+        const subject = authorizeAction(req, 'db:create', auth);
+        const resourceId = decodeURIComponent(resourceAttachMatch[1]);
+        const resource = controlPlane.store.getResource(resourceId);
+        if (!resource) return send(res, 404, { error: 'resource_not_found' });
+        await assertProjectAccess(controlPlane.store, resource.projectId, subject);
+        const body = await readJson(req);
+        return send(res, 200, controlPlane.store.attachResource({ ...body, resourceId, actorUserId: subject.id }));
+      }
       const serviceDeploymentsMatch = url.pathname.match(/^\/services\/([^/]+)\/deployments$/);
       if (serviceDeploymentsMatch && method === 'POST') {
         const serviceId = decodeURIComponent(serviceDeploymentsMatch[1]);

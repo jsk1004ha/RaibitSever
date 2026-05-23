@@ -79,6 +79,8 @@ try {
   const postgresEnv = injectResourceEnv({ ...service.body, attachedResources: ['local-postgres'] }, [postgresProvision.resource], 'local-e2e');
   if (!String(postgresEnv.DATABASE_URL || '').startsWith('postgresql://')) throw new Error('PostgreSQL DATABASE_URL was not injected');
 
+  const betaResources = await createBetaResourceEvidence(project.body.id, service.body.id, pending.body.token);
+
   const urlHost = serviceHostname({ serviceName: 'express-api', projectSlug: 'local-e2e', organizationSlug: 'student-org', baseDomain });
   const localHttp = await getLocalApp(urlHost, appPort);
   if (localHttp.statusCode !== 200) throw new Error(`local app http check failed: ${localHttp.statusCode}`);
@@ -150,8 +152,9 @@ try {
   evidence.sqlitePath = resource.body.sqlitePath || resource.body.desiredSpec?.sqlitePath || sqlitePath;
   evidence.postgresProviderDryRun = postgresProvision.result.dryRun;
   evidence.postgresEnvInjected = Boolean(postgresEnv.DATABASE_URL && postgresEnv.PGUSER);
+  evidence.betaResourceEvidence = betaResources;
   evidence.previewCleanupAction = previewCleanup.actions[0]?.type || null;
-  evidence.checks.push('first-user admin bootstrap works', 'non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'PostgreSQL provider dry-run and env injection works', 'preview deployment fixture created', 'preview cleanup workflow enqueued', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed', e2ePlan.dryRun ? 'live beta checklist dry contract generated' : 'live beta checklist passed against local cluster');
+  evidence.checks.push('first-user admin bootstrap works', 'non-club pending blocked', 'admin approval/quota works', 'club member bypasses user-facing quota', 'build/runtime logs readable', 'SQLite DB console query works', 'PostgreSQL provider dry-run and env injection works', 'Beta DB/resource consoles and env injection work', 'preview deployment fixture created', 'preview cleanup workflow enqueued', e2ePlan.dryRun ? 'build/Kubernetes/provisioning dry-run artifacts generated' : 'build/Kubernetes/provisioning live execution completed', e2ePlan.dryRun ? 'live beta checklist dry contract generated' : 'live beta checklist passed against local cluster');
   await fs.mkdir('.raibitserver-work', { recursive: true });
   await fs.writeFile('.raibitserver-work/e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);
   if (e2ePlan.mode === 'live') await fs.writeFile('.raibitserver-work/live-e2e-report.json', `${JSON.stringify(evidence, null, 2)}\n`);
@@ -171,6 +174,33 @@ try {
 } finally {
   api.close();
   app.close();
+}
+
+
+async function createBetaResourceEvidence(projectId, serviceId, token) {
+  const specs = [
+    { name: 'local-redis', type: 'cache', engine: 'redis', desiredSpec: { keys: ['health:ready'], values: { 'health:ready': 'ok' }, ttl: { 'health:ready': -1 } }, command: 'GET health:ready', envKey: 'REDIS_URL' },
+    { name: 'local-object-storage', type: 'storage', engine: 'object-storage', desiredSpec: { bucket: 'assets', buckets: ['assets'], objects: [{ key: 'hello.txt', size: 5 }] }, command: 'LIST objects', envKey: 'S3_BUCKET' },
+    { name: 'local-mysql', type: 'database', engine: 'mysql', desiredSpec: { schemas: ['app'], tables: ['health'] }, command: 'SELECT 1', envKey: 'MYSQL_URL' },
+    { name: 'local-mariadb', type: 'database', engine: 'mariadb', desiredSpec: { schemas: ['app'], tables: ['health'] }, command: 'SELECT 1', envKey: 'MARIADB_URL' },
+    { name: 'local-mongodb', type: 'database', engine: 'mongodb', desiredSpec: { collections: ['health'], documents: { health: [{ ok: true }] } }, command: 'db.health.find({})', envKey: 'MONGODB_URI' },
+    { name: 'local-qdrant', type: 'vector', engine: 'qdrant', desiredSpec: { collection: 'vectors', collections: ['vectors'] }, command: 'GET /collections', envKey: 'VECTOR_DB_URL' },
+    { name: 'local-nats', type: 'queue', engine: 'nats', desiredSpec: { topic: 'events', subjects: ['events.>'] }, command: 'subjects', envKey: 'QUEUE_URL' },
+  ];
+  const evidence = [];
+  for (const spec of specs) {
+    const created = await request('POST', `/projects/${projectId}/resources`, spec, token);
+    assertStatus(created, 201, `${spec.engine} resource create`);
+    const provisioned = await request('POST', `/resources/${created.body.id}/provision`, { dryRun: true }, token);
+    assertStatus(provisioned, 202, `${spec.engine} resource provision`);
+    const attached = await request('POST', `/resources/${created.body.id}/attach`, { serviceId }, token);
+    assertStatus(attached, 200, `${spec.engine} resource attach`);
+    const console = await request('POST', `/resources/${created.body.id}/console/command`, { command: spec.command }, token);
+    assertStatus(console, 200, `${spec.engine} console command`);
+    if (!Object.keys(attached.body.injectedEnv || {}).includes(spec.envKey)) throw new Error(`${spec.engine} did not inject ${spec.envKey}`);
+    evidence.push({ engine: spec.engine, resourceId: created.body.id, envKey: spec.envKey, consoleRows: console.body.rowCount || console.body.rows?.length || 0 });
+  }
+  return evidence;
 }
 
 async function runLiveBetaScenario({ e2ePlan, project, projectToken, existingServices, sqliteResource, sqlitePath, baseDomain }) {

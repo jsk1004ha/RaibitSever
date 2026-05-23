@@ -4,9 +4,10 @@ import { maskSecretValue, maskSecrets } from './secrets.ts';
 import { openSecret, sealSecret } from './secret-vault.ts';
 import { secretEncryptionConfigured } from './config.ts';
 import { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
-import { provisionPostgresProvider } from './resource-providers.ts';
+import { providerConnectionEnvForResource, provisionResourceProvider as provisionAnyResourceProvider } from './resource-providers.ts';
 import { completeWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
 import { providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
+import { normalizeResourceEngine } from './catalog.ts';
 import { sanitizeLogRecord } from './security.ts';
 import { assertDeploymentTransition, normalizeDeploymentStatus } from './deployments.ts';
 
@@ -32,7 +33,10 @@ export class InMemoryControlPlaneRepository {
   async updateService(serviceId: string, updates: Record<string, any>) { return this.store.updateService(serviceId, updates); }
   async deleteService(serviceId: string) { return this.store.deleteService(serviceId); }
   async createResource(input: Record<string, any>) { return this.store.createResource(input); }
+  async updateResource(resourceId: string, updates: Record<string, any>) { return this.store.updateResource(resourceId, updates); }
+  async deleteResource(resourceId: string) { return this.store.deleteResource(resourceId); }
   async attachProviderConnectionSecret(input: Record<string, any>) { return this.store.attachProviderConnectionSecret(input); }
+  async attachProviderConnectionSecrets(input: Record<string, any>) { return this.store.attachProviderConnectionSecrets(input); }
   async provisionResourceProvider(input: Record<string, any>) { return this.store.provisionResourceProvider(input); }
   async createDeployment(input: Record<string, any>) { return this.store.createDeployment(input); }
   async updateDeployment(deploymentId: string, updates: Record<string, any>, options: Record<string, any> = {}) { return this.store.updateDeployment(deploymentId, updates, options); }
@@ -201,36 +205,65 @@ export class PrismaControlPlaneRepository {
       where: { projectId_name: { projectId: input.projectId, name: input.name } },
       select: { connectionSecretName: true },
     }).catch(() => null);
-    return this.prisma.resource.upsert({
+    const row = await this.prisma.resource.upsert({
       where: { projectId_name: { projectId: input.projectId, name: input.name } },
       update: resourceData(input, { connectionSecretName: existing?.connectionSecretName || null }),
       create: { projectId: input.projectId, name: input.name, slug: input.slug || slugInput(input.name), ...resourceData(input) },
     });
+    await this.attachProviderConnectionSecrets({ resourceId: row.id, env: providerConnectionEnvForResource(row), actorUserId: 'system', live: false, providerMode: 'provider-contract' });
+    return this.getResource(row.id);
   }
 
+  async updateResource(resourceId: string, updates: Record<string, any>) {
+    const current = await this.getResource(resourceId);
+    if (!current) return null;
+    const updated = await this.prisma.resource.update({ where: { id: resourceId }, data: resourceData({ ...current, ...updates, projectId: current.projectId, name: updates.name || current.name }, { connectionSecretName: current.connectionSecretName || null }) });
+    if (updates.engine || updates.name || updates.provider || updates.desiredSpec) await this.attachProviderConnectionSecrets({ resourceId, env: providerConnectionEnvForResource(updated), actorUserId: 'system', live: false, providerMode: 'provider-contract' });
+    await this.prisma.auditLog.create({ data: { actorUserId: 'system', action: 'resource:update', targetType: 'resource', targetId: resourceId, metadata: maskSecrets(updates) } });
+    return this.getResource(resourceId);
+  }
+
+  async deleteResource(resourceId: string) {
+    const current = await this.getResource(resourceId);
+    if (!current) return null;
+    const attachments = await this.prisma.resourceAttachment.findMany({ where: { resourceId } }).catch(() => []);
+    for (const attachment of attachments) await this.removeResourceInjectedEnvironment(attachment);
+    await this.prisma.secretValue.deleteMany({ where: { scopeType: 'resource-provider-connection', scopeId: resourceId } }).catch(() => null);
+    const deleted = await this.prisma.resource.delete({ where: { id: resourceId } });
+    await this.prisma.auditLog.create({ data: { actorUserId: 'system', action: 'resource:delete', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ projectId: current.projectId, engine: current.engine }) } });
+    return deleted;
+  }
 
   async provisionResourceProvider({ resourceId, actorUserId = 'provider', ...options }: Record<string, any>) {
     const resource = await this.getResource(resourceId);
     if (!resource) throw new Error(`resource not found: ${resourceId}`);
-    const engine = String(resource.engine || '').toLowerCase();
-    if (engine !== 'postgresql' && engine !== 'postgres') throw new Error(`direct provider is not implemented for ${engine}`);
-    const result = await provisionPostgresProvider(resource, options);
-    const attached = await this.attachProviderConnectionSecret({ resourceId, databaseUrl: result.databaseUrl, actorUserId });
+    const result = await provisionAnyResourceProvider(resource, options);
+    const attached = await this.attachProviderConnectionSecrets({ resourceId, env: (result as any).connectionEnv || providerConnectionEnvForResource(resource), actorUserId, live: options.execute === true && options.dryRun === false, providerMode: result.dryRun ? 'provider-contract' : 'live-provider' });
     const updated = await this.prisma.resource.update({ where: { id: resourceId }, data: { status: 'ready', provider: result.provider, desiredState: maskSecrets({ ...(attached.desiredState || {}), providerResult: result.plan }) } });
-    await this.prisma.auditLog.create({ data: { actorUserId, action: 'resource.provider:provision', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ engine, provider: result.provider, dryRun: result.dryRun, databaseUrl: result.databaseUrlMasked }) } });
-    return { resource: updated, result: maskSecrets({ ...result, databaseUrl: undefined }) };
+    await this.prisma.auditLog.create({ data: { actorUserId, action: 'resource.provider:provision', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ engine: result.engine, provider: result.provider, dryRun: result.dryRun, connectionSecret: result.connectionSecret }) } });
+    return { resource: updated, result: maskSecrets({ ...result, databaseUrl: undefined, connectionEnv: undefined }) };
   }
 
-  async attachProviderConnectionSecret({ resourceId, databaseUrl, connectionUrl, actorUserId = 'provider' }: Record<string, any>) {
+  async attachProviderConnectionSecret({ resourceId, databaseUrl, connectionUrl, actorUserId = 'provider', key = 'DATABASE_URL', live = true }: Record<string, any>) {
     const value = databaseUrl || connectionUrl;
     if (!value) throw new Error('provider connection URL is required');
-    const secret = await this.prisma.secretValue.upsert({
-      where: { scopeType_scopeId_key: { scopeType: 'resource-provider-connection', scopeId: resourceId, key: 'DATABASE_URL' } },
-      update: { sealedValue: sealSecret(value), valueMasked: maskSecretValue(value), metadata: maskSecrets({ providerOwned: true }) },
-      create: { scopeType: 'resource-provider-connection', scopeId: resourceId, key: 'DATABASE_URL', sealedValue: sealSecret(value), valueMasked: maskSecretValue(value), metadata: maskSecrets({ providerOwned: true }) },
-    });
-    const resource = await this.prisma.resource.update({ where: { id: resourceId }, data: { connectionSecretName: secret.id } });
-    await this.prisma.auditLog.create({ data: { actorUserId, action: 'resource.provider-connection:attach', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ connectionSecretName: secret.id }) } });
+    return this.attachProviderConnectionSecrets({ resourceId, env: { [key]: value }, actorUserId, live, providerMode: live === false ? 'provider-contract' : 'live-provider' });
+  }
+
+  async attachProviderConnectionSecrets({ resourceId, env = {}, actorUserId = 'provider', live = false, providerMode = 'provider-contract' }: Record<string, any>) {
+    const entries = Object.entries(env || {}).filter(([, value]) => value !== undefined && value !== null && String(value).length > 0);
+    if (!entries.length) throw new Error('provider connection env is required');
+    let firstSecretId = (await this.getResource(resourceId))?.connectionSecretName || null;
+    for (const [key, value] of entries) {
+      const secret = await this.prisma.secretValue.upsert({
+        where: { scopeType_scopeId_key: { scopeType: 'resource-provider-connection', scopeId: resourceId, key } },
+        update: { sealedValue: sealSecret(String(value)), valueMasked: maskSecretValue(String(value)), metadata: maskSecrets({ providerOwned: true, live: live === true, providerMode }) },
+        create: { scopeType: 'resource-provider-connection', scopeId: resourceId, key, sealedValue: sealSecret(String(value)), valueMasked: maskSecretValue(String(value)), metadata: maskSecrets({ providerOwned: true, live: live === true, providerMode }) },
+      });
+      if (!firstSecretId) firstSecretId = secret.id;
+    }
+    const resource = await this.prisma.resource.update({ where: { id: resourceId }, data: { connectionSecretName: firstSecretId } });
+    await this.prisma.auditLog.create({ data: { actorUserId, action: 'resource.provider-connection:attach', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ connectionSecretName: firstSecretId, envKeys: entries.map(([key]) => key), providerMode }) } });
     return resource;
   }
 
@@ -754,11 +787,49 @@ export class PrismaControlPlaneRepository {
   }
 
   async resourceForConsole(resource: Record<string, any>) {
-    if (!resource.connectionSecretName) return resource;
-    const secret = await this.prisma.secretValue.findUnique({ where: { id: resource.connectionSecretName } });
-    if (!isProviderConnectionSecret(secret, resource.id)) return resource;
-    if (!secret?.sealedValue) return resource;
-    return { ...resource, providerConnection: { databaseUrl: openSecret(secret.sealedValue) } };
+    const secrets = await this.prisma.secretValue.findMany({ where: { scopeType: 'resource-provider-connection', scopeId: resource.id } });
+    const env: Record<string, string> = {};
+    let live = false;
+    for (const secret of secrets) {
+      if (!isProviderConnectionSecret(secret, resource.id)) continue;
+      if (secret.sealedValue) env[secret.key] = openSecret(secret.sealedValue);
+      if (secret.metadata?.live === true) live = true;
+    }
+    if (!Object.keys(env).length) return resource;
+    return { ...resource, providerConnection: providerConnectionFromEnv(env, resource.engine, live) };
+  }
+
+  async attachResource({ resourceId, serviceId, envPrefix = null, actorUserId = 'system' }: Record<string, any>) {
+    const resource = await this.getResource(resourceId);
+    const service = await this.getService(serviceId);
+    if (!resource) throw Object.assign(new Error(`resource not found: ${resourceId}`), { statusCode: 404 });
+    if (!service) throw Object.assign(new Error(`service not found: ${serviceId}`), { statusCode: 404 });
+    if (String(resource.projectId) !== String(service.projectId)) throw Object.assign(new Error('resource and service must be in the same project'), { statusCode: 403 });
+    const providerEnv = providerEnvFromConnection(await this.resourceForConsole(resource), resource);
+    const injectedEnv = prefixEnv(providerEnv, envPrefix);
+    const row = await this.prisma.resourceAttachment.upsert({
+      where: { resourceId_serviceId: { resourceId, serviceId } },
+      update: { envPrefix, injectedEnv: maskSecrets(injectedEnv) },
+      create: { resourceId, serviceId, envPrefix, injectedEnv: maskSecrets(injectedEnv) },
+    });
+    await this.upsertServiceEnvironment({
+      projectId: service.projectId,
+      serviceId,
+      entries: Object.entries(injectedEnv).map(([key, value]) => ({ key, value: String(value), isSecret: true, source: `resource:${resourceId}` })),
+      actorUserId,
+      source: `resource:${resourceId}`,
+    });
+    await this.prisma.auditLog.create({ data: { actorUserId, action: 'resource:attach', targetType: 'service', targetId: serviceId, metadata: maskSecrets({ resourceId, envPrefix, envKeys: Object.keys(injectedEnv) }) } });
+    return row;
+  }
+
+  async removeResourceInjectedEnvironment(attachment: Record<string, any>) {
+    for (const key of Object.keys(attachment.injectedEnv || {})) {
+      const row = await this.prisma.environmentVariable.findUnique({ where: { serviceId_key: { serviceId: attachment.serviceId, key } } }).catch(() => null);
+      if (row?.source !== `resource:${attachment.resourceId}`) continue;
+      if (row.secretRef) await this.prisma.secretValue.delete({ where: { id: row.secretRef } }).catch(() => null);
+      await this.prisma.environmentVariable.delete({ where: { serviceId_key: { serviceId: attachment.serviceId, key } } }).catch(() => null);
+    }
   }
 
   async writeDesiredProject(projectSpec: Record<string, any>) {
@@ -910,13 +981,15 @@ function serviceData(input: Record<string, any>) {
 
 function resourceData(input: Record<string, any>, options: Record<string, any> = {}) {
   const safe = sanitizeTenantResourceInput(input);
-  const sqlitePath = String(safe.engine || '').toLowerCase() === 'sqlite' ? providerOwnedSqlitePath(stableId('res', safe.projectId, safe.name)) : null;
-  const desiredSpec = sqlitePath ? { ...(safe.desiredSpec || {}), sqlitePath } : (safe.desiredSpec || safe);
-  const desiredState = sqlitePath ? { ...safe, desiredSpec, sqlitePath } : safe;
+  const engine = normalizeResourceEngine(safe.engine || input.engine || safe.type);
+  const id = input.id || stableId('res', safe.projectId, safe.name);
+  const sqlitePath = engine === 'sqlite' ? (input.sqlitePath || input.desiredSpec?.sqlitePath || providerOwnedSqlitePath(id)) : null;
+  const desiredSpec = sqlitePath ? { ...(safe.desiredSpec || {}), sqlitePath } : (safe.desiredSpec || {});
+  const desiredState = { ...safe, engine, desiredSpec, sqlitePath: sqlitePath || undefined };
   return {
     slug: safe.slug || slugInput(safe.name),
-    type: safe.type || 'database',
-    engine: safe.engine,
+    type: safe.type || resourceTypeForEngine(engine),
+    engine,
     provider: safe.provider || 'kubernetes-operator',
     plan: safe.plan || 'shared-small',
     region: safe.region || 'local',
@@ -1090,6 +1163,44 @@ function maskEnvRow(row: Record<string, any>) {
   };
 }
 
+function resourceTypeForEngine(engine: string) {
+  if (['redis', 'valkey'].includes(engine)) return 'cache';
+  if (engine === 'object-storage') return 'storage';
+  if (['qdrant', 'vector-db'].includes(engine)) return 'vector';
+  if (['nats', 'message-queue'].includes(engine)) return 'queue';
+  return 'database';
+}
+
+function prefixEnv(env: Record<string, any>, envPrefix: any) {
+  const prefix = String(envPrefix || '').trim().replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase();
+  if (!prefix) return { ...env };
+  return Object.fromEntries(Object.entries(env).map(([key, value]) => [`${prefix}_${key}`, value]));
+}
+
+function providerEnvFromConnection(consoleResource: Record<string, any>, resource: Record<string, any>) {
+  const providerConnection = consoleResource.providerConnection || {};
+  const env = Object.fromEntries(Object.entries(providerConnection).filter(([key, value]) => /^[A-Z0-9_]+$/.test(key) && typeof value === 'string'));
+  if (Object.keys(env).length) return env;
+  return providerConnectionEnvForResource(resource);
+}
+
+function providerConnectionFromEnv(env: Record<string, string>, engine: any, live: boolean) {
+  const normalized = normalizeResourceEngine(engine);
+  const connection: Record<string, any> = { ...env, live, mode: live ? 'live-provider' : 'provider-contract' };
+  const first = (...keys: string[]) => keys.map((key) => env[key]).find(Boolean);
+  if (normalized === 'postgresql') connection.databaseUrl = first('DATABASE_URL', 'POSTGRES_URL', 'POSTGRESQL_URL');
+  else if (normalized === 'mysql') connection.url = first('MYSQL_URL');
+  else if (normalized === 'mariadb') connection.url = first('MARIADB_URL', 'MYSQL_URL');
+  else if (normalized === 'mongodb') connection.uri = first('MONGODB_URI', 'MONGO_URL');
+  else if (normalized === 'redis') connection.url = first('REDIS_URL');
+  else if (normalized === 'valkey') connection.url = first('VALKEY_URL', 'REDIS_URL');
+  else if (normalized === 'sqlite') connection.databaseUrl = first('DATABASE_URL');
+  else if (normalized === 'object-storage') connection.url = first('S3_ENDPOINT');
+  else if (normalized === 'qdrant' || normalized === 'vector-db') connection.url = first('VECTOR_DB_URL', 'QDRANT_URL');
+  else if (normalized === 'nats' || normalized === 'message-queue') connection.url = first('QUEUE_URL', 'NATS_URL');
+  return connection;
+}
+
 function redactUser(user: Record<string, any>) {
   const { passwordHash, ...rest } = user;
   return rest;
@@ -1099,7 +1210,7 @@ function isProviderConnectionSecret(secret: any, resourceId: string) {
   return secret
     && secret.scopeType === 'resource-provider-connection'
     && String(secret.scopeId) === String(resourceId)
-    && secret.key === 'DATABASE_URL';
+    && Boolean(secret.key);
 }
 
 function resourceQuotaMetric(resource: Record<string, any>) {

@@ -33,7 +33,7 @@ export default async function ProjectDetailPage({ params }: { params: { orgSlug:
         <form method="post" action={apiAction(`/projects/${params.projectId}/resources`, state.context)} style={cardStyle}>
           <h2>Create resource</h2>
           <input name="name" placeholder="postgres" required />
-          <select name="engine" defaultValue="postgresql"><option>postgresql</option><option>redis</option><option>mysql</option><option>mongodb</option><option>object-storage</option><option>qdrant</option><option>nats</option></select>
+          <select name="engine" defaultValue="postgresql"><option>postgresql</option><option>sqlite</option><option>redis</option><option>valkey</option><option>mysql</option><option>mariadb</option><option>mongodb</option><option>object-storage</option><option>qdrant</option><option>nats</option></select>
           <button type="submit">POST /projects/:id/resources</button>
         </form>
       </section>
@@ -67,7 +67,7 @@ export default async function ProjectDetailPage({ params }: { params: { orgSlug:
 
       <section style={cardStyle}>
         <h2>Resources and DB console</h2>
-        <p>Schema and browser data come from GET /resources/:id/console/schema and POST /resources/:id/console/browse; query actions post to /console/query.</p>
+        <p>Schema and browser data come from GET /resources/:id/console/schema and POST /resources/:id/console/browse; query actions post to /console/query. Attach/provision actions inject provider-owned env into services.</p>
         <div style={gridStyle}>
           {state.resourceConsoles.map(({ resource, schema, browse }: any) => (
             <article key={resource.id} style={miniCardStyle}>

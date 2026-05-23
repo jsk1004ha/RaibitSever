@@ -4,7 +4,7 @@ import "testing"
 
 func TestDefaultCatalogCoversPaaSDBaaSResourceEngines(t *testing.T) {
 	catalog := DefaultCatalog()
-	for _, key := range []string{"postgresql", "mysql", "mariadb", "mongodb", "redis", "object-storage", "vector-db", "message-queue"} {
+	for _, key := range []string{"postgresql", "sqlite", "mysql", "mariadb", "mongodb", "redis", "valkey", "object-storage", "qdrant", "vector-db", "nats", "message-queue"} {
 		if catalog[key] == "" {
 			t.Fatalf("default provider catalog missing %s", key)
 		}
