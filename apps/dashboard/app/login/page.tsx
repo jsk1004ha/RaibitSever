@@ -7,7 +7,7 @@ export default function LoginPage() {
       <header>
         <p style={eyebrowStyle}>Auth</p>
         <h1>Login / Signup</h1>
-        <p>Forms post directly to the RAIBITSERVER API. The first successful auth user becomes ADMIN / CLUB_MEMBER / APPROVED; later signups start as NON_CLUB / PENDING until admin approval. Copy the returned token into RAIBITSERVER_DASHBOARD_TOKEN for server-rendered console access.</p>
+        <p>Forms post directly to the RAIBITSERVER API. The first successful auth user becomes ADMIN / NON_CLUB / APPROVED; later signups also start as NON_CLUB / PENDING until an admin approves or switches them to CLUB_MEMBER. Copy the returned token into RAIBITSERVER_DASHBOARD_TOKEN for server-rendered console access.</p>
       </header>
       <section style={gridStyle}>
         <form method="post" action={apiAction('/auth/login', context)} style={cardStyle}>

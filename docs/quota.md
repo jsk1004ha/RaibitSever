@@ -8,13 +8,13 @@
 
 ## 사용자 상태
 
-첫 auth 사용자(이메일/비밀번호 signup 또는 deterministic GitHub callback)는 자동으로 `ADMIN` + `CLUB_MEMBER` + `APPROVED`가 됩니다. `ADMIN_EMAILS`는 운영자가 사전에 지정한 이메일을 같은 관리자 bootstrap 경로로 승인하는 fallback입니다. GitHub deterministic callback의 이메일 기반 계정 생성/연동은 production에서 기본 비활성화되며, 로컬/베타 검증 또는 `RAIBITSERVER_GITHUB_OAUTH_LOCAL_CALLBACK=1`일 때만 사용합니다.
+첫 auth 사용자(이메일/비밀번호 signup 또는 deterministic GitHub callback)는 자동으로 `ADMIN` + `NON_CLUB` + `APPROVED`가 됩니다. 모든 신규 회원가입은 먼저 `NON_CLUB`으로 저장되고, `ADMIN_EMAILS`는 운영자가 사전에 지정한 이메일을 같은 관리자 bootstrap 경로로 승인하는 fallback입니다. club/non-club 전환은 어드민 화면에서 수행합니다. GitHub deterministic callback의 이메일 기반 계정 생성/연동은 production에서 기본 비활성화되며, 로컬/베타 검증 또는 `RAIBITSERVER_GITHUB_OAUTH_LOCAL_CALLBACK=1`일 때만 사용합니다.
 
 | 사용자 | 기본 상태 | 사용 가능 범위 |
 | --- | --- | --- |
 | `ADMIN` | 승인됨 | 모든 사용자, 프로젝트, 리소스 관리 |
 | `CLUB_MEMBER` | 승인됨 | user-facing quota는 무제한, hard safety cap은 적용 |
-| `NON_CLUB` | `PENDING` | 관리자 승인 전 생성/배포/provision 차단 |
+| `NON_CLUB` | `PENDING` | 관리자 승인 전 생성/배포/provision 차단. 어드민은 `CLUB_MEMBER` 또는 `NON_CLUB`으로 승인 가능 |
 | `NON_CLUB + APPROVED` | 승인됨 | `Quota` row 범위 안에서 사용 |
 
 ## 차단 대상 작업

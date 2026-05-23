@@ -21,7 +21,7 @@ test('.env upload parser separates plain values from important secrets', () => {
   assert.throws(() => parseDotEnv('1BAD=value'), /invalid \.env content/);
 });
 
-test('first auth user bootstraps as admin and GitHub callback can create the first account', async () => {
+test('first auth user bootstraps as admin non-club and GitHub callback can create the first account', async () => {
   const secret = 'first-user-bootstrap-secret';
   const previousAdminEmails = process.env.ADMIN_EMAILS;
   delete process.env.ADMIN_EMAILS;
@@ -34,7 +34,7 @@ test('first auth user bootstraps as admin and GitHub callback can create the fir
     const first = await request(port, 'POST', '/auth/signup', { email: 'first@example.com', password: 'correct-horse', organizationSlug: 'first-org' });
     assert.equal(first.statusCode, 201);
     assert.equal(first.body.user.role, 'ADMIN');
-    assert.equal(first.body.user.accountType, 'CLUB_MEMBER');
+    assert.equal(first.body.user.accountType, 'NON_CLUB');
     assert.equal(first.body.user.approvalStatus, 'APPROVED');
 
     const second = await request(port, 'POST', '/auth/signup', { email: 'second@example.com', password: 'correct-horse', organizationSlug: 'second-org', accountType: 'CLUB_MEMBER', approvalStatus: 'APPROVED' });
@@ -56,7 +56,7 @@ test('first auth user bootstraps as admin and GitHub callback can create the fir
       assert.equal(callback.body.created, true);
       assert.equal(callback.body.state, 'oauth-state');
       assert.equal(callback.body.user.role, 'ADMIN');
-      assert.equal(callback.body.user.accountType, 'CLUB_MEMBER');
+      assert.equal(callback.body.user.accountType, 'NON_CLUB');
       assert.equal(callback.body.user.approvalStatus, 'APPROVED');
       assert.equal(callback.body.user.githubId, '42');
       assert.equal(Boolean(callback.body.token), true);
@@ -83,7 +83,7 @@ test('legacy first user is promoted to admin on first login when no admin exists
     const login = await request(port, 'POST', '/auth/login', { email: 'legacy@example.com', password: 'correct-horse' });
     assert.equal(login.statusCode, 200);
     assert.equal(login.body.user.role, 'ADMIN');
-    assert.equal(login.body.user.accountType, 'CLUB_MEMBER');
+    assert.equal(login.body.user.accountType, 'NON_CLUB');
     assert.equal(login.body.user.approvalStatus, 'APPROVED');
     const project = await request(port, 'POST', '/projects', { name: 'legacy', slug: 'legacy' }, login.body.token);
     assert.equal(project.statusCode, 201);
@@ -107,7 +107,7 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
     assert.equal(Boolean(aliceSignup.body.token), true);
     assert.equal(aliceSignup.body.user.passwordHash, undefined);
     assert.equal(aliceSignup.body.user.role, 'ADMIN');
-    assert.equal(aliceSignup.body.user.accountType, 'CLUB_MEMBER');
+    assert.equal(aliceSignup.body.user.accountType, 'NON_CLUB');
     assert.equal(aliceSignup.body.user.approvalStatus, 'APPROVED');
 
     const bobSignup = await request(port, 'POST', '/auth/signup', { email: 'bob@example.com', password: 'correct-horse', organizationSlug: 'bob-org' });
@@ -162,6 +162,13 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
     assert.equal(bobService.statusCode, 201);
     const bobQuotaDenied = await request(port, 'POST', `/projects/${bobProject.body.id}/services`, { name: 'worker', type: 'worker', sourceType: 'image', image: 'localhost:5000/bob/worker:latest' }, bobSignup.body.token);
     assert.equal(bobQuotaDenied.statusCode, 403);
+
+    const bobClub = await request(port, 'POST', `/admin/users/${bobSignup.body.user.id}/approve`, { accountType: 'CLUB_MEMBER' }, aliceLogin.body.token);
+    assert.equal(bobClub.statusCode, 200);
+    assert.equal(bobClub.body.accountType, 'CLUB_MEMBER');
+    const bobClubLogin = await request(port, 'POST', '/auth/login', { email: 'bob@example.com', password: 'correct-horse' });
+    assert.equal(bobClubLogin.statusCode, 200);
+    assert.equal(bobClubLogin.body.user.accountType, 'CLUB_MEMBER');
 
     const rejectEve = await request(port, 'POST', `/admin/users/${eveSignup.body.user.id}/reject`, {}, aliceLogin.body.token);
     assert.equal(rejectEve.statusCode, 200);

@@ -221,12 +221,12 @@ Report에는 최소한 다음이 있어야 한다.
 [x] signup 가능
 [x] login 가능
 [x] 첫 auth 사용자/ADMIN_EMAILS 기반 admin bootstrap 가능
-[x] NON_CLUB 사용자는 기본 PENDING
+[x] 모든 신규 회원가입은 기본 NON_CLUB이며 일반 사용자는 PENDING
 [x] PENDING 사용자는 project 생성 불가
 [x] PENDING 사용자는 service 생성 불가
 [x] PENDING 사용자는 deployment 생성 불가
 [x] PENDING 사용자는 resource 생성 불가
-[x] admin이 user approve 가능
+[x] admin이 user approve 및 CLUB_MEMBER/NON_CLUB 전환 가능
 [x] admin이 user reject 가능
 [x] admin이 quota 수정 가능
 [x] CLUB_MEMBER는 user-facing quota 무제한
@@ -815,11 +815,11 @@ Beta에서 GitHub check-run과 PR comment는 권장이나 필수는 아니다.
 필수 계정 정책:
 
 ```txt
-[x] NON_CLUB 기본 PENDING
+[x] 모든 신규 회원가입은 기본 NON_CLUB이며 일반 사용자는 PENDING
 [x] PENDING user는 생성/배포/resource 생성 차단
 [x] APPROVED NON_CLUB은 quota 제한
 [x] CLUB_MEMBER는 user-facing quota 무제한
-[x] ADMIN은 user approve/reject/quota edit 가능
+[x] ADMIN은 user approve/reject/quota edit 및 CLUB_MEMBER/NON_CLUB 전환 가능
 ```
 
 필수 집계:

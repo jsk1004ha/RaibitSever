@@ -274,7 +274,7 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
    ```
 3. **Secret 준비**
    - `RAIBITSERVER_AUTH_JWT_SECRET`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, GitHub/registry/provider secret을 secret manager에 저장합니다.
-   - 첫 로그인 사용자는 자동으로 `ADMIN / CLUB_MEMBER / APPROVED`가 됩니다. 운영자는 첫 로그인 계정을 정하고 `ADMIN_EMAILS`에도 break-glass 관리자 이메일을 넣어 둡니다.
+   - 첫 로그인 사용자는 자동으로 `ADMIN / NON_CLUB / APPROVED`가 됩니다. 모든 회원가입은 먼저 `NON_CLUB`으로 시작하며, 운영자는 어드민 화면에서 `CLUB_MEMBER`/`NON_CLUB`을 전환합니다. `ADMIN_EMAILS`에도 break-glass 관리자 이메일을 넣어 둡니다.
 4. **이미지 빌드/배포**
    - API, Dashboard, Go workers 이미지를 빌드해 registry에 push합니다.
    - Helm을 사용한다면 `infra/helm/raibitserver/values.yaml`의 `image.registry`, `image.tag`, `ingress.host`, replica 수를 환경에 맞게 덮어씁니다.

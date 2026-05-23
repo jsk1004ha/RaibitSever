@@ -47,7 +47,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         let user = controlPlane.store.findUserByEmail(normalizeEmail(body.email));
         if (!user || !verifyPassword(body.password, user.passwordHash)) return send(res, 401, { error: 'invalid_credentials' });
         if (shouldPromoteFirstLogin(user, [...controlPlane.store.users.values()])) {
-          user = controlPlane.store.approveUser(user.id, { accountType: 'CLUB_MEMBER', role: 'ADMIN' });
+          user = controlPlane.store.approveUser(user.id, { accountType: 'NON_CLUB', role: 'ADMIN' });
         }
         const memberships = controlPlane.store.listMembershipsForUser(user.id);
         const token = createSessionToken(user, memberships, auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: body.expiresInSeconds || 3600 });

@@ -3,6 +3,15 @@ import { signJwtHs256 } from './auth.ts';
 import { slugify } from './ids.ts';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ACCOUNT_TYPE_ALIASES: Record<string, string> = Object.freeze({
+  CLUB: 'CLUB_MEMBER',
+  CLUB_MEMBER: 'CLUB_MEMBER',
+  CLUBMEMBER: 'CLUB_MEMBER',
+  NON_CLUB: 'NON_CLUB',
+  NONCLUB: 'NON_CLUB',
+  NON_MEMBER: 'NON_CLUB',
+  NONMEMBER: 'NON_CLUB',
+});
 
 export function normalizeEmail(email: string) {
   const value = String(email || '').trim().toLowerCase();
@@ -63,6 +72,18 @@ export function personalOrganizationSlug(email: string) {
   return slugify(String(email).split('@')[0] || 'user');
 }
 
+export function normalizeAccountType(value: any, fallback = 'NON_CLUB') {
+  const raw = value === undefined || value === null || String(value).trim() === '' ? fallback : value;
+  const normalized = String(raw || fallback).trim().toUpperCase().replace(/[\s-]+/g, '_');
+  const accountType = ACCOUNT_TYPE_ALIASES[normalized];
+  if (!accountType) {
+    const error = new Error('accountType must be CLUB_MEMBER or NON_CLUB');
+    (error as any).statusCode = 400;
+    throw error;
+  }
+  return accountType;
+}
+
 export function configuredAdminEmails(env: Record<string, any> = process.env) {
   return String(env.ADMIN_EMAILS || '')
     .split(',')
@@ -80,7 +101,7 @@ export function signupPolicyForAccount(input: Record<string, any>, email: string
       isAdminBootstrap,
       bootstrapReason: firstUser ? 'first-user' : 'admin-email',
       role: 'ADMIN',
-      accountType: 'CLUB_MEMBER',
+      accountType: 'NON_CLUB',
       approvalStatus: 'APPROVED',
     };
   }

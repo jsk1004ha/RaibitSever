@@ -11,6 +11,7 @@ import { normalizeResourceEngine } from './catalog.ts';
 import { sanitizeLogRecord } from './security.ts';
 import { assertDeploymentTransition, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
+import { normalizeAccountType } from './identity.ts';
 import {
   deploymentBuildMinutes,
   deploymentRuntimeHours,
@@ -143,10 +144,11 @@ export class PrismaControlPlaneRepository {
   }
 
   async createUser(input: Record<string, any>) {
+    const accountType = normalizeAccountType(input.accountType);
     return this.prisma.user.upsert({
       where: { email: input.email },
-      update: { name: input.name, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || undefined, role: input.role || undefined, accountType: input.accountType || undefined, approvalStatus: input.approvalStatus || undefined },
-      create: { name: input.name, email: input.email, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || null, role: input.role || 'USER', accountType: input.accountType || 'NON_CLUB', approvalStatus: input.approvalStatus || 'PENDING' },
+      update: { name: input.name, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || undefined, role: input.role || undefined, accountType, approvalStatus: input.approvalStatus || undefined },
+      create: { name: input.name, email: input.email, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || null, role: input.role || 'USER', accountType, approvalStatus: input.approvalStatus || 'PENDING' },
     });
   }
 
@@ -686,9 +688,11 @@ export class PrismaControlPlaneRepository {
 
 
   async approveUser(userId: string, input: Record<string, any> = {}) {
-    const user = await this.prisma.user.update({ where: { id: userId }, data: { approvalStatus: 'APPROVED', accountType: input.accountType || 'NON_CLUB', role: input.role || undefined } });
-    if ((input.accountType || user.accountType) === 'NON_CLUB') await this.setQuota({ userId, accountType: 'NON_CLUB' });
-    await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'user:approve', targetType: 'user', targetId: userId, metadata: maskSecrets({ accountType: input.accountType || user.accountType }) } });
+    const current = await this.prisma.user.findUnique({ where: { id: userId } });
+    const accountType = normalizeAccountType(input.accountType, current?.accountType || 'NON_CLUB');
+    const user = await this.prisma.user.update({ where: { id: userId }, data: { approvalStatus: 'APPROVED', accountType, role: input.role || undefined } });
+    if (accountType === 'NON_CLUB') await this.setQuota({ userId, accountType });
+    await this.prisma.auditLog.create({ data: { actorUserId: input.actorUserId || 'system', action: 'user:approve', targetType: 'user', targetId: userId, metadata: maskSecrets({ accountType }) } });
     return redactUser(user);
   }
 
@@ -699,10 +703,11 @@ export class PrismaControlPlaneRepository {
   }
 
   async setQuota(input: Record<string, any>) {
+    const accountType = normalizeAccountType(input.accountType);
     return this.prisma.quota.upsert({
-      where: { id: input.id || `quota_${input.userId}_${input.accountType || 'NON_CLUB'}` },
-      update: quotaData(input),
-      create: { id: input.id || `quota_${input.userId}_${input.accountType || 'NON_CLUB'}`, userId: input.userId, accountType: input.accountType || 'NON_CLUB', ...quotaData(input) },
+      where: { id: input.id || `quota_${input.userId}_${accountType}` },
+      update: quotaData({ ...input, accountType }),
+      create: { id: input.id || `quota_${input.userId}_${accountType}`, userId: input.userId, accountType, ...quotaData({ ...input, accountType }) },
     });
   }
 

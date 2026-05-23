@@ -21,7 +21,7 @@ export { DEPLOYMENT_STATUSES, normalizeDeploymentStatus, canTransitionDeployment
 export { createDeploymentWorkflowHandlers, processBuilderWorkflowJob, processBuildAndRolloutWorkflowJob, reconcileDeploymentRollout } from './deployment-workflow.ts';
 export { organizationScopeFromProjectInput, projectScopeFromInput } from './scope.ts';
 export { signJwtHs256, verifyJwtHs256, authorizeRequest, subjectFromRequest, requireAction, requireScope } from './auth.ts';
-export { hashPassword, verifyPassword, normalizeEmail, createSessionToken, sessionPayloadForUser, personalOrganizationSlug, configuredAdminEmails, signupPolicyForAccount, shouldPromoteFirstLogin } from './identity.ts';
+export { hashPassword, verifyPassword, normalizeEmail, createSessionToken, sessionPayloadForUser, personalOrganizationSlug, normalizeAccountType, configuredAdminEmails, signupPolicyForAccount, shouldPromoteFirstLogin } from './identity.ts';
 export { runtimeConfigStatus, assertRuntimeKeys, secretEncryptionConfigured } from './config.ts';
 export { sealSecret, openSecret, secureRandomSecret, publicSecretRecord } from './secret-vault.ts';
 export { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';

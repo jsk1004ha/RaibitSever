@@ -11,6 +11,7 @@ import { providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource
 import { normalizeResourceEngine } from './catalog.ts';
 import { assertDeploymentTransition, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
+import { normalizeAccountType } from './identity.ts';
 import {
   dateMs,
   deploymentBuildMinutes,
@@ -86,7 +87,7 @@ export class ControlPlaneStore {
   }
 
   createUser({ name, email, githubId = null, passwordHash = null, role = 'USER', accountType = 'NON_CLUB', approvalStatus = 'PENDING', avatarUrl = null }: Record<string, any>) {
-    const user = { id: stableId('usr', email || name), name, email: String(email || '').toLowerCase(), avatarUrl, githubId, passwordHash, role, accountType, approvalStatus, createdAt: nowIso(), updatedAt: nowIso() };
+    const user = { id: stableId('usr', email || name), name, email: String(email || '').toLowerCase(), avatarUrl, githubId, passwordHash, role, accountType: normalizeAccountType(accountType), approvalStatus, createdAt: nowIso(), updatedAt: nowIso() };
     this.users.set(user.id, user);
     return deepClone(redactUser(user));
   }
@@ -772,22 +773,24 @@ export class ControlPlaneStore {
   }
 
   setQuota({ userId, accountType = 'NON_CLUB', ...limits }: Record<string, any>) {
-    const id = stableId('quota', userId, accountType);
-    const row = { id, userId, accountType, maxProjects: 1, maxServices: 2, maxDeploymentsPerDay: 3, maxPreviewDeployments: 1, maxCpuMillicores: 500, maxMemoryMb: 512, maxDbStorageMb: 512, maxObjectStorageMb: 1024, maxBuildMinutesPerMonth: 60, maxRuntimeHoursPerMonth: 120, ...limits, createdAt: this.quotas.get(id)?.createdAt || nowIso(), updatedAt: nowIso() };
+    const normalizedAccountType = normalizeAccountType(accountType);
+    const id = stableId('quota', userId, normalizedAccountType);
+    const row = { id, userId, accountType: normalizedAccountType, maxProjects: 1, maxServices: 2, maxDeploymentsPerDay: 3, maxPreviewDeployments: 1, maxCpuMillicores: 500, maxMemoryMb: 512, maxDbStorageMb: 512, maxObjectStorageMb: 1024, maxBuildMinutesPerMonth: 60, maxRuntimeHoursPerMonth: 120, ...limits, createdAt: this.quotas.get(id)?.createdAt || nowIso(), updatedAt: nowIso() };
     this.quotas.set(id, row);
-    this.audit('system', 'quota:set', 'user', userId, { accountType, limits });
+    this.audit('system', 'quota:set', 'user', userId, { accountType: normalizedAccountType, limits });
     return deepClone(row);
   }
 
-  approveUser(userId: string, { accountType = 'NON_CLUB', role = null, actorUserId = 'system' }: Record<string, any> = {}) {
+  approveUser(userId: string, { accountType = undefined, role = null, actorUserId = 'system' }: Record<string, any> = {}) {
     const user = this.users.get(userId);
     if (!user) throw notFound(`user not found: ${userId}`);
+    const nextAccountType = normalizeAccountType(accountType, user.accountType || 'NON_CLUB');
     user.approvalStatus = 'APPROVED';
-    user.accountType = accountType;
+    user.accountType = nextAccountType;
     if (role) user.role = role;
     user.updatedAt = nowIso();
-    if (accountType === 'NON_CLUB') this.setQuota({ userId, accountType });
-    this.audit(actorUserId, 'user:approve', 'user', userId, { accountType });
+    if (nextAccountType === 'NON_CLUB') this.setQuota({ userId, accountType: nextAccountType });
+    this.audit(actorUserId, 'user:approve', 'user', userId, { accountType: nextAccountType });
     return redactUser(deepClone(user));
   }
 

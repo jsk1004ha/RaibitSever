@@ -55,7 +55,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     let user = repository.findUserByEmail ? await repository.findUserByEmail(normalizeEmail(input.email)) : repository.store.findUserByEmail(normalizeEmail(input.email));
     if (!user || !verifyPassword(input.password, user.passwordHash)) throw new ForbiddenException('invalid credentials');
     if (shouldPromoteFirstLogin(user, await usersForRepository(repository))) {
-      user = await repository.approveUser(user.id, { accountType: 'CLUB_MEMBER', role: 'ADMIN', actorUserId: 'system' });
+      user = await repository.approveUser(user.id, { accountType: 'NON_CLUB', role: 'ADMIN', actorUserId: 'system' });
     }
     const memberships = repository.listMembershipsForUser ? await repository.listMembershipsForUser(user.id) : repository.store.listMembershipsForUser(user.id);
     const token = createSessionToken(user, memberships, jwtSecret, { issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', expiresInSeconds: input.expiresInSeconds || 3600 });

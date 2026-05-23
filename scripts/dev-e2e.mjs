@@ -42,8 +42,8 @@ try {
 
   const bootstrapAdmin = await request('POST', '/auth/signup', { email: 'admin@example.com', password: 'correct-horse-battery', organizationSlug: 'admin-org' });
   assertStatus(bootstrapAdmin, 201, 'first-user admin bootstrap');
-  if (bootstrapAdmin.body.user.role !== 'ADMIN' || bootstrapAdmin.body.user.approvalStatus !== 'APPROVED' || bootstrapAdmin.body.user.accountType !== 'CLUB_MEMBER') {
-    throw new Error('first auth user was not bootstrapped as approved club admin');
+  if (bootstrapAdmin.body.user.role !== 'ADMIN' || bootstrapAdmin.body.user.approvalStatus !== 'APPROVED' || bootstrapAdmin.body.user.accountType !== 'NON_CLUB') {
+    throw new Error('first auth user was not bootstrapped as approved non-club admin');
   }
   const adminToken = bootstrapAdmin.body.token;
 
@@ -133,6 +133,7 @@ try {
 
   const club = await request('POST', '/auth/signup', { email: 'club@example.com', password: 'correct-horse-battery', organizationSlug: 'club-org' });
   assertStatus(club, 201, 'club signup');
+  if (club.body.user.accountType !== 'NON_CLUB') throw new Error('new club candidate did not start as NON_CLUB');
   const approvedClub = await request('POST', `/admin/users/${club.body.user.id}/approve`, { accountType: 'CLUB_MEMBER' }, adminToken);
   assertStatus(approvedClub, 200, 'admin approve club');
   const clubLogin = await request('POST', '/auth/login', { email: 'club@example.com', password: 'correct-horse-battery' });
