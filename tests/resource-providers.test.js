@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPostgresProviderPlan, buildResourceProviderPlan, providerConsoleSurface, provisionProjectResources, ControlPlaneStore, browseDbConsole, runDbConsoleQuery } from '../packages/core/src/index.ts';
-import { provisionPostgresProvider } from '../packages/core/src/resource-providers.ts';
+import { buildPostgresProviderPlan, buildResourceProviderPlan, providerConsoleSurface, provisionProjectResources, providerConnectionEnvForResource, provisionPostgresProvider, ControlPlaneStore, browseDbConsole, runDbConsoleQuery } from '../packages/core/src/index.ts';
 
 test('PostgreSQL direct provider plan creates database/user/grant/test/backup contracts without leaking password', () => {
   const plan = buildPostgresProviderPlan({ name: 'Festival PG', databaseName: 'festival', username: 'festival_app', projectSlug: 'festival-2026' }, { password: 'super-secret-db-password', providerAdminUrl: 'postgresql://admin:adminpass@localhost/postgres' });
@@ -55,6 +54,13 @@ test('shared Redis and Valkey provider plans use ACL prefixes and never flush th
   const unsafe = buildResourceProviderPlan({ name: 'cache', engine: 'redis', projectSlug: 'festival', keyPrefix: "festival:*'; FLUSHALL; #" });
   assert.equal(unsafe.keyPrefix, 'festival:____FLUSHALL___:');
   assert.equal(unsafe.commands.delete.includes("';"), false);
+});
+
+test('shared provider tenant names/key prefixes are unique across projects without projectSlug', () => {
+  const victim = providerConnectionEnvForResource({ id: 'res_victim', projectId: 'prj_victim', name: 'cache', engine: 'redis' });
+  const attacker = providerConnectionEnvForResource({ id: 'res_attacker', projectId: 'prj_attacker', name: 'cache', engine: 'redis' });
+  assert.notEqual(victim.REDIS_USERNAME, attacker.REDIS_USERNAME);
+  assert.notEqual(victim.REDIS_KEY_PREFIX, attacker.REDIS_KEY_PREFIX);
 });
 
 test('shared SQL and document provider plans create tenant primitives instead of containers', () => {

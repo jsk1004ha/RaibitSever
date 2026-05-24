@@ -113,15 +113,25 @@ function defaultSharedProviderHost(engine: string, projectSlug: any) {
 }
 
 function sharedTenantName(resource: AnyRecord, suffix: string, projectSlug: any) {
-  const project = slugify(projectSlug || resource.projectSlug || resource.project || 'project').replace(/-/g, '_');
+  const project = slugify(uniqueTenantScope(resource, projectSlug)).replace(/-/g, '_');
   const name = slugify(resource.name || resource.engine || suffix).replace(/-/g, '_');
   return `${project}_${name}_${suffix}`.slice(0, 63);
 }
 
 function redisKeyPrefixFor(resource: AnyRecord, projectSlug: any) {
-  const fallback = `${slugify(projectSlug || resource.projectSlug || 'project')}:${slugify(resource.name || 'cache')}:`;
+  const fallback = `${slugify(uniqueTenantScope(resource, projectSlug))}:${slugify(resource.name || 'cache')}:`;
   const raw = String(resource.keyPrefix || fallback).replace(/[^a-zA-Z0-9:_-]/g, '_').slice(0, 128) || fallback;
   return raw.endsWith(':') ? raw : `${raw}:`;
+}
+
+function uniqueTenantScope(resource: AnyRecord, projectSlug: any) {
+  const explicit = projectSlug || resource.projectSlug || resource.project;
+  if (explicit) return explicit;
+  const parts = [resource.organizationId, resource.projectId, resource.id]
+    .filter((value) => value !== undefined && value !== null && String(value).length > 0)
+    .map((value) => slugify(value));
+  if (parts.length) return parts.join('-').slice(0, 48);
+  return 'project';
 }
 
 export function injectResourceEnv(service: AnyRecord, resources: AnyRecord[] = [], projectSlug = 'project') {

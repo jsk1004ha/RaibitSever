@@ -177,7 +177,6 @@ export async function provisionResourceProvider(resource: AnyRecord = {}, option
 }
 
 export function providerConnectionEnvForResource(resource: AnyRecord = {}, options: AnyRecord = {}) {
-  const engine = normalizedEngine(resource.engine || resource.type);
   const prepared = prepareResourceForEnv(resource, options);
   return connectionEnvForResource(prepared, prepared.projectSlug || options.projectSlug || 'project');
 }
@@ -290,7 +289,8 @@ function providerCommands(engine: string, context: AnyRecord): Record<string, Co
 function prepareResourceForEnv(resource: AnyRecord, options: AnyRecord) {
   const engine = normalizedEngine(resource.engine || resource.type);
   const name = slugify(resource.name || engine || 'resource');
-  const tenantName = tenantResourceName(resource, name);
+  const tenantScope = uniqueTenantScope(resource, options);
+  const tenantName = tenantResourceName(resource, name, tenantScope);
   const generatedPassword = options.password || resource.password || resource.generatedPassword || secureRandomSecret(24);
   const prepared: AnyRecord = {
     ...resource,
@@ -301,7 +301,7 @@ function prepareResourceForEnv(resource: AnyRecord, options: AnyRecord) {
     secretKey: options.secretKey || resource.secretKey || secureRandomSecret(24),
     databaseName: resource.databaseName || resource.database || tenantName,
     username: resource.username || `${tenantName}_app`.slice(0, 63),
-    keyPrefix: safeRedisKeyPrefix(resource.keyPrefix || `${slugify(resource.projectSlug || resource.project || 'project')}:${name}:`),
+    keyPrefix: safeRedisKeyPrefix(resource.keyPrefix || `${tenantScope}:${name}:`),
     bucket: resource.bucket || tenantName.replace(/_/g, '-'),
     collection: resource.collection || tenantName.replace(/_/g, '-'),
     topic: resource.topic || tenantName.replace(/_/g, '-'),
@@ -431,10 +431,18 @@ function safeSqlIdentifier(value: any) {
   return withPrefix;
 }
 
-function tenantResourceName(resource: AnyRecord, fallback: string) {
-  const project = slugify(resource.projectSlug || resource.project || 'project').replace(/-/g, '_');
+function tenantResourceName(resource: AnyRecord, fallback: string, tenantScope: string) {
+  const project = slugify(tenantScope || resource.projectSlug || resource.project || 'project').replace(/-/g, '_');
   const name = slugify(resource.name || fallback || 'resource').replace(/-/g, '_');
   return `${project}_${name}`.slice(0, 55);
+}
+
+function uniqueTenantScope(resource: AnyRecord = {}, options: AnyRecord = {}) {
+  const explicit = options.projectSlug || resource.projectSlug || resource.project;
+  if (explicit) return slugify(explicit);
+  const parts = [resource.organizationId, resource.projectId, resource.id].filter((value) => value !== undefined && value !== null && String(value).length > 0).map((value) => slugify(value));
+  if (parts.length) return parts.join('-').slice(0, 48);
+  return 'project';
 }
 
 function safeRedisKeyPrefix(value: any) {
