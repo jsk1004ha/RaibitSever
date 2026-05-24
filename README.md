@@ -140,6 +140,7 @@ node src/cli.js compose examples/docker-compose.yml
 | GitHub App/OAuth | `RAIBITSERVER_GITHUB_CLIENT_ID`, `RAIBITSERVER_GITHUB_CLIENT_SECRET`, `RAIBITSERVER_GITHUB_REDIRECT_URI`, `RAIBITSERVER_GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` |
 
 Production 실행 전 필수 설정은 [production 배포 문서](deploy/production/README.md)를 확인하세요.
+GitHub webhook 엔드포인트(`POST /github/webhooks`)는 HMAC 검증을 반드시 수행하므로 `RAIBITSERVER_GITHUB_WEBHOOK_SECRET`(또는 `GITHUB_WEBHOOK_SECRET`)이 비어 있으면 요청을 거부합니다.
 
 ## 서버 구축 세팅 체크리스트
 

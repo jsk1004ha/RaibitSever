@@ -138,6 +138,29 @@ test('GitHub installation repositories and sync are scoped to the caller organiz
   }
 });
 
+test('GitHub webhook rejects requests when webhook secret is not configured', async () => {
+  const previousSecret = process.env.RAIBITSERVER_GITHUB_WEBHOOK_SECRET;
+  const previousFallback = process.env.GITHUB_WEBHOOK_SECRET;
+  delete process.env.RAIBITSERVER_GITHUB_WEBHOOK_SECRET;
+  delete process.env.GITHUB_WEBHOOK_SECRET;
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const server = await serve(controlPlane);
+  try {
+    const res = await request(server.port, 'POST', '/github/webhooks', JSON.stringify({ repository: { full_name: 'alice/web' }, ref: 'refs/heads/main', after: 'abc123' }), null, {
+      'x-github-event': 'push',
+      'x-github-delivery': 'delivery-no-secret',
+    });
+    assert.equal(res.statusCode, 503);
+    assert.equal(res.body.error, 'GitHub webhook secret is not configured');
+  } finally {
+    server.close();
+    if (previousSecret === undefined) delete process.env.RAIBITSERVER_GITHUB_WEBHOOK_SECRET;
+    else process.env.RAIBITSERVER_GITHUB_WEBHOOK_SECRET = previousSecret;
+    if (previousFallback === undefined) delete process.env.GITHUB_WEBHOOK_SECRET;
+    else process.env.GITHUB_WEBHOOK_SECRET = previousFallback;
+  }
+});
+
 function prPayload(action, sha) {
   return {
     action,
