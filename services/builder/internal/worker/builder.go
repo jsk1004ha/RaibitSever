@@ -271,22 +271,48 @@ func (b *Builder) prepareBuildPlan(ctx context.Context, state *buildContext) err
 	state.Plan = plan
 	state.Image = image
 	state.Push = b.Config.Push || b.Config.DryRun
-	state.ContextDir = filepath.Join(state.SourceDir, firstNonEmpty(stringValue(state.Job.Payload["buildContext"]), state.Service.BuildContext, state.Service.RootDirectory, "."))
+	contextDir, err := resolvePathWithinSourceDir(state.SourceDir, firstNonEmpty(stringValue(state.Job.Payload["buildContext"]), state.Service.BuildContext, state.Service.RootDirectory, "."), "buildContext")
+	if err != nil {
+		return err
+	}
+	state.ContextDir = contextDir
 	if isPrebuilt(state.Service, state.Deployment) || mode == "prebuilt-image" {
 		return nil
 	}
 	dockerfilePath := firstNonEmpty(stringValue(state.Job.Payload["dockerfilePath"]), state.Service.DockerfilePath, "Dockerfile")
-	if filepath.IsAbs(dockerfilePath) {
-		state.Dockerfile = dockerfilePath
-	} else {
-		state.Dockerfile = filepath.Join(state.SourceDir, dockerfilePath)
+	resolvedDockerfile, err := resolvePathWithinSourceDir(state.SourceDir, dockerfilePath, "dockerfilePath")
+	if err != nil {
+		return err
 	}
+	state.Dockerfile = resolvedDockerfile
 	if mode == "dockerfile" || fileExists(state.Dockerfile) {
 		state.Plan.Mode = "dockerfile"
 		return b.writeLog(ctx, state, "plan", "Dockerfile selected before generated build strategy", "info")
 	}
 	state.Plan.Mode = "generated"
 	return b.writeGeneratedDockerfile(ctx, state)
+}
+
+func resolvePathWithinSourceDir(sourceDir, candidate, field string) (string, error) {
+	sourceRoot, err := filepath.Abs(sourceDir)
+	if err != nil {
+		return "", err
+	}
+	resolvedPath, err := filepath.Abs(filepath.Join(sourceRoot, candidate))
+	if err != nil {
+		return "", err
+	}
+	relative, err := filepath.Rel(sourceRoot, resolvedPath)
+	if err != nil {
+		return "", err
+	}
+	if relative == "." || relative == "" {
+		return resolvedPath, nil
+	}
+	if strings.HasPrefix(relative, "..") || filepath.IsAbs(relative) {
+		return "", fmt.Errorf("%s must stay within source directory", field)
+	}
+	return resolvedPath, nil
 }
 
 func (b *Builder) executeBuild(ctx context.Context, state *buildContext) error {

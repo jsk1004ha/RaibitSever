@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+### 보안
+
+- 빌드 실행 시 `buildContext`와 `dockerfilePath`가 체크아웃된 서비스 소스 디렉터리 바깥으로 벗어나지 못하도록 경로 포함 검증을 추가했습니다.
+- Go builder 엔트리포인트/worker 양쪽에 동일한 경로 검증을 적용해 실제 `docker buildx` 실행 경계에서 path traversal 기반 호스트 파일 노출을 차단했습니다.
+
 ### 문서
 
 - README를 한국어 진입 문서로 재작성했습니다.

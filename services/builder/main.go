@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -34,14 +35,19 @@ func main() {
 			err = fmt.Errorf("build requires <image> <context> <dockerfile> [--push]")
 			break
 		}
+		buildContext, dockerfile, resolveErr := validateBuildPaths(os.Args[3], os.Args[4])
+		if resolveErr != nil {
+			err = resolveErr
+			break
+		}
 		push := contains(os.Args, "--push")
-		args := []string{"buildx", "build", "--file", os.Args[4], "--tag", os.Args[2]}
+		args := []string{"buildx", "build", "--file", dockerfile, "--tag", os.Args[2]}
 		if push {
 			args = append(args, "--push")
 		} else {
 			args = append(args, "--load")
 		}
-		args = append(args, os.Args[3])
+		args = append(args, buildContext)
 		err = run(dryRun, "docker", args...)
 	case "push":
 		if len(os.Args) < 3 {
@@ -93,4 +99,26 @@ func redactArgs(args []string) []string {
 
 func isCredentialedURL(value string) bool {
 	return strings.HasPrefix(value, "https://") && strings.Contains(strings.TrimPrefix(value, "https://"), "@")
+}
+
+func validateBuildPaths(contextPath, dockerfilePath string) (string, string, error) {
+	contextAbs, err := filepath.Abs(contextPath)
+	if err != nil {
+		return "", "", err
+	}
+	dockerfileAbs, err := filepath.Abs(dockerfilePath)
+	if err != nil {
+		return "", "", err
+	}
+	relative, err := filepath.Rel(contextAbs, dockerfileAbs)
+	if err != nil {
+		return "", "", err
+	}
+	if relative == "." || relative == "" {
+		return contextAbs, dockerfileAbs, nil
+	}
+	if strings.HasPrefix(relative, "..") || filepath.IsAbs(relative) {
+		return "", "", fmt.Errorf("dockerfile path must stay within build context")
+	}
+	return contextAbs, dockerfileAbs, nil
 }
