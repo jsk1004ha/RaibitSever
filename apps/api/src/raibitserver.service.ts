@@ -1,6 +1,6 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
-import { createControlPlaneRepository, createSessionToken, deterministicGitHubCallbackAllowed, githubOAuthLoginPlan, hashPassword, normalizeEmail, organizationScopeFromProjectInput, personalOrganizationSlug, requireScope, shouldPromoteFirstLogin, signupPolicyForAccount, validateServiceSecurity, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
+import { createControlPlaneRepository, createSessionToken, githubOAuthLoginPlan, hashPassword, normalizeEmail, organizationScopeFromProjectInput, personalOrganizationSlug, requireScope, shouldPromoteFirstLogin, signupPolicyForAccount, validateServiceSecurity, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 
 /**
  * NestJS-facing desired-state service.
@@ -442,44 +442,14 @@ export class RAIBITSERVERService implements OnModuleDestroy {
   }
 
   async githubCallback(input: Record<string, any> = {}) {
-    const emailInput = input.email || input.githubEmail || input.userEmail || null;
-    if (!emailInput) return { provider: 'github', received: true, codePresent: Boolean(input.code), state: input.state || null, mode: 'deterministic-local-callback', linked: false };
-    if (!deterministicGitHubCallbackAllowed(input)) throw new ForbiddenException('deterministic GitHub callback is disabled in production');
-    const repository: any = await this.repositoryPromise;
-    const jwtSecret = jwtSecretOrThrow();
-    const email = normalizeEmail(emailInput);
-    const githubId = input.githubId || input.id || input.github_id || null;
-    const githubLogin = input.login || input.username || null;
-    let user = repository.findUserByEmail ? await repository.findUserByEmail(email) : repository.store.findUserByEmail(email);
-    const githubOwner = githubId && repository.findUserByGitHubId ? await repository.findUserByGitHubId(githubId) : null;
-    if (githubOwner && (!user || String(githubOwner.id) !== String(user.id))) throw new ForbiddenException('github account is already linked to another user');
-    let created = false;
-    let organization: any = null;
-    if (user) {
-      user = repository.linkGitHubUser
-        ? await repository.linkGitHubUser(user.id, { githubId, githubLogin, avatarUrl: input.avatarUrl || input.avatar_url || null, name: input.name || user.name, actorUserId: user.id })
-        : user;
-    } else {
-      const organizationSlug = input.organizationSlug || personalOrganizationSlug(email);
-      const existingOrganization = repository.findOrganizationBySlug ? await repository.findOrganizationBySlug(organizationSlug) : repository.store.findOrganizationBySlug(organizationSlug);
-      if (existingOrganization) throw new ForbiddenException('organization slug already exists');
-      organization = await repository.createOrganization({ name: input.organizationName || organizationSlug, slug: organizationSlug, plan: input.plan || 'free' });
-      const policy = signupPolicyForAccount(input, email, { firstUser: (await usersForRepository(repository)).length === 0 });
-      user = await repository.createUser({
-        name: input.name || githubLogin || email,
-        email,
-        githubId,
-        avatarUrl: input.avatarUrl || input.avatar_url || null,
-        role: policy.role,
-        accountType: policy.accountType,
-        approvalStatus: policy.approvalStatus,
-      });
-      await repository.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
-      created = true;
-    }
-    const memberships = repository.listMembershipsForUser ? await repository.listMembershipsForUser(user.id) : repository.store.listMembershipsForUser(user.id);
-    const token = createSessionToken({ ...user, email }, memberships, jwtSecret, { issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', expiresInSeconds: input.expiresInSeconds || 3600 });
-    return { provider: 'github', received: true, codePresent: Boolean(input.code), state: input.state || null, mode: 'deterministic-local-callback', linked: true, created, user, organization, memberships, token };
+    return {
+      provider: 'github',
+      received: true,
+      codePresent: Boolean(input.code),
+      state: input.state || null,
+      mode: 'oauth-callback-pending',
+      linked: false,
+    };
   }
 
   async listGitHubInstallations(subject: Record<string, any>, organizationId?: string) {
