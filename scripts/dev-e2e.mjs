@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { once } from 'node:events';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -13,6 +14,7 @@ import { createDeploymentWorkflowHandlers, reconcileDeploymentRollout } from '..
 
 const e2eOptions = parseE2EOptions(process.argv.slice(2), process.env);
 const jwtSecret = process.env.RAIBITSERVER_AUTH_JWT_SECRET || 'local-e2e-secret-at-least-32-chars';
+const githubWebhookSecret = process.env.RAIBITSERVER_GITHUB_WEBHOOK_SECRET || process.env.GITHUB_WEBHOOK_SECRET || 'local-e2e-github-webhook-secret';
 const baseDomain = process.env.BASE_DOMAIN || '127.0.0.1.sslip.io';
 const controlPlane = new RAIBITSERVERControlPlane();
 const api = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'jwt', jwtSecret, issuer: 'raibitserver' } }));
@@ -107,28 +109,20 @@ try {
   const preview = await request('POST', `/services/${service.body.id}/deployments`, { deploymentType: 'preview', triggerType: 'pull_request', pullRequestNumber: 42, branch: 'feature/local-e2e', previewUrl: `http://pr-42--${urlHost.replace(/^express-api--/, '')}` }, pending.body.token);
   assertStatus(preview, 202, 'PR preview deployment enqueue');
   controlPlane.store.updateService(service.body.id, { githubRepository: 'student-org/local-e2e', repoUrl: 'https://github.com/student-org/local-e2e.git', githubIntegrationId: 'local-e2e' });
-  const githubPush = controlPlane.store.handleGitHubWebhook({
-    event: 'push',
-    deliveryId: 'local-e2e-push-main',
-    body: JSON.stringify({ repository: { full_name: 'student-org/local-e2e' }, ref: 'refs/heads/main', after: 'push-e2e' }),
-    payload: { repository: { full_name: 'student-org/local-e2e' }, ref: 'refs/heads/main', after: 'push-e2e' },
-  });
+  const pushPayload = { repository: { full_name: 'student-org/local-e2e' }, ref: 'refs/heads/main', after: 'push-e2e' };
+  const githubPush = controlPlane.store.handleGitHubWebhook(signedGitHubWebhook('push', 'local-e2e-push-main', pushPayload));
   if (!githubPush.actions.some((action) => action.type === 'production-deployment-enqueued')) throw new Error('GitHub push webhook did not enqueue production deployment');
   const githubPreviewActions = [];
   for (const action of ['opened', 'synchronize', 'reopened']) {
     const deliveryId = `local-e2e-pr-${action}`;
     const payload = { action, number: 42, repository: { full_name: 'student-org/local-e2e' }, pull_request: { number: 42, head: { ref: 'feature/local-e2e', sha: `sha-${action}` } } };
-    const result = controlPlane.store.handleGitHubWebhook({ event: 'pull_request', deliveryId, body: JSON.stringify(payload), payload });
+    const result = controlPlane.store.handleGitHubWebhook(signedGitHubWebhook('pull_request', deliveryId, payload));
     const queued = result.actions.find((item) => item.type === 'preview-deployment-enqueued');
     if (!queued?.previewUrl || queued.previewWorkloadName !== 'pr-42-express-api') throw new Error(`GitHub PR ${action} did not enqueue deterministic preview workload`);
     githubPreviewActions.push({ action, deliveryId, previewUrl: queued.previewUrl, previewWorkloadName: queued.previewWorkloadName });
   }
-  const previewCleanup = controlPlane.store.handleGitHubWebhook({
-    event: 'pull_request',
-    deliveryId: 'local-e2e-pr-closed',
-    body: JSON.stringify({ action: 'closed', number: 42, repository: { full_name: 'student-org/local-e2e' }, pull_request: { number: 42, head: { ref: 'feature/local-e2e', sha: 'local-e2e' } } }),
-    payload: { action: 'closed', number: 42, repository: { full_name: 'student-org/local-e2e' }, pull_request: { number: 42, head: { ref: 'feature/local-e2e', sha: 'local-e2e' } } },
-  });
+  const cleanupPayload = { action: 'closed', number: 42, repository: { full_name: 'student-org/local-e2e' }, pull_request: { number: 42, head: { ref: 'feature/local-e2e', sha: 'local-e2e' } } };
+  const previewCleanup = controlPlane.store.handleGitHubWebhook(signedGitHubWebhook('pull_request', 'local-e2e-pr-closed', cleanupPayload));
   if (!previewCleanup.actions.some((action) => action.type === 'preview-cleanup-enqueued')) throw new Error('preview cleanup webhook did not enqueue cleanup');
 
   const club = await request('POST', '/auth/signup', { email: 'club@example.com', password: 'correct-horse-battery', organizationSlug: 'club-org' });
@@ -572,6 +566,19 @@ function getHttpViaIngress(host, routePath = '/') {
     });
     req.end();
   });
+}
+
+
+function signedGitHubWebhook(event, deliveryId, payload) {
+  const body = JSON.stringify(payload);
+  return {
+    event,
+    deliveryId,
+    body,
+    payload,
+    secret: githubWebhookSecret,
+    signature: `sha256=${crypto.createHmac('sha256', githubWebhookSecret).update(body).digest('hex')}`,
+  };
 }
 
 function request(method, path, body = null, token = null) {
