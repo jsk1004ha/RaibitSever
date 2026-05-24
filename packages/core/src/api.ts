@@ -7,7 +7,7 @@ import { runtimeConfigStatus } from './config.ts';
 import { normalizeEnvEntries, parseDotEnv } from './env-file.ts';
 import { can } from './rbac.ts';
 import { validateServiceSecurity } from './security.ts';
-import { deterministicGitHubCallbackAllowed, githubOAuthLoginPlan } from './github-integration.ts';
+import { githubOAuthLoginPlan } from './github-integration.ts';
 
 export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), options: Record<string, any> = {}) {
   const auth = options.auth || authConfigFromEnv();
@@ -58,33 +58,14 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         return send(res, 200, githubOAuthLoginPlan(Object.fromEntries(url.searchParams.entries())));
       }
       if (method === 'GET' && url.pathname === '/auth/github/callback') {
-        const input = Object.fromEntries(url.searchParams.entries());
-        const emailInput = input.email || input.githubEmail || input.userEmail || null;
-        if (!emailInput) return send(res, 200, { provider: 'github', received: true, codePresent: Boolean(url.searchParams.get('code')), state: url.searchParams.get('state'), mode: 'deterministic-local-callback', linked: false });
-        if (!deterministicGitHubCallbackAllowed(input)) return send(res, 403, { error: 'deterministic_github_callback_disabled' });
-        if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
-        const email = normalizeEmail(emailInput);
-        const githubId = input.githubId || input.id || input.github_id || null;
-        const githubLogin = input.login || input.username || null;
-        let user = controlPlane.store.findUserByEmail(email);
-        const githubOwner = githubId ? controlPlane.store.findUserByGitHubId(githubId) : null;
-        if (githubOwner && (!user || String(githubOwner.id) !== String(user.id))) return send(res, 409, { error: 'github_account_already_linked' });
-        let created = false;
-        let organization = null;
-        if (user) {
-          user = controlPlane.store.linkGitHubUser(user.id, { githubId, githubLogin, avatarUrl: input.avatarUrl || input.avatar_url || null, name: input.name || user.name, actorUserId: user.id });
-        } else {
-          const organizationSlug = input.organizationSlug || personalOrganizationSlug(email);
-          if (controlPlane.store.findOrganizationBySlug(organizationSlug)) return send(res, 409, { error: 'organization_slug_already_exists' });
-          organization = controlPlane.store.createOrganization({ name: input.organizationName || organizationSlug, slug: organizationSlug, plan: input.plan || 'free' });
-          const policy = signupPolicyForAccount(input, email, { firstUser: controlPlane.store.users.size === 0 });
-          user = controlPlane.store.createUser({ name: input.name || githubLogin || email, email, githubId, avatarUrl: input.avatarUrl || input.avatar_url || null, role: policy.role, accountType: policy.accountType, approvalStatus: policy.approvalStatus });
-          controlPlane.store.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
-          created = true;
-        }
-        const memberships = controlPlane.store.listMembershipsForUser(user.id);
-        const token = createSessionToken({ ...user, email }, memberships, auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: input.expiresInSeconds || 3600 });
-        return send(res, 200, { provider: 'github', received: true, codePresent: Boolean(url.searchParams.get('code')), state: url.searchParams.get('state'), mode: 'deterministic-local-callback', linked: true, created, user: publicUser(user), organization, memberships, token });
+        return send(res, 200, {
+          provider: 'github',
+          received: true,
+          codePresent: Boolean(url.searchParams.get('code')),
+          state: url.searchParams.get('state'),
+          mode: 'oauth-callback-pending',
+          linked: false,
+        });
       }
       if (method === 'GET' && url.pathname === '/auth/me') {
         const subject = subjectFromRequest(req, auth);

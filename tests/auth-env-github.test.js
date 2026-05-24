@@ -21,7 +21,7 @@ test('.env upload parser separates plain values from important secrets', () => {
   assert.throws(() => parseDotEnv('1BAD=value'), /invalid \.env content/);
 });
 
-test('first auth user bootstraps as admin non-club and GitHub callback can create the first account', async () => {
+test('first auth user bootstraps as admin non-club and GitHub callback remains passive', async () => {
   const secret = 'first-user-bootstrap-secret';
   const previousAdminEmails = process.env.ADMIN_EMAILS;
   delete process.env.ADMIN_EMAILS;
@@ -52,14 +52,11 @@ test('first auth user bootstraps as admin non-club and GitHub callback can creat
     try {
       const callback = await request(githubServer.address().port, 'GET', '/auth/github/callback?email=gh-first%40example.com&githubId=42&login=gh-first&organizationSlug=gh-first-org&state=oauth-state');
       assert.equal(callback.statusCode, 200);
-      assert.equal(callback.body.linked, true);
-      assert.equal(callback.body.created, true);
+      assert.equal(callback.body.linked, false);
       assert.equal(callback.body.state, 'oauth-state');
-      assert.equal(callback.body.user.role, 'ADMIN');
-      assert.equal(callback.body.user.accountType, 'NON_CLUB');
-      assert.equal(callback.body.user.approvalStatus, 'APPROVED');
-      assert.equal(callback.body.user.githubId, '42');
-      assert.equal(Boolean(callback.body.token), true);
+      assert.equal(callback.body.mode, 'oauth-callback-pending');
+      assert.equal(callback.body.user, undefined);
+      assert.equal(Boolean(callback.body.token), false);
     } finally {
       githubServer.close();
     }
@@ -145,11 +142,10 @@ test('signup/login tokens isolate hosted projects, service env upload, and GitHu
 
     const bobGithub = await request(port, 'GET', '/auth/github/callback?email=bob%40example.com&githubId=gh-bob&login=bob&state=link-existing');
     assert.equal(bobGithub.statusCode, 200);
-    assert.equal(bobGithub.body.linked, true);
-    assert.equal(bobGithub.body.created, false);
-    assert.equal(bobGithub.body.user.githubId, 'gh-bob');
+    assert.equal(bobGithub.body.linked, false);
+    assert.equal(bobGithub.body.mode, 'oauth-callback-pending');
     const duplicateGithub = await request(port, 'GET', '/auth/github/callback?email=eve%40example.com&githubId=gh-bob&login=eve&state=duplicate-link');
-    assert.equal(duplicateGithub.statusCode, 409);
+    assert.equal(duplicateGithub.statusCode, 200);
 
     const approveBob = await request(port, 'POST', `/admin/users/${bobSignup.body.user.id}/approve`, { accountType: 'NON_CLUB' }, aliceLogin.body.token);
     assert.equal(approveBob.statusCode, 200);
