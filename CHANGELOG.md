@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+### 보안
+
+- Go builder가 `buildContext`/`dockerfilePath`를 source 디렉터리 내부 상대 경로로만 해석하도록 강제해, `..` 경로 이탈 및 절대 경로 Dockerfile 주입을 차단했습니다.
+- builder worker 테스트에 경로 이탈 차단 회귀 테스트를 추가했습니다.
+
 ### 문서
 
 - README를 한국어 진입 문서로 재작성했습니다.

@@ -18,21 +18,21 @@ import (
 )
 
 const (
-	DeploymentStatusBuilding   = "BUILDING"
-	DeploymentStatusImageReady = "IMAGE_READY"
+	DeploymentStatusBuilding    = "BUILDING"
+	DeploymentStatusImageReady  = "IMAGE_READY"
 	DeploymentStatusBuildFailed = "BUILD_FAILED"
 )
 
 type Config struct {
-	WorkerID      string
-	WorkspaceDir  string
-	Registry      string
-	DryRun        bool
-	Push          bool
-	Builder       string
-	Timeout       time.Duration
-	LeaseSeconds  int
-	MetadataDir   string
+	WorkerID     string
+	WorkspaceDir string
+	Registry     string
+	DryRun       bool
+	Push         bool
+	Builder      string
+	Timeout      time.Duration
+	LeaseSeconds int
+	MetadataDir  string
 }
 
 type Builder struct {
@@ -42,17 +42,17 @@ type Builder struct {
 }
 
 type Result struct {
-	Processed    bool              `json:"processed"`
-	JobID        string            `json:"jobId,omitempty"`
-	DeploymentID string            `json:"deploymentId,omitempty"`
-	ServiceID    string            `json:"serviceId,omitempty"`
-	ProjectID    string            `json:"projectId,omitempty"`
-	Image        string            `json:"image,omitempty"`
-	ImageDigest  string            `json:"imageDigest,omitempty"`
-	DryRun       bool              `json:"dryRun"`
-	Steps        []StepResult      `json:"steps,omitempty"`
-	Reason       string            `json:"reason,omitempty"`
-	Metadata     map[string]any    `json:"metadata,omitempty"`
+	Processed    bool           `json:"processed"`
+	JobID        string         `json:"jobId,omitempty"`
+	DeploymentID string         `json:"deploymentId,omitempty"`
+	ServiceID    string         `json:"serviceId,omitempty"`
+	ProjectID    string         `json:"projectId,omitempty"`
+	Image        string         `json:"image,omitempty"`
+	ImageDigest  string         `json:"imageDigest,omitempty"`
+	DryRun       bool           `json:"dryRun"`
+	Steps        []StepResult   `json:"steps,omitempty"`
+	Reason       string         `json:"reason,omitempty"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
 type StepResult struct {
@@ -63,18 +63,18 @@ type StepResult struct {
 }
 
 type buildContext struct {
-	Job        *controlplane.WorkflowJob
-	Deployment *controlplane.Deployment
-	Service    *controlplane.Service
-	Project    *controlplane.Project
-	Plan       buildplan.Plan
-	SourceDir  string
-	Dockerfile string
-	ContextDir string
-	Image      string
-	Push       bool
+	Job          *controlplane.WorkflowJob
+	Deployment   *controlplane.Deployment
+	Service      *controlplane.Service
+	Project      *controlplane.Project
+	Plan         buildplan.Plan
+	SourceDir    string
+	Dockerfile   string
+	ContextDir   string
+	Image        string
+	Push         bool
 	MetadataFile string
-	Steps      []StepResult
+	Steps        []StepResult
 }
 
 func New(store controlplane.Store, runner CommandRunner, config Config) *Builder {
@@ -271,22 +271,44 @@ func (b *Builder) prepareBuildPlan(ctx context.Context, state *buildContext) err
 	state.Plan = plan
 	state.Image = image
 	state.Push = b.Config.Push || b.Config.DryRun
-	state.ContextDir = filepath.Join(state.SourceDir, firstNonEmpty(stringValue(state.Job.Payload["buildContext"]), state.Service.BuildContext, state.Service.RootDirectory, "."))
+	contextPath, err := resolveContainedPath(state.SourceDir, firstNonEmpty(stringValue(state.Job.Payload["buildContext"]), state.Service.BuildContext, state.Service.RootDirectory, "."), "buildContext")
+	if err != nil {
+		return err
+	}
+	state.ContextDir = contextPath
 	if isPrebuilt(state.Service, state.Deployment) || mode == "prebuilt-image" {
 		return nil
 	}
 	dockerfilePath := firstNonEmpty(stringValue(state.Job.Payload["dockerfilePath"]), state.Service.DockerfilePath, "Dockerfile")
-	if filepath.IsAbs(dockerfilePath) {
-		state.Dockerfile = dockerfilePath
-	} else {
-		state.Dockerfile = filepath.Join(state.SourceDir, dockerfilePath)
+	dockerfile, err := resolveContainedPath(state.SourceDir, dockerfilePath, "dockerfilePath")
+	if err != nil {
+		return err
 	}
+	state.Dockerfile = dockerfile
 	if mode == "dockerfile" || fileExists(state.Dockerfile) {
 		state.Plan.Mode = "dockerfile"
 		return b.writeLog(ctx, state, "plan", "Dockerfile selected before generated build strategy", "info")
 	}
 	state.Plan.Mode = "generated"
 	return b.writeGeneratedDockerfile(ctx, state)
+}
+
+func resolveContainedPath(baseDir, requestedPath, field string) (string, error) {
+	cleanBase := filepath.Clean(baseDir)
+	candidate := requestedPath
+	if filepath.IsAbs(candidate) {
+		return "", fmt.Errorf("%s must be relative to source directory", field)
+	}
+	candidate = filepath.Join(cleanBase, candidate)
+	cleanCandidate := filepath.Clean(candidate)
+	rel, err := filepath.Rel(cleanBase, cleanCandidate)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("%s escapes source directory", field)
+	}
+	return cleanCandidate, nil
 }
 
 func (b *Builder) executeBuild(ctx context.Context, state *buildContext) error {

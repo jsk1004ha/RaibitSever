@@ -14,9 +14,9 @@ import (
 
 func TestBuilderClaimsJobBuildsAndPersistsImageReadyState(t *testing.T) {
 	stateFile := writeState(t, map[string]any{
-		"projects": []any{map[string]any{"id": "prj_1", "name": "Demo", "slug": "demo"}},
-		"services": []any{map[string]any{"id": "svc_1", "projectId": "prj_1", "name": "web", "slug": "web", "sourceType": "github", "buildMode": "dockerfile", "repoUrl": "https://github.com/acme/web.git", "branch": "main", "dockerfilePath": "Dockerfile", "registry": "registry.local"}},
-		"deployments": []any{map[string]any{"id": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "status": "queued", "branch": "main", "commitSha": "abc123"}},
+		"projects":     []any{map[string]any{"id": "prj_1", "name": "Demo", "slug": "demo"}},
+		"services":     []any{map[string]any{"id": "svc_1", "projectId": "prj_1", "name": "web", "slug": "web", "sourceType": "github", "buildMode": "dockerfile", "repoUrl": "https://github.com/acme/web.git", "branch": "main", "dockerfilePath": "Dockerfile", "registry": "registry.local"}},
+		"deployments":  []any{map[string]any{"id": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "status": "queued", "branch": "main", "commitSha": "abc123"}},
 		"workflowJobs": []any{map[string]any{"id": "job_1", "type": "build-and-deploy", "status": "queued", "targetType": "deployment", "targetId": "dep_1", "payload": map[string]any{"deploymentId": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "buildArgs": map[string]any{"SECRET_TOKEN": "super-secret-value"}}, "attempts": 0, "maxAttempts": 2, "runAfter": "2026-01-01T00:00:00Z"}},
 	})
 
@@ -64,9 +64,9 @@ func TestBuilderGeneratesDockerfileForLocalSourceFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	stateFile := writeState(t, map[string]any{
-		"projects": []any{map[string]any{"id": "prj_1", "name": "Demo", "slug": "demo"}},
-		"services": []any{map[string]any{"id": "svc_1", "projectId": "prj_1", "name": "api", "slug": "api", "sourceType": "local", "buildMode": "auto", "localPath": sourceDir, "buildCommand": "npm run build", "startCommand": "node server.js"}},
-		"deployments": []any{map[string]any{"id": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "status": "queued", "commitSha": "local"}},
+		"projects":     []any{map[string]any{"id": "prj_1", "name": "Demo", "slug": "demo"}},
+		"services":     []any{map[string]any{"id": "svc_1", "projectId": "prj_1", "name": "api", "slug": "api", "sourceType": "local", "buildMode": "auto", "localPath": sourceDir, "buildCommand": "npm run build", "startCommand": "node server.js"}},
+		"deployments":  []any{map[string]any{"id": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "status": "queued", "commitSha": "local"}},
 		"workflowJobs": []any{map[string]any{"id": "job_1", "type": "build-and-deploy", "status": "queued", "targetType": "deployment", "targetId": "dep_1", "payload": map[string]any{"deploymentId": "dep_1", "serviceId": "svc_1", "projectId": "prj_1"}, "attempts": 0, "maxAttempts": 1, "runAfter": "2026-01-01T00:00:00Z"}},
 	})
 
@@ -91,11 +91,53 @@ func TestBuilderGeneratesDockerfileForLocalSourceFallback(t *testing.T) {
 	}
 }
 
+func TestBuilderRejectsEscapingBuildPaths(t *testing.T) {
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stateFile := writeState(t, map[string]any{
+		"projects":     []any{map[string]any{"id": "prj_1", "name": "Demo", "slug": "demo"}},
+		"services":     []any{map[string]any{"id": "svc_1", "projectId": "prj_1", "name": "api", "slug": "api", "sourceType": "local", "buildMode": "dockerfile", "localPath": sourceDir}},
+		"deployments":  []any{map[string]any{"id": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "status": "queued", "commitSha": "local"}},
+		"workflowJobs": []any{map[string]any{"id": "job_1", "type": "build-and-deploy", "status": "queued", "targetType": "deployment", "targetId": "dep_1", "payload": map[string]any{"deploymentId": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "buildContext": "../../.."}, "attempts": 0, "maxAttempts": 1, "runAfter": "2026-01-01T00:00:00Z"}},
+	})
+
+	builder := worker.New(controlplane.NewFileStore(stateFile), worker.OSRunner{}, worker.Config{WorkspaceDir: t.TempDir(), Registry: "registry.local", DryRun: true})
+	if _, err := builder.RunOnce(context.Background()); err == nil || !strings.Contains(err.Error(), "buildContext escapes source directory") {
+		t.Fatalf("expected build context escape failure, got %v", err)
+	}
+
+	state := readState(t, stateFile)
+	deployment := firstByID(t, state, "deployments", "dep_1")
+	if deployment["status"] != "BUILD_FAILED" {
+		t.Fatalf("deployment not failed: %#v", deployment)
+	}
+}
+
+func TestBuilderRejectsAbsoluteDockerfilePath(t *testing.T) {
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stateFile := writeState(t, map[string]any{
+		"projects":     []any{map[string]any{"id": "prj_1", "name": "Demo", "slug": "demo"}},
+		"services":     []any{map[string]any{"id": "svc_1", "projectId": "prj_1", "name": "api", "slug": "api", "sourceType": "local", "buildMode": "dockerfile", "localPath": sourceDir}},
+		"deployments":  []any{map[string]any{"id": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "status": "queued", "commitSha": "local"}},
+		"workflowJobs": []any{map[string]any{"id": "job_1", "type": "build-and-deploy", "status": "queued", "targetType": "deployment", "targetId": "dep_1", "payload": map[string]any{"deploymentId": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "dockerfilePath": "/tmp/Dockerfile"}, "attempts": 0, "maxAttempts": 1, "runAfter": "2026-01-01T00:00:00Z"}},
+	})
+
+	builder := worker.New(controlplane.NewFileStore(stateFile), worker.OSRunner{}, worker.Config{WorkspaceDir: t.TempDir(), Registry: "registry.local", DryRun: true})
+	if _, err := builder.RunOnce(context.Background()); err == nil || !strings.Contains(err.Error(), "dockerfilePath must be relative") {
+		t.Fatalf("expected absolute dockerfile failure, got %v", err)
+	}
+}
+
 func TestBuilderFailureMarksDeploymentAndWorkflowWithoutLeakingCredentials(t *testing.T) {
 	stateFile := writeState(t, map[string]any{
-		"projects": []any{map[string]any{"id": "prj_1", "name": "Demo", "slug": "demo"}},
-		"services": []any{map[string]any{"id": "svc_1", "projectId": "prj_1", "name": "web", "slug": "web", "sourceType": "github", "buildMode": "dockerfile", "repoUrl": "https://ghp_secret-token@github.com/acme/web.git"}},
-		"deployments": []any{map[string]any{"id": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "status": "queued"}},
+		"projects":     []any{map[string]any{"id": "prj_1", "name": "Demo", "slug": "demo"}},
+		"services":     []any{map[string]any{"id": "svc_1", "projectId": "prj_1", "name": "web", "slug": "web", "sourceType": "github", "buildMode": "dockerfile", "repoUrl": "https://ghp_secret-token@github.com/acme/web.git"}},
+		"deployments":  []any{map[string]any{"id": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "status": "queued"}},
 		"workflowJobs": []any{map[string]any{"id": "job_1", "type": "build-and-deploy", "status": "queued", "targetType": "deployment", "targetId": "dep_1", "payload": map[string]any{"deploymentId": "dep_1", "serviceId": "svc_1", "projectId": "prj_1"}, "attempts": 0, "maxAttempts": 1, "runAfter": "2026-01-01T00:00:00Z"}},
 	})
 	builder := worker.New(controlplane.NewFileStore(stateFile), worker.OSRunner{}, worker.Config{WorkspaceDir: t.TempDir(), Registry: "registry.local", DryRun: true})
