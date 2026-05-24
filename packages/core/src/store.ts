@@ -700,7 +700,12 @@ export class ControlPlaneStore {
 
   handleGitHubWebhook({ event, deliveryId, signature, body, payload, secret = process.env.RAIBITSERVER_GITHUB_WEBHOOK_SECRET || process.env.GITHUB_WEBHOOK_SECRET || '' }: Record<string, any>) {
     const rawBody = typeof body === 'string' ? body : JSON.stringify(payload || {});
-    if (secret && !verifyGitHubWebhookSignature(rawBody, signature, secret)) throw unauthorized('invalid GitHub webhook signature');
+    if (!secret) {
+      const error = new Error('GitHub webhook secret is not configured');
+      (error as any).statusCode = 503;
+      throw error;
+    }
+    if (!verifyGitHubWebhookSignature(rawBody, signature, secret)) throw unauthorized('invalid GitHub webhook signature');
     const id = String(deliveryId || stableId('ghdel', event, rawBody));
     if (this.webhookEvents.has(id)) return { accepted: true, duplicate: true, deliveryId: id, actions: [] };
     const actionPlan = githubWebhookActionPlan(event, payload || {});

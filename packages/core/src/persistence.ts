@@ -584,7 +584,12 @@ export class PrismaControlPlaneRepository {
     const { githubWebhookActionPlan, githubWebhookOutboundPlan, verifyGitHubWebhookSignature } = await import('./github-integration.ts');
     const rawBody = typeof input.body === 'string' ? input.body : JSON.stringify(input.payload || {});
     const secret = input.secret || process.env.RAIBITSERVER_GITHUB_WEBHOOK_SECRET || process.env.GITHUB_WEBHOOK_SECRET || '';
-    if (secret && !verifyGitHubWebhookSignature(rawBody, input.signature, secret)) {
+    if (!secret) {
+      const error = new Error('GitHub webhook secret is not configured');
+      (error as any).statusCode = 503;
+      throw error;
+    }
+    if (!verifyGitHubWebhookSignature(rawBody, input.signature, secret)) {
       const error = new Error('invalid GitHub webhook signature');
       (error as any).statusCode = 401;
       throw error;

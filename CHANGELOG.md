@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+### 보안
+
+- GitHub webhook 처리 경로를 fail-closed로 변경해 webhook secret(`RAIBITSERVER_GITHUB_WEBHOOK_SECRET` 또는 `GITHUB_WEBHOOK_SECRET`)이 없으면 요청을 거부하도록 수정했습니다.
+
 ### 문서
 
 - README를 한국어 진입 문서로 재작성했습니다.
