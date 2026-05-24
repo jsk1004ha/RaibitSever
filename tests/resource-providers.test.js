@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildPostgresProviderPlan, buildResourceProviderPlan, providerConsoleSurface, provisionProjectResources, ControlPlaneStore, browseDbConsole, runDbConsoleQuery } from '../packages/core/src/index.ts';
+import { provisionPostgresProvider } from '../packages/core/src/resource-providers.ts';
 
 test('PostgreSQL direct provider plan creates database/user/grant/test/backup contracts without leaking password', () => {
   const plan = buildPostgresProviderPlan({ name: 'Festival PG', databaseName: 'festival', username: 'festival_app', projectSlug: 'festival-2026' }, { password: 'super-secret-db-password', providerAdminUrl: 'postgresql://admin:adminpass@localhost/postgres' });
@@ -78,6 +79,17 @@ test('PostgreSQL provider dry-run attaches provider-owned connection secret and 
   assert.equal(JSON.stringify(store.snapshot()).includes('provider-secret-password'), false);
   const consoleResource = store.resourceForConsole(provisioned.resource);
   assert.match(consoleResource.providerConnection.databaseUrl, /^postgresql:\/\/app_user:/);
+});
+
+test('PostgreSQL live provisioning requires explicit server-side allowlist env', async () => {
+  const previous = process.env.RAIBITSERVER_ENABLE_LIVE_PROVIDER_PROVISIONING;
+  delete process.env.RAIBITSERVER_ENABLE_LIVE_PROVIDER_PROVISIONING;
+  await assert.rejects(
+    () => provisionPostgresProvider({ name: 'blocked-live', engine: 'postgresql' }, { execute: true, dryRun: false }),
+    /live PostgreSQL provisioning is disabled/,
+  );
+  if (previous === undefined) delete process.env.RAIBITSERVER_ENABLE_LIVE_PROVIDER_PROVISIONING;
+  else process.env.RAIBITSERVER_ENABLE_LIVE_PROVIDER_PROVISIONING = previous;
 });
 
 test('project provisioning can include direct PostgreSQL provider dry-run result', async () => {

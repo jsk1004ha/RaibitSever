@@ -542,7 +542,7 @@ export class ControlPlaneStore {
     const resource = this.resources.get(resourceId);
     if (!resource) throw notFound(`resource not found: ${resourceId}`);
     const result = await provisionAnyResourceProvider(resource, options);
-    const attached = this.attachProviderConnectionSecrets({ resourceId, env: (result as any).connectionEnv || providerConnectionEnvForResource(resource), actorUserId, live: options.execute === true && options.dryRun === false, providerMode: result.dryRun ? 'provider-contract' : 'live-provider' });
+    const attached = this.attachProviderConnectionSecrets({ resourceId, env: (result as any).connectionEnv || providerConnectionEnvForResource(resource), actorUserId, live: result.dryRun !== true, providerMode: result.dryRun ? 'provider-contract' : 'live-provider' });
     const next = { ...attached, status: 'ready', provider: result.provider, desiredState: { ...(attached.desiredState || {}), providerResult: result.plan }, updatedAt: nowIso() };
     this.resources.set(resourceId, next);
     this.audit(actorUserId, 'resource.provider:provision', 'resource', resourceId, { engine: result.engine, provider: result.provider, dryRun: result.dryRun, connectionSecret: result.connectionSecret });
