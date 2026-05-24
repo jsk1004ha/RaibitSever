@@ -132,7 +132,7 @@ node src/cli.js compose examples/docker-compose.yml
 | --- | --- |
 | DB/상태 | `DATABASE_URL`, `RAIBITSERVER_PERSISTENCE`, `RAIBITSERVER_CONTROL_PLANE_DATABASE_URL`, `RAIBITSERVER_CONTROL_PLANE_STORE`, `RAIBITSERVER_CONTROL_PLANE_FILE`, `REDIS_URL` |
 | Secret/Auth | `JWT_SECRET`, `RAIBITSERVER_AUTH_JWT_SECRET`, `RAIBITSERVER_AUTH_ISSUER`, `ENCRYPTION_KEY`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, `ADMIN_EMAILS` |
-| Dashboard/API | `PORT`, `RAIBITSERVER_API_URL`, `RAIBITSERVER_DASHBOARD_TOKEN`, `RAIBITSERVER_TOKEN` |
+| Dashboard/API | `PORT`, `RAIBITSERVER_API_URL`, `RAIBITSERVER_DASHBOARD_TOKEN`, `RAIBITSERVER_TOKEN`, `RAIBITSERVER_DASHBOARD_BASIC_AUTH` |
 | Build/Runtime | `REGISTRY_URL`, `RAIBITSERVER_REGISTRY`, `RAIBITSERVER_REGISTRY_USERNAME`, `RAIBITSERVER_REGISTRY_PASSWORD`, `KUBECONFIG`, `RAIBITSERVER_KUBE_CONTEXT`, `BASE_DOMAIN`, `RAIBITSERVER_BASE_DOMAIN`, `RAIBITSERVER_EXECUTE`, `RAIBITSERVER_PUSH` |
 | Object Storage | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` |
 | Provider | `RAIBITSERVER_POSTGRES_PROVIDER_URL`, `POSTGRES_PROVIDER_URL` |
@@ -189,13 +189,15 @@ Production 실행 전 필수 설정은 [production 배포 문서](deploy/product
 | 용도 | 예시 |
 | --- | --- |
 | API | `api.raibitserver.app` |
-| Dashboard/Admin | `admin.raibitserver.app` 또는 `console.raibitserver.app` |
+| Dashboard/Admin | `admin.raibitserver.app` 또는 `console.raibitserver.app` (반드시 별도 인증 계층 적용) |
 | 서비스 실행 URL | `*.apps.raibitserver.app` |
 | PR preview URL | `*.preview.raibitserver.app` |
 | 서비스 관리 화면 | `*.console.raibitserver.app` |
 | 리소스 관리 화면 | `*.resources.raibitserver.app` |
 
 서비스/preview host는 `<service>--<project>--<org>` 또는 `pr-<number>--<service>--<project>--<org>` 패턴으로 생성됩니다. 따라서 `*.apps`, `*.preview`, `*.console`, `*.resources` wildcard 인증서를 준비해야 합니다.
+
+> 보안 필수: `/admin` 경로는 API 토큰 기반 서버 렌더링 데이터를 표시하므로 public ingress에 노출할 때 반드시 별도 인증 계층을 적용하세요. 기본 구성에서는 `RAIBITSERVER_DASHBOARD_BASIC_AUTH`를 `username:password` 형식으로 설정해야 하며, 미설정 시 `/admin`은 503으로 차단됩니다.
 
 ### 4. production 환경 변수 예시
 
@@ -223,6 +225,7 @@ ADMIN_EMAILS=admin@example.com
 # Dashboard -> API
 RAIBITSERVER_API_URL=https://api.raibitserver.app/api
 RAIBITSERVER_DASHBOARD_TOKEN=<dashboard-server-side-token>
+RAIBITSERVER_DASHBOARD_BASIC_AUTH=<admin-user>:<strong-random-password>
 
 # Kubernetes / runtime
 KUBECONFIG=/etc/raibitserver/kubeconfig
