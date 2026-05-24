@@ -261,6 +261,7 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
 - `RAIBITSERVER_AUTH_DISABLED`, `RAIBITSERVER_AUTH_DEV_HEADERS`, `RAIBITSERVER_AUTH_DEV_TOKEN`, `RAIBITSERVER_ROLE`은 로컬 개발 전용입니다.
 - `RAIBITSERVER_ALLOW_MEMORY_PERSISTENCE=1`은 production 안전 조건을 깨뜨립니다.
 - `RAIBITSERVER_DRY_RUN=1` 또는 `RAIBITSERVER_EXECUTE` 미설정 상태에서는 worker가 실제 apply/push/provision을 수행하지 않습니다.
+- builder는 `localPath`, `buildContext`, `dockerfilePath`를 workspace/source 경계 안으로만 해석합니다. 상위 디렉터리(`..`) 또는 절대 경로로 경계를 벗어나는 빌드 입력은 거부됩니다.
 
 ### 5. 처음 서버 올리는 순서
 

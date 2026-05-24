@@ -217,7 +217,11 @@ func (b *Builder) prepareSource(ctx context.Context, state *buildContext) error 
 	}
 	localPath := firstNonEmpty(stringValue(state.Job.Payload["localPath"]), state.Service.LocalPath)
 	if localPath != "" {
-		state.SourceDir = localPath
+		sourceDir, err := b.resolveLocalSourceDir(localPath)
+		if err != nil {
+			return err
+		}
+		state.SourceDir = sourceDir
 		state.Steps = append(state.Steps, StepResult{Type: "source-local", DryRun: b.Config.DryRun, Detail: localPath})
 		return b.writeLog(ctx, state, "source", "using local source path "+localPath, "info")
 	}
@@ -424,6 +428,38 @@ func (b *Builder) metadataDir() string {
 		return b.Config.MetadataDir
 	}
 	return filepath.Join(b.Config.WorkspaceDir, "metadata")
+}
+
+func (b *Builder) resolveLocalSourceDir(localPath string) (string, error) {
+	sourceDir := filepath.Clean(localPath)
+	if !filepath.IsAbs(sourceDir) {
+		sourceDir = filepath.Join(b.Config.WorkspaceDir, sourceDir)
+	}
+	return resolvePathWithin(b.Config.WorkspaceDir, sourceDir)
+}
+
+func resolvePathWithin(baseDir, value string) (string, error) {
+	base := filepath.Clean(baseDir)
+	if !filepath.IsAbs(base) {
+		absBase, err := filepath.Abs(base)
+		if err != nil {
+			return "", err
+		}
+		base = absBase
+	}
+	candidate := value
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(base, candidate)
+	}
+	candidate = filepath.Clean(candidate)
+	rel, err := filepath.Rel(base, candidate)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("path %q escapes allowed base directory", value)
+	}
+	return candidate, nil
 }
 
 func (b *Builder) writeLog(ctx context.Context, state *buildContext, step, line, level string) error {

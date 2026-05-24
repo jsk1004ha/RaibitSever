@@ -6,8 +6,8 @@
 
 ### 보안
 
-- 빌드 실행 시 `buildContext`와 `dockerfilePath`를 체크아웃된 서비스 소스 디렉터리 내부 상대 경로로만 해석하도록 강제해 path traversal 및 절대 경로 Dockerfile 주입을 차단했습니다.
-- Go builder 엔트리포인트/worker 양쪽에 동일한 경로 검증과 회귀 테스트를 적용해 실제 `docker buildx` 실행 경계에서 호스트 파일 노출을 차단했습니다.
+- 빌드 실행 시 tenant 입력 경로(`localPath`, `buildContext`, `dockerfilePath`)를 workspace/source 디렉터리 경계 안의 안전한 상대 경로로만 해석하도록 강제했습니다.
+- Go builder 엔트리포인트/worker 양쪽에 경로 이탈 및 절대 경로 Dockerfile 주입 차단 회귀 테스트를 추가해 실제 `docker buildx` 실행 경계에서 호스트 파일 노출을 차단했습니다.
 
 ### 문서
 

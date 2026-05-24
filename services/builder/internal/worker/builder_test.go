@@ -59,7 +59,11 @@ func TestBuilderClaimsJobBuildsAndPersistsImageReadyState(t *testing.T) {
 }
 
 func TestBuilderGeneratesDockerfileForLocalSourceFallback(t *testing.T) {
-	sourceDir := t.TempDir()
+	workspaceDir := t.TempDir()
+	sourceDir := filepath.Join(workspaceDir, "source")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(sourceDir, "package.json"), []byte(`{"scripts":{"start":"node server.js"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +74,7 @@ func TestBuilderGeneratesDockerfileForLocalSourceFallback(t *testing.T) {
 		"workflowJobs": []any{map[string]any{"id": "job_1", "type": "build-and-deploy", "status": "queued", "targetType": "deployment", "targetId": "dep_1", "payload": map[string]any{"deploymentId": "dep_1", "serviceId": "svc_1", "projectId": "prj_1"}, "attempts": 0, "maxAttempts": 1, "runAfter": "2026-01-01T00:00:00Z"}},
 	})
 
-	builder := worker.New(controlplane.NewFileStore(stateFile), worker.OSRunner{}, worker.Config{WorkspaceDir: t.TempDir(), Registry: "registry.local", DryRun: true})
+	builder := worker.New(controlplane.NewFileStore(stateFile), worker.OSRunner{}, worker.Config{WorkspaceDir: workspaceDir, Registry: "registry.local", DryRun: true})
 	result, err := builder.RunOnce(context.Background())
 	if err != nil {
 		t.Fatalf("RunOnce failed: %v", err)
@@ -92,7 +96,11 @@ func TestBuilderGeneratesDockerfileForLocalSourceFallback(t *testing.T) {
 }
 
 func TestBuilderRejectsEscapingBuildPaths(t *testing.T) {
-	sourceDir := t.TempDir()
+	workspaceDir := t.TempDir()
+	sourceDir := filepath.Join(workspaceDir, "source")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(sourceDir, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +111,7 @@ func TestBuilderRejectsEscapingBuildPaths(t *testing.T) {
 		"workflowJobs": []any{map[string]any{"id": "job_1", "type": "build-and-deploy", "status": "queued", "targetType": "deployment", "targetId": "dep_1", "payload": map[string]any{"deploymentId": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "buildContext": "../../.."}, "attempts": 0, "maxAttempts": 1, "runAfter": "2026-01-01T00:00:00Z"}},
 	})
 
-	builder := worker.New(controlplane.NewFileStore(stateFile), worker.OSRunner{}, worker.Config{WorkspaceDir: t.TempDir(), Registry: "registry.local", DryRun: true})
+	builder := worker.New(controlplane.NewFileStore(stateFile), worker.OSRunner{}, worker.Config{WorkspaceDir: workspaceDir, Registry: "registry.local", DryRun: true})
 	if _, err := builder.RunOnce(context.Background()); err == nil || !strings.Contains(err.Error(), "buildContext escapes source directory") {
 		t.Fatalf("expected build context escape failure, got %v", err)
 	}
@@ -116,7 +124,11 @@ func TestBuilderRejectsEscapingBuildPaths(t *testing.T) {
 }
 
 func TestBuilderRejectsAbsoluteDockerfilePath(t *testing.T) {
-	sourceDir := t.TempDir()
+	workspaceDir := t.TempDir()
+	sourceDir := filepath.Join(workspaceDir, "source")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(sourceDir, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -127,9 +139,25 @@ func TestBuilderRejectsAbsoluteDockerfilePath(t *testing.T) {
 		"workflowJobs": []any{map[string]any{"id": "job_1", "type": "build-and-deploy", "status": "queued", "targetType": "deployment", "targetId": "dep_1", "payload": map[string]any{"deploymentId": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "dockerfilePath": "/tmp/Dockerfile"}, "attempts": 0, "maxAttempts": 1, "runAfter": "2026-01-01T00:00:00Z"}},
 	})
 
-	builder := worker.New(controlplane.NewFileStore(stateFile), worker.OSRunner{}, worker.Config{WorkspaceDir: t.TempDir(), Registry: "registry.local", DryRun: true})
+	builder := worker.New(controlplane.NewFileStore(stateFile), worker.OSRunner{}, worker.Config{WorkspaceDir: workspaceDir, Registry: "registry.local", DryRun: true})
 	if _, err := builder.RunOnce(context.Background()); err == nil || !strings.Contains(err.Error(), "dockerfilePath must be relative") {
 		t.Fatalf("expected absolute dockerfile failure, got %v", err)
+	}
+}
+
+func TestBuilderRejectsLocalPathOutsideWorkspace(t *testing.T) {
+	workspaceDir := t.TempDir()
+	sourceDir := t.TempDir()
+	stateFile := writeState(t, map[string]any{
+		"projects":     []any{map[string]any{"id": "prj_1", "name": "Demo", "slug": "demo"}},
+		"services":     []any{map[string]any{"id": "svc_1", "projectId": "prj_1", "name": "api", "slug": "api", "sourceType": "local", "buildMode": "dockerfile", "localPath": sourceDir}},
+		"deployments":  []any{map[string]any{"id": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "status": "queued", "commitSha": "local"}},
+		"workflowJobs": []any{map[string]any{"id": "job_1", "type": "build-and-deploy", "status": "queued", "targetType": "deployment", "targetId": "dep_1", "payload": map[string]any{"deploymentId": "dep_1", "serviceId": "svc_1", "projectId": "prj_1"}, "attempts": 0, "maxAttempts": 1, "runAfter": "2026-01-01T00:00:00Z"}},
+	})
+
+	builder := worker.New(controlplane.NewFileStore(stateFile), worker.OSRunner{}, worker.Config{WorkspaceDir: workspaceDir, Registry: "registry.local", DryRun: true})
+	if _, err := builder.RunOnce(context.Background()); err == nil || !strings.Contains(err.Error(), "escapes allowed base directory") {
+		t.Fatalf("expected local path escape error, got %v", err)
 	}
 }
 
