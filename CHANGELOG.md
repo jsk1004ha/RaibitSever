@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+### 보안
+
+- 리소스 프로비저닝 경로에서 PostgreSQL `providerAdminUrl/adminUrl` 및 `host/port`를 요청 본문으로 덮어쓸 수 없도록 차단하고, 라이브 실행(`execute=true`,`dryRun=false`)은 `RAIBITSERVER_ENABLE_LIVE_PROVIDER_PROVISIONING=true`가 설정된 경우에만 허용하도록 변경했습니다.
+
 ### 문서
 
 - README를 한국어 진입 문서로 재작성했습니다.

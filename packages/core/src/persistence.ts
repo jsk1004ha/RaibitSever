@@ -255,7 +255,7 @@ export class PrismaControlPlaneRepository {
     const resource = await this.getResource(resourceId);
     if (!resource) throw new Error(`resource not found: ${resourceId}`);
     const result = await provisionAnyResourceProvider(resource, options);
-    const attached = await this.attachProviderConnectionSecrets({ resourceId, env: (result as any).connectionEnv || providerConnectionEnvForResource(resource), actorUserId, live: options.execute === true && options.dryRun === false, providerMode: result.dryRun ? 'provider-contract' : 'live-provider' });
+    const attached = await this.attachProviderConnectionSecrets({ resourceId, env: (result as any).connectionEnv || providerConnectionEnvForResource(resource), actorUserId, live: result.dryRun !== true, providerMode: result.dryRun ? 'provider-contract' : 'live-provider' });
     const updated = await this.prisma.resource.update({ where: { id: resourceId }, data: { status: 'ready', provider: result.provider, desiredState: maskSecrets({ ...(attached.desiredState || {}), providerResult: result.plan }) } });
     await this.prisma.auditLog.create({ data: { actorUserId, action: 'resource.provider:provision', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ engine: result.engine, provider: result.provider, dryRun: result.dryRun, connectionSecret: result.connectionSecret }) } });
     return { resource: updated, result: maskSecrets({ ...result, databaseUrl: undefined, connectionEnv: undefined }) };
