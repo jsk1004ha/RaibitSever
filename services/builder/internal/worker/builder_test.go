@@ -59,7 +59,11 @@ func TestBuilderClaimsJobBuildsAndPersistsImageReadyState(t *testing.T) {
 }
 
 func TestBuilderGeneratesDockerfileForLocalSourceFallback(t *testing.T) {
-	sourceDir := t.TempDir()
+	workspaceDir := t.TempDir()
+	sourceDir := filepath.Join(workspaceDir, "source")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(sourceDir, "package.json"), []byte(`{"scripts":{"start":"node server.js"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +74,7 @@ func TestBuilderGeneratesDockerfileForLocalSourceFallback(t *testing.T) {
 		"workflowJobs": []any{map[string]any{"id": "job_1", "type": "build-and-deploy", "status": "queued", "targetType": "deployment", "targetId": "dep_1", "payload": map[string]any{"deploymentId": "dep_1", "serviceId": "svc_1", "projectId": "prj_1"}, "attempts": 0, "maxAttempts": 1, "runAfter": "2026-01-01T00:00:00Z"}},
 	})
 
-	builder := worker.New(controlplane.NewFileStore(stateFile), worker.OSRunner{}, worker.Config{WorkspaceDir: t.TempDir(), Registry: "registry.local", DryRun: true})
+	builder := worker.New(controlplane.NewFileStore(stateFile), worker.OSRunner{}, worker.Config{WorkspaceDir: workspaceDir, Registry: "registry.local", DryRun: true})
 	result, err := builder.RunOnce(context.Background())
 	if err != nil {
 		t.Fatalf("RunOnce failed: %v", err)
@@ -88,6 +92,25 @@ func TestBuilderGeneratesDockerfileForLocalSourceFallback(t *testing.T) {
 	logs := marshalString(t, readState(t, stateFile)["buildLogs"])
 	if !strings.Contains(logs, "generated Dockerfile") {
 		t.Fatalf("expected generated Dockerfile log, got %s", logs)
+	}
+}
+
+func TestBuilderRejectsEscapingBuildPaths(t *testing.T) {
+	workspaceDir := t.TempDir()
+	sourceDir := filepath.Join(workspaceDir, "source")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stateFile := writeState(t, map[string]any{
+		"projects": []any{map[string]any{"id": "prj_1", "name": "Demo", "slug": "demo"}},
+		"services": []any{map[string]any{"id": "svc_1", "projectId": "prj_1", "name": "api", "slug": "api", "sourceType": "local", "buildMode": "dockerfile", "localPath": sourceDir, "dockerfilePath": "../Dockerfile"}},
+		"deployments": []any{map[string]any{"id": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "status": "queued", "commitSha": "local"}},
+		"workflowJobs": []any{map[string]any{"id": "job_1", "type": "build-and-deploy", "status": "queued", "targetType": "deployment", "targetId": "dep_1", "payload": map[string]any{"deploymentId": "dep_1", "serviceId": "svc_1", "projectId": "prj_1", "buildContext": "../../"}, "attempts": 0, "maxAttempts": 1, "runAfter": "2026-01-01T00:00:00Z"}},
+	})
+
+	builder := worker.New(controlplane.NewFileStore(stateFile), worker.OSRunner{}, worker.Config{WorkspaceDir: workspaceDir, Registry: "registry.local", DryRun: true})
+	if _, err := builder.RunOnce(context.Background()); err == nil || !strings.Contains(err.Error(), "escapes allowed base directory") {
+		t.Fatalf("expected path escape error, got %v", err)
 	}
 }
 

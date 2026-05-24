@@ -217,7 +217,11 @@ func (b *Builder) prepareSource(ctx context.Context, state *buildContext) error 
 	}
 	localPath := firstNonEmpty(stringValue(state.Job.Payload["localPath"]), state.Service.LocalPath)
 	if localPath != "" {
-		state.SourceDir = localPath
+		sourceDir, err := b.resolveLocalSourceDir(localPath)
+		if err != nil {
+			return err
+		}
+		state.SourceDir = sourceDir
 		state.Steps = append(state.Steps, StepResult{Type: "source-local", DryRun: b.Config.DryRun, Detail: localPath})
 		return b.writeLog(ctx, state, "source", "using local source path "+localPath, "info")
 	}
@@ -271,15 +275,18 @@ func (b *Builder) prepareBuildPlan(ctx context.Context, state *buildContext) err
 	state.Plan = plan
 	state.Image = image
 	state.Push = b.Config.Push || b.Config.DryRun
-	state.ContextDir = filepath.Join(state.SourceDir, firstNonEmpty(stringValue(state.Job.Payload["buildContext"]), state.Service.BuildContext, state.Service.RootDirectory, "."))
+	contextDir, err := resolvePathWithin(state.SourceDir, firstNonEmpty(stringValue(state.Job.Payload["buildContext"]), state.Service.BuildContext, state.Service.RootDirectory, "."))
+	if err != nil {
+		return err
+	}
+	state.ContextDir = contextDir
 	if isPrebuilt(state.Service, state.Deployment) || mode == "prebuilt-image" {
 		return nil
 	}
 	dockerfilePath := firstNonEmpty(stringValue(state.Job.Payload["dockerfilePath"]), state.Service.DockerfilePath, "Dockerfile")
-	if filepath.IsAbs(dockerfilePath) {
-		state.Dockerfile = dockerfilePath
-	} else {
-		state.Dockerfile = filepath.Join(state.SourceDir, dockerfilePath)
+	state.Dockerfile, err = resolvePathWithin(state.SourceDir, dockerfilePath)
+	if err != nil {
+		return err
 	}
 	if mode == "dockerfile" || fileExists(state.Dockerfile) {
 		state.Plan.Mode = "dockerfile"
@@ -395,6 +402,38 @@ func (b *Builder) metadataDir() string {
 		return b.Config.MetadataDir
 	}
 	return filepath.Join(b.Config.WorkspaceDir, "metadata")
+}
+
+func (b *Builder) resolveLocalSourceDir(localPath string) (string, error) {
+	sourceDir := filepath.Clean(localPath)
+	if !filepath.IsAbs(sourceDir) {
+		sourceDir = filepath.Join(b.Config.WorkspaceDir, sourceDir)
+	}
+	return resolvePathWithin(b.Config.WorkspaceDir, sourceDir)
+}
+
+func resolvePathWithin(baseDir, value string) (string, error) {
+	base := filepath.Clean(baseDir)
+	if !filepath.IsAbs(base) {
+		absBase, err := filepath.Abs(base)
+		if err != nil {
+			return "", err
+		}
+		base = absBase
+	}
+	candidate := value
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(base, candidate)
+	}
+	candidate = filepath.Clean(candidate)
+	rel, err := filepath.Rel(base, candidate)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("path %q escapes allowed base directory", value)
+	}
+	return candidate, nil
 }
 
 func (b *Builder) writeLog(ctx context.Context, state *buildContext, step, line, level string) error {

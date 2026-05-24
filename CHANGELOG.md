@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+### 보안
+
+- builder worker가 tenant 입력 경로(`localPath`, `buildContext`, `dockerfilePath`)를 workspace/source 디렉터리 경계 안으로 강제하도록 수정했습니다.
+- 경로가 `..` 또는 절대 경로로 빌드 경계를 벗어나는 경우 빌드를 실패 처리하도록 테스트를 추가했습니다.
+
 ### 문서
 
 - README를 한국어 진입 문서로 재작성했습니다.
