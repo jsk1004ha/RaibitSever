@@ -1,5 +1,5 @@
 import { apiAction, loadResourceConsole } from '../../../../../../../../lib/api';
-import { JsonCard } from '../../../../../../../../components/console-ui';
+import { ConsoleShell, JsonCard, MetricCard, StatusBadge } from '../../../../../../../../components/console-ui';
 
 const ENGINE_COMMANDS: Record<string, { query: string; command: string; help: string }> = {
   postgresql: { query: 'SELECT 1', command: 'SELECT 1', help: 'SQL query, schema/table browser, backup/restore command contract' },
@@ -20,55 +20,41 @@ export default async function ResourceConsolePage({ params }: { params: { orgSlu
   const engine = String(resource.engine || '').toLowerCase();
   const defaults = ENGINE_COMMANDS[engine] || { query: 'SELECT 1', command: 'browse', help: 'Provider-owned console adapter contract' };
   return (
-    <main style={pageStyle}>
-      <header>
-        <p style={eyebrowStyle}>Online DB / Resource manager</p>
-        <h1>{resource.name || params.resourceId}</h1>
-        <p>{engine} · {resource.status || 'provisioning'} · provider {resource.provider || 'managed'}</p>
-        <p>{defaults.help}</p>
-        <a href={`/org/${params.orgSlug}/projects/${params.projectId}`}>← Project console</a>
-      </header>
-
-      <section style={gridStyle}>
-        <form method="post" action={apiAction(`/resources/${params.resourceId}/console/query`, state.context)} style={cardStyle}>
-          <h2>Query / find / browse</h2>
-          <textarea name="query" defaultValue={defaults.query} rows={5} />
-          <label><input type="checkbox" name="confirmed" value="true" /> Confirm destructive command</label>
-          <button type="submit">Run /console/query</button>
-        </form>
-        <form method="post" action={apiAction(`/resources/${params.resourceId}/console/command`, state.context)} style={cardStyle}>
-          <h2>Provider command</h2>
-          <input name="command" defaultValue={defaults.command} />
-          <label><input type="checkbox" name="confirmed" value="true" /> Confirm mutation/delete</label>
-          <button type="submit">Run /console/command</button>
-        </form>
-        <form method="post" action={apiAction(`/resources/${params.resourceId}/provision`, state.context)} style={cardStyle}>
-          <h2>Provision / reconcile</h2>
-          <input type="hidden" name="dryRun" value="true" />
-          <button type="submit">Create provider plan + secret</button>
-        </form>
-        <form method="post" action={apiAction(`/resources/${params.resourceId}/attach`, state.context)} style={cardStyle}>
-          <h2>Attach to service</h2>
-          <input name="serviceId" placeholder="service id" required />
-          <input name="envPrefix" placeholder="optional ENV_PREFIX" />
-          <button type="submit">Inject env into service</button>
-        </form>
+    <ConsoleShell active="Projects" orgValue={params.orgSlug} projectValue={params.projectId} crumbs={`${params.projectId} / Resources / ${resource.name || params.resourceId}`} actions={<><a className="btn" href={`/org/${params.orgSlug}/projects/${params.projectId}`}>Project</a><button className="btn btn-danger" type="submit" form="provider-command">Credential rotation</button></>}>
+      <section className="page" data-od-id="resource-console">
+        <header className="page-header"><div><p className="eyebrow">Online DB / Resource manager</p><h1 className="page-title">{resource.name || params.resourceId}</h1><p className="page-subtitle">{defaults.help}. DB console은 provider-owned secret만 사용합니다. 사용자가 connection URL을 입력해도 실행 경로에는 반영하지 않습니다.</p></div><StatusBadge status={resource.status || 'provisioning'} /></header>
+        <section className="grid grid-3">
+          <MetricCard title="Engine" value={engine || 'resource'} detail={`provider ${resource.provider || 'managed'}`} />
+          <MetricCard title="Attached services" value={(resource.attachedServices || []).length || 0} detail="masked env injection" tone="ok" />
+          <article className="card"><p className="label">Connection</p><h2 className="mono">{state.schema?.connectionInfo?.databaseUrl || state.browse?.connectionInfo?.databaseUrl || 'provider-owned-secret'}</h2><p className="muted">Secret values are masked</p></article>
+        </section>
+        <section className="grid grid-main" style={{ marginTop: 16 }}>
+          <article className="card">
+            <div className="tabs"><button className="tab active">Schema</button><button className="tab">Query</button><button className="tab">Backups</button><button className="tab">Attach</button></div>
+            <form method="post" action={apiAction(`/resources/${params.resourceId}/console/query`, state.context)} className="stack">
+              <label className="field"><span className="label">Query / find / browse</span><textarea name="query" defaultValue={defaults.query} rows={5} className="textarea mono" /></label>
+              <label><span><input type="checkbox" name="confirmed" value="true" /> Confirm destructive command</span></label>
+              <button type="submit">Run /console/query</button>
+            </form>
+            {/* GET /console/tables /console/keys /console/collections */}
+          </article>
+          <aside className="stack">
+            <form id="provider-command" method="post" action={apiAction(`/resources/${params.resourceId}/console/command`, state.context)} className="card danger-zone">
+              <h2>Provider command</h2><input name="command" defaultValue={defaults.command} /><label><span><input type="checkbox" name="confirmed" value="true" /> Confirm mutation/delete</span></label><button type="submit">Run /console/command</button>
+            </form>
+            <form method="post" action={apiAction(`/resources/${params.resourceId}/provision`, state.context)} className="card"><h2>Provision / reconcile</h2><input type="hidden" name="dryRun" value="true" /><button type="submit">Create provider plan + secret</button></form>
+            <form method="post" action={apiAction(`/resources/${params.resourceId}/attach`, state.context)} className="card"><h2>Attach to service</h2><input name="serviceId" placeholder="service id" required /><input name="envPrefix" placeholder="optional ENV_PREFIX" /><button type="submit">Inject env into service</button></form>
+          </aside>
+        </section>
+        <section className="grid grid-3" style={{ marginTop: 16 }}>
+          <JsonCard title="Masked connection info" value={state.schema?.connectionInfo || state.browse?.connectionInfo || { mode: 'provider-owned-secret' }} />
+          <JsonCard title="Schema" value={state.schema} />
+          <JsonCard title="Tables" value={state.tables} />
+          <JsonCard title="Collections" value={state.collections} />
+          <JsonCard title="Keys / TTL" value={state.keys} />
+          <JsonCard title="Buckets / Objects / Subjects" value={state.browse} />
+        </section>
       </section>
-
-      <section style={gridStyle}>
-        <JsonCard title="Masked connection info" value={state.schema?.connectionInfo || state.browse?.connectionInfo || { mode: 'provider-owned-secret' }} />
-        <JsonCard title="Schema" value={state.schema} />
-        {/* GET /console/tables /console/keys /console/collections */}
-        <JsonCard title="Tables" value={state.tables} />
-        <JsonCard title="Collections" value={state.collections} />
-        <JsonCard title="Keys / TTL" value={state.keys} />
-        <JsonCard title="Buckets / Objects / Subjects" value={state.browse} />
-      </section>
-    </main>
+    </ConsoleShell>
   );
 }
-
-const pageStyle = { padding: 32, maxWidth: 1180, margin: '0 auto', display: 'grid', gap: 20 } as const;
-const gridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 } as const;
-const cardStyle = { border: '1px solid #dbeafe', borderRadius: 16, padding: 20, background: '#fff', display: 'grid', gap: 10 } as const;
-const eyebrowStyle = { color: '#2563eb', fontWeight: 800 } as const;

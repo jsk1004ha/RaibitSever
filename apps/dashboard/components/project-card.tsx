@@ -1,3 +1,5 @@
+import { StatusBadge } from './console-ui';
+
 type ProjectCardProps = {
   project: {
     id?: string;
@@ -12,11 +14,11 @@ type ProjectCardProps = {
 
 export function ProjectCard({ project, href }: ProjectCardProps) {
   const body = (
-    <article style={{ background: 'white', borderRadius: 16, padding: 20, border: '1px solid #e2e8f0', minHeight: 110 }}>
-      <strong>{project.name || project.slug || project.id}</strong>
-      <p>{project.status || 'active'} · {project.services ?? 0} services · {project.resources ?? 0} resources</p>
-      {href ? <span style={{ color: '#2563eb', fontWeight: 700 }}>Open console →</span> : null}
+    <article className="card project-card">
+      <div className="card-title"><h2>{project.name || project.slug || project.id}</h2><StatusBadge status={project.status || 'active'} /></div>
+      <p className="muted">{project.services ?? 0} services · {project.resources ?? 0} resources</p>
+      {href ? <span className="subtle-link">Open console →</span> : null}
     </article>
   );
-  return href ? <a href={href} style={{ textDecoration: 'none' }}>{body}</a> : body;
+  return href ? <a href={href}>{body}</a> : body;
 }

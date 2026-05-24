@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Deployment detail · RAIBITSERVER</title>
+  <link rel="stylesheet" href="../css/raibit.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar"><a class="brand" href="../index.html"><span class="brand-mark">RS</span><span>RAIBITSERVER</span></a><div class="switcher"><p class="switcher-label">PROJECT</p><div class="switcher-title">club-api <span>⌄</span></div></div><nav class="nav-group"><p class="nav-title">Deployment</p><a class="nav-link" href="project-overview.html">Overview</a><a class="nav-link active" href="deployment-detail.html">dep_prod_241</a><a class="nav-link" href="resource-console.html">Resources</a></nav></aside>
+    <main class="main">
+      <div class="topbar"><div class="crumbs">club-api / web / dep_prod_241</div><div class="toolbar"><button class="btn" data-theme-toggle>테마 전환</button><button class="btn">Cancel</button><button class="btn btn-danger">Rollback</button></div></div>
+      <section class="page" data-od-id="deployment-detail">
+        <header class="page-header"><div><h1 class="page-title">Production deployment</h1><p class="page-subtitle">실패 원인을 로그와 이벤트 타임라인에서 읽고, 위험 액션은 결과를 명확히 설명한 뒤 실행합니다.</p></div><span class="badge ok">Ready</span></header>
+        <div class="grid grid-3">
+          <article class="card"><p class="label">Commit</p><h2 class="mono">a31f9c2</h2><p class="muted">feat: add resource attach</p></article>
+          <article class="card"><p class="label">Image</p><h2 class="mono">web-a31f</h2><p class="muted">registry.raibit.dev/rabbit/club-api</p></article>
+          <article class="card"><p class="label">Duration</p><h2 class="mono">2m 18s</h2><p class="muted">build 91s · rollout 47s</p></article>
+        </div>
+        <div class="grid grid-main" style="margin-top:16px">
+          <section class="card">
+            <div class="card-title"><h2>Build logs</h2><div class="toolbar"><button class="btn">Copy</button><button class="btn">Download</button></div></div>
+            <div class="log-viewer" aria-label="build logs">
+              <div class="log-line"><span>12:39:02</span><span class="info">clone</span><span>repository rabbit-club/club-api at a31f9c2</span></div>
+              <div class="log-line"><span>12:39:11</span><span class="ok">detect</span><span>Dockerfile found at ./Dockerfile, fallback disabled</span></div>
+              <div class="log-line"><span>12:40:03</span><span class="info">build</span><span>RUN pnpm install --frozen-lockfile</span></div>
+              <div class="log-line"><span>12:40:49</span><span class="ok">push</span><span>pushed image digest sha256:masked</span></div>
+              <div class="log-line"><span>12:41:18</span><span class="ok">ready</span><span>deployment available, runtime URL assigned</span></div>
+            </div>
+          </section>
+          <aside class="grid">
+            <section class="card"><div class="card-title"><h2>Events</h2><span class="badge info">Live</span></div><div class="timeline"><div class="event"><span class="dot ok"></span><p><strong>Workflow queued</strong><br><span class="muted mono">build-and-deploy</span></p></div><div class="event"><span class="dot ok"></span><p><strong>Secret refs mounted</strong><br><span class="muted">DATABASE_URL remained masked</span></p></div><div class="event"><span class="dot ok"></span><p><strong>Network policy applied</strong><br><span class="muted">namespace isolated</span></p></div></div></section>
+            <section class="card danger-zone"><h2>Rollback confirmation</h2><p class="muted" style="margin-top:8px">이전 READY image로 되돌립니다. 연결된 DB는 변경하지 않지만 새 배포 이벤트와 audit log가 기록됩니다.</p><input class="input" style="margin-top:12px" placeholder="rollback club-api 입력"><button class="btn btn-danger" style="margin-top:10px">Rollback queue</button></section>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="../js/raibit.js"></script>
+</body>
+</html>

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAIBITSERVER Console Wireframes</title>
+  <link rel="stylesheet" href="css/raibit.css">
+</head>
+<body>
+  <main class="hero">
+    <section class="hero-copy" data-od-id="hero">
+      <p class="eyebrow">RAIBITSERVER · PRODUCT CONSOLE WIREFRAME</p>
+      <h1>작은 팀이 앱과 DB를 안전하게 배포하는 클라우드 콘솔</h1>
+      <p class="page-subtitle">Vercel식 배포 흐름, Supabase식 리소스 콘솔, Datadog식 운영 가시성을 하나의 프로젝트 모델로 묶은 베타 출시용 UI/UX 설계입니다.</p>
+      <div class="toolbar">
+        <a class="btn btn-primary" href="screens/org-dashboard.html">콘솔 와이어프레임 보기</a>
+        <a class="btn" href="ux-spec.html">전체 UX spec 보기</a>
+        <button class="btn btn-ghost" data-theme-toggle>테마 전환</button>
+      </div>
+      <div class="screen-list">
+        <a class="card screen-card" href="screens/create-project.html">
+          <span class="badge info">Flow</span>
+          <h2>Create project</h2>
+          <p class="muted">GitHub, Dockerfile, 이미지, ZIP 예제를 같은 모델로 시작합니다.</p>
+        </a>
+        <a class="card screen-card" href="screens/project-overview.html">
+          <span class="badge ok">Project</span>
+          <h2>Project overview</h2>
+          <p class="muted">서비스, 리소스, 도메인, 배포 상태를 한 화면에서 읽습니다.</p>
+        </a>
+        <a class="card screen-card" href="screens/deployment-detail.html">
+          <span class="badge warn">Deploy</span>
+          <h2>Logs and events</h2>
+          <p class="muted">빌드 로그, 이벤트 타임라인, rollback을 같은 맥락에 둡니다.</p>
+        </a>
+        <a class="card screen-card" href="screens/resource-console.html">
+          <span class="badge ok">DBaaS</span>
+          <h2>Resource console</h2>
+          <p class="muted">masked connection, schema browser, guarded read-only query를 제공합니다.</p>
+        </a>
+        <a class="card screen-card" href="screens/admin-approval.html">
+          <span class="badge danger">Admin</span>
+          <h2>Approval and quota</h2>
+          <p class="muted">pending user 승인, quota 설정, audit trail을 한 흐름으로 설계합니다.</p>
+        </a>
+        <a class="card screen-card" href="screens/landing-auth.html">
+          <span class="badge info">Public</span>
+          <h2>Landing and auth</h2>
+          <p class="muted">초보 사용자에게는 빠른 배포 약속을, 숙련자에게는 운영 깊이를 보여줍니다.</p>
+        </a>
+      </div>
+    </section>
+    <aside class="console-preview" aria-label="RAIBITSERVER console preview">
+      <div class="preview-bar"><span></span><span></span><span></span></div>
+      <div class="preview-body grid">
+        <div class="card-title">
+          <div>
+            <p class="label">PROJECT</p>
+            <h2>club-api</h2>
+          </div>
+          <span class="badge ok">Healthy</span>
+        </div>
+        <div class="grid grid-3">
+          <div class="card"><p class="label">Services</p><h2 class="num">5</h2><p class="muted">web, worker, cron</p></div>
+          <div class="card"><p class="label">Resources</p><h2 class="num">3</h2><p class="muted">Postgres, Redis, S3</p></div>
+          <div class="card"><p class="label">Deployments</p><h2 class="num">18</h2><p class="muted">오늘 4회</p></div>
+        </div>
+        <div class="log-viewer">
+          <div class="log-line"><span>12:41:03</span><span class="ok">ready</span><span>image pushed registry.raibit/club-api:web-a31f</span></div>
+          <div class="log-line"><span>12:41:12</span><span class="info">event</span><span>network policy applied to namespace org-rabbit</span></div>
+          <div class="log-line"><span>12:41:18</span><span class="ok">live</span><span>runtime URL issued web--club-api--rabbit.apps.raibit.dev</span></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+  <script src="js/raibit.js"></script>
+</body>
+</html>

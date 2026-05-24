@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Resource console · RAIBITSERVER</title>
+  <link rel="stylesheet" href="../css/raibit.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar"><a class="brand" href="../index.html"><span class="brand-mark">RS</span><span>RAIBITSERVER</span></a><div class="switcher"><p class="switcher-label">RESOURCE</p><div class="switcher-title">club-postgres <span>⌄</span></div></div><nav class="nav-group"><p class="nav-title">Resource</p><a class="nav-link" href="project-overview.html">Project</a><a class="nav-link active" href="resource-console.html">Console</a><a class="nav-link" href="deployment-detail.html">Deployments</a></nav></aside>
+    <main class="main">
+      <div class="topbar"><div class="crumbs">club-api / Resources / club-postgres</div><div class="toolbar"><button class="btn" data-theme-toggle>테마 전환</button><button class="btn">백업 만들기</button><button class="btn btn-danger">Credential rotation</button></div></div>
+      <section class="page" data-od-id="resource-console">
+        <header class="page-header"><div><h1 class="page-title">club-postgres</h1><p class="page-subtitle">DB console은 provider-owned secret만 사용합니다. 사용자가 connection URL을 입력해도 실행 경로에는 반영하지 않습니다.</p></div><span class="badge ok">Provisioned</span></header>
+        <div class="grid grid-3">
+          <article class="card"><p class="label">Engine</p><h2>PostgreSQL</h2><p class="muted mono">15 · shared-small</p></article>
+          <article class="card"><p class="label">Attached services</p><h2 class="num">2</h2><p class="muted">web, worker</p></article>
+          <article class="card"><p class="label">Connection</p><h2 class="mono">postgres://••••••@internal</h2><p class="muted">Secret values are masked</p></article>
+        </div>
+        <div class="grid grid-main" style="margin-top:16px">
+          <section class="card">
+            <div class="tabs" data-tabs="#resource-panels"><button class="tab active" data-tab="schema">Schema</button><button class="tab" data-tab="query">Query</button><button class="tab" data-tab="backups">Backups</button><button class="tab" data-tab="attach">Attach</button></div>
+            <div id="resource-panels">
+              <section data-panel="schema"><table class="table"><thead><tr><th>Table</th><th>Rows</th><th>Size</th><th>Updated</th></tr></thead><tbody><tr><td><strong>members</strong></td><td class="mono">128</td><td class="mono">1.4 MB</td><td>오늘</td></tr><tr><td><strong>deployments</strong></td><td class="mono">391</td><td class="mono">4.8 MB</td><td>12분 전</td></tr><tr><td><strong>audit_logs</strong></td><td class="mono">901</td><td class="mono">7.1 MB</td><td>방금</td></tr></tbody></table></section>
+              <section data-panel="query" hidden><label class="field"><span class="label">Read-only SQL</span><textarea class="textarea mono" data-query-input>select id, status, created_at from deployments order by created_at desc limit 20;</textarea></label><div class="toolbar" style="margin-top:10px"><button class="btn btn-primary" data-run-query>Run query</button><button class="btn">Format</button></div><p class="callout mono" data-query-result style="margin-top:12px">Query result will appear here.</p></section>
+              <section data-panel="backups" hidden><table class="table"><thead><tr><th>Backup</th><th>Status</th><th>Size</th><th>Action</th></tr></thead><tbody><tr><td class="mono">backup_2026_05_23_0900</td><td><span class="badge ok">Ready</span></td><td class="mono">312 MB</td><td><button class="btn btn-danger">Restore</button></td></tr><tr><td class="mono">backup_2026_05_22_0900</td><td><span class="badge ok">Ready</span></td><td class="mono">304 MB</td><td><button class="btn">Download plan</button></td></tr></tbody></table></section>
+              <section data-panel="attach" hidden><p class="muted">Attach하면 DATABASE_URL과 provider-specific env가 선택한 서비스에 masked secret으로 주입됩니다.</p><div class="grid grid-2" style="margin-top:12px"><label class="card"><input type="checkbox" checked> web</label><label class="card"><input type="checkbox" checked> worker</label></div><button class="btn btn-primary" style="margin-top:12px">Attach selected services</button></section>
+            </div>
+          </section>
+          <aside class="grid">
+            <section class="card"><h2>Guard rails</h2><p class="muted" style="margin-top:8px">viewer는 read-only, destructive SQL은 confirmation과 audit log 필요, timeout과 result limit은 provider adapter에서 강제합니다.</p></section>
+            <section class="card danger-zone"><h2>Credential rotation</h2><p class="muted" style="margin-top:8px">새 credential 생성 후 attached service env를 교체하고 재배포가 필요할 수 있습니다.</p><button class="btn btn-danger" style="margin-top:12px">회전 계획 보기</button></section>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="../js/raibit.js"></script>
+</body>
+</html>

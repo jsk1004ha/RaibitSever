@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project overview · RAIBITSERVER</title>
+  <link rel="stylesheet" href="../css/raibit.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar"><a class="brand" href="../index.html"><span class="brand-mark">RS</span><span>RAIBITSERVER</span></a><div class="switcher"><p class="switcher-label">ORGANIZATION</p><div class="switcher-title">Rabbit Club <span>⌄</span></div></div><div class="switcher"><p class="switcher-label">PROJECT</p><div class="switcher-title">club-api <span>⌄</span></div></div><nav class="nav-group"><p class="nav-title">Project</p><a class="nav-link active" href="project-overview.html">Overview</a><a class="nav-link" href="deployment-detail.html">Deployments</a><a class="nav-link" href="resource-console.html">Resources</a><a class="nav-link" href="create-project.html">New service</a><a class="nav-link" href="../ux-spec.html">Spec</a></nav></aside>
+    <main class="main">
+      <div class="topbar"><div class="crumbs">Rabbit Club / club-api / Overview</div><div class="toolbar"><button class="btn" data-theme-toggle>테마 전환</button><button class="btn">도메인 추가</button><button class="btn btn-primary">Deploy</button></div></div>
+      <section class="page" data-od-id="project-overview">
+        <header class="page-header"><div><h1 class="page-title">club-api</h1><p class="page-subtitle">서비스와 관리형 리소스가 하나의 배포 가능한 프로젝트로 묶여 있습니다. Kubernetes 용어는 세부 이벤트에서만 노출합니다.</p></div><span class="badge ok">Production healthy</span></header>
+        <div class="tabs"><button class="tab active">Overview</button><button class="tab">Services</button><button class="tab">Deployments</button><button class="tab">Resources</button><button class="tab">Domains</button><button class="tab">Env</button><button class="tab">Audit</button><button class="tab">Settings</button></div>
+        <div class="grid grid-main">
+          <article class="grid">
+            <section class="card">
+              <div class="card-title"><h2>Services</h2><button class="btn">서비스 만들기</button></div>
+              <table class="table"><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>URL</th><th>Last deploy</th></tr></thead><tbody>
+                <tr><td><strong>web</strong><p class="muted">Dockerfile · main</p></td><td class="mono">web</td><td><span class="badge ok">Running</span></td><td class="mono">web--club-api--rabbit.apps</td><td class="mono">a31f · 12m</td></tr>
+                <tr><td><strong>worker</strong><p class="muted">queue consumer</p></td><td class="mono">worker</td><td><span class="badge ok">Running</span></td><td class="muted">private</td><td class="mono">a31f · 12m</td></tr>
+                <tr><td><strong>daily-report</strong><p class="muted">0 9 * * *</p></td><td class="mono">cron</td><td><span class="badge warn">Paused</span></td><td class="muted">job only</td><td class="mono">yesterday</td></tr>
+              </tbody></table>
+            </section>
+            <section class="card">
+              <div class="card-title"><h2>Deployment activity</h2><a class="btn btn-ghost" href="deployment-detail.html">상세 보기</a></div>
+              <div class="timeline">
+                <div class="event"><span class="dot ok"></span><p><strong>Production ready</strong><br><span class="muted mono">dep_prod_241 · image web-a31f · 12분 전</span></p></div>
+                <div class="event"><span class="dot info"></span><p><strong>PR preview created</strong><br><span class="muted mono">pr-42--web--club-api--rabbit.preview</span></p></div>
+                <div class="event"><span class="dot warn"></span><p><strong>Quota warning</strong><br><span class="muted">Build minutes 78% 사용. 다음 production deploy 전 안내 노출.</span></p></div>
+              </div>
+            </section>
+          </article>
+          <aside class="grid">
+            <section class="card"><div class="card-title"><h2>Resources</h2><a class="btn btn-ghost" href="resource-console.html">열기</a></div><p><span class="badge ok">PostgreSQL</span></p><p style="margin-top:8px"><span class="badge ok">Redis</span></p><p style="margin-top:8px"><span class="badge info">Object Storage</span></p></section>
+            <section class="card"><h2>Runtime URLs</h2><p class="mono" style="margin-top:10px">web--club-api--rabbit.apps.raibit.dev</p><p class="mono muted" style="margin-top:6px">club-api.rabbit.dev</p><button class="btn" style="margin-top:12px">DNS 검증</button></section>
+            <section class="card danger-zone"><div class="card-title"><h2>Danger zone</h2><span class="badge danger">Audit required</span></div><p class="muted">프로젝트 삭제, production rollback, secret rotation은 확인 문구와 감사 로그가 필요합니다.</p></section>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="../js/raibit.js"></script>
+</body>
+</html>

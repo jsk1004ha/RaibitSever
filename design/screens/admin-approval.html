@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin approval · RAIBITSERVER</title>
+  <link rel="stylesheet" href="../css/raibit.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar"><a class="brand" href="../index.html"><span class="brand-mark">RS</span><span>RAIBITSERVER</span></a><div class="switcher"><p class="switcher-label">ADMIN</p><div class="switcher-title">Beta operations <span>⌄</span></div></div><nav class="nav-group"><p class="nav-title">Admin</p><a class="nav-link active" href="admin-approval.html">Pending users</a><a class="nav-link" href="../ux-spec.html">Audit and quota spec</a><a class="nav-link" href="org-dashboard.html">Workspace</a></nav></aside>
+    <main class="main">
+      <div class="topbar"><div class="crumbs">Admin / Pending approvals</div><div class="toolbar"><button class="btn" data-theme-toggle>테마 전환</button><button class="btn">Audit log</button><button class="btn btn-primary">Invite member</button></div></div>
+      <section class="page" data-od-id="admin-approval">
+        <header class="page-header"><div><h1 class="page-title">승인 대기 사용자</h1><p class="page-subtitle">관리자는 사용자 유형과 quota를 함께 결정합니다. 승인, 거절, quota 변경은 모두 audit log에 남습니다.</p></div><span class="badge warn">3 pending</span></header>
+        <div class="grid grid-main">
+          <section class="card">
+            <div class="card-title"><h2>Pending queue</h2><div class="toolbar"><button class="btn">Filter</button><button class="btn">Export audit</button></div></div>
+            <table class="table"><thead><tr><th>User</th><th>Reason</th><th>Suggested quota</th><th>Status</th><th>Action</th></tr></thead><tbody>
+              <tr><td><strong>minji@school.ac.kr</strong><p class="muted">GitHub OAuth · 2시간 전</p></td><td>동아리 프로젝트 참여</td><td class="mono">projects 3 · services 6</td><td><span data-status class="badge warn">대기</span></td><td><button class="btn btn-primary" data-approve>승인</button></td></tr>
+              <tr><td><strong>hyunwoo@gmail.com</strong><p class="muted">Email signup · 오늘</p></td><td>외부 협업자</td><td class="mono">projects 1 · services 2</td><td><span class="badge warn">대기</span></td><td><button class="btn">검토</button></td></tr>
+              <tr><td><strong>sora@club.dev</strong><p class="muted">Invite link · 어제</p></td><td>Club member</td><td class="mono">club cap</td><td><span class="badge warn">대기</span></td><td><button class="btn btn-primary" data-approve>승인</button></td></tr>
+            </tbody></table>
+          </section>
+          <aside class="grid">
+            <section class="card"><h2>Quota editor</h2><div class="form-grid" style="margin-top:12px"><label class="field"><span class="label">Projects</span><input class="input mono" value="3"></label><label class="field"><span class="label">Services</span><input class="input mono" value="6"></label><label class="field"><span class="label">Build minutes</span><input class="input mono" value="300"></label><label class="field"><span class="label">DB storage GB</span><input class="input mono" value="10"></label></div><button class="btn btn-primary" style="margin-top:12px">승인 + quota 저장</button></section>
+            <section class="card danger-zone"><h2>Reject confirmation</h2><p class="muted" style="margin-top:8px">거절하면 사용자는 project, service, deployment, resource 생성을 계속 할 수 없습니다. 사유는 사용자에게 표시됩니다.</p><textarea class="textarea" placeholder="거절 사유"></textarea><button class="btn btn-danger" style="margin-top:10px">사용자 거절</button></section>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="../js/raibit.js"></script>
+</body>
+</html>

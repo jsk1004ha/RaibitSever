@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Create project · RAIBITSERVER</title>
+  <link rel="stylesheet" href="../css/raibit.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar"><a class="brand" href="../index.html"><span class="brand-mark">RS</span><span>RAIBITSERVER</span></a><div class="switcher"><p class="switcher-label">ORGANIZATION</p><div class="switcher-title">Rabbit Club <span>⌄</span></div></div><nav class="nav-group"><p class="nav-title">Create</p><a class="nav-link active" href="create-project.html">New project</a><a class="nav-link" href="org-dashboard.html">Dashboard</a><a class="nav-link" href="project-overview.html">Project</a></nav></aside>
+    <main class="main">
+      <div class="topbar"><div class="crumbs">Rabbit Club / New project</div><button class="btn" data-theme-toggle>테마 전환</button></div>
+      <section class="page" data-od-id="create-project">
+        <header class="page-header"><div><h1 class="page-title">프로젝트 만들기</h1><p class="page-subtitle">처음 온 학생은 repo만 고르면 시작하고, 숙련자는 Dockerfile, image, resource plan을 펼쳐 조정합니다.</p></div><span class="badge info">3 steps</span></header>
+        <div class="grid grid-main">
+          <article class="card">
+            <div class="tabs" data-tabs="#create-panels"><button class="tab active" data-tab="source">1 Source</button><button class="tab" data-tab="service">2 Service</button><button class="tab" data-tab="resource">3 Resource</button></div>
+            <div id="create-panels">
+              <section data-panel="source">
+                <div class="grid grid-2">
+                  <label class="card"><input type="radio" name="source" checked> <strong>GitHub repository</strong><p class="muted">App 설치, repository import, push deploy 자동화</p></label>
+                  <label class="card"><input type="radio" name="source"> <strong>Docker image</strong><p class="muted">이미 빌드된 container image로 시작</p></label>
+                  <label class="card"><input type="radio" name="source"> <strong>Dockerfile</strong><p class="muted">Dockerfile 우선 빌드, fallback 감지</p></label>
+                  <label class="card"><input type="radio" name="source"> <strong>ZIP or example</strong><p class="muted">수업/동아리 템플릿으로 빠르게 시작</p></label>
+                </div>
+                <div class="field" style="margin-top:14px"><span class="label">Repository URL</span><input class="input" value="https://github.com/rabbit-club/club-api"></div>
+              </section>
+              <section data-panel="service" hidden>
+                <div class="form-grid"><label class="field"><span class="label">Service name</span><input class="input" value="web"></label><label class="field"><span class="label">Type</span><select class="select"><option>web</option><option>private</option><option>worker</option><option>cron</option><option>job</option></select></label><label class="field"><span class="label">Build command</span><input class="input" value="Dockerfile detected"></label><label class="field"><span class="label">Runtime URL</span><input class="input" value="web--club-api--rabbit.apps.raibit.dev"></label></div>
+              </section>
+              <section data-panel="resource" hidden>
+                <div class="grid grid-3"><label class="card"><input type="checkbox" checked> PostgreSQL</label><label class="card"><input type="checkbox" checked> Redis</label><label class="card"><input type="checkbox"> Object Storage</label></div>
+                <p class="callout" style="margin-top:14px">Connection secret은 서비스 env에 masked 값으로 attach됩니다. 원문 secret은 콘솔에 표시하지 않습니다.</p>
+              </section>
+            </div>
+            <div class="toolbar" style="margin-top:18px"><button class="btn">초안 저장</button><button class="btn btn-primary">프로젝트 생성</button></div>
+          </article>
+          <aside class="grid">
+            <article class="card"><h2>생성될 desired state</h2><div class="code-panel" style="padding:12px;margin-top:12px;white-space:pre">project: club-api
+services:
+  - web: Dockerfile
+resources:
+  - postgresql
+  - redis
+security:
+  nonRoot: true
+  networkPolicy: default</div></article>
+            <article class="card"><h2>Quota preview</h2><p class="muted">Project 8/10 · Services 15/20 · DB storage 4.2GB/10GB</p><div class="meter" style="--value: 42%; margin-top:12px"><span></span></div></article>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="../js/raibit.js"></script>
+</body>
+</html>

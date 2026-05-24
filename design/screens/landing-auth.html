@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Landing and auth · RAIBITSERVER</title>
+  <link rel="stylesheet" href="../css/raibit.css">
+</head>
+<body>
+  <main class="hero" data-od-id="landing-auth">
+    <section class="hero-copy">
+      <p class="eyebrow">RAIBITSERVER BETA</p>
+      <h1>동아리 앱을 repo에서 runtime URL까지</h1>
+      <p class="page-subtitle">GitHub 저장소, Dockerfile, 관리형 DB, preview deployment를 하나의 프로젝트로 관리합니다. 기본값은 안전하고, 필요할 때만 깊은 인프라 설정을 펼칩니다.</p>
+      <div class="toolbar"><button class="btn btn-primary">GitHub로 시작</button><button class="btn">이메일로 가입</button><button class="btn btn-ghost" data-theme-toggle>테마 전환</button></div>
+      <div class="callout"><strong>승인 대기 안내</strong><p class="muted">관리자 승인 전에는 project 생성, deployment, resource provision이 잠겨 있습니다. 초대받은 동아리 멤버는 승인 후 기본 quota 없이 시작합니다.</p></div>
+    </section>
+    <aside class="console-preview">
+      <div class="preview-bar"><span></span><span></span><span></span></div>
+      <div class="preview-body grid">
+        <h2>Sign in</h2>
+        <button class="btn btn-primary">Continue with GitHub</button>
+        <div class="form-grid"><input class="input" placeholder="Email"><input class="input" placeholder="Password" type="password"></div>
+        <button class="btn">Create account</button>
+        <p class="muted">Secret, token, private key values are never shown in the console.</p>
+      </div>
+    </aside>
+  </main>
+  <script src="../js/raibit.js"></script>
+</body>
+</html>

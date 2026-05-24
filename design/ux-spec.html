@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAIBITSERVER UX Spec</title>
+  <link rel="stylesheet" href="css/raibit.css">
+</head>
+<body>
+  <main class="page spec" data-od-id="ux-spec">
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">RAIBITSERVER · UX SPEC</p>
+        <h1 class="page-title">제품형 SaaS 콘솔 설계 명세</h1>
+        <p class="page-subtitle">대상은 동아리/학교 팀원이지만 구조는 운영 가능한 developer cloud platform입니다. UI는 배포 상태, 서비스 상태, 리소스 상태를 먼저 말하고 Kubernetes/control-plane 개념은 이벤트와 고급 설정에서만 드러냅니다.</p>
+      </div>
+      <div class="toolbar"><a class="btn" href="index.html">런처</a><button class="btn" data-theme-toggle>테마 전환</button></div>
+    </header>
+
+    <section class="card spec-section">
+      <h2>1. IA / Navigation</h2>
+      <table class="table">
+        <tbody>
+          <tr><th>Global sidebar</th><td>Dashboard, Projects, Deployments, Resources, GitHub, Usage, Audit, Admin, Settings. 모바일에서는 상단 org/project switcher와 하단 수준의 horizontal nav로 축약합니다.</td></tr>
+          <tr><th>Organization switcher</th><td>조직명, role, quota 상태를 함께 표시합니다. pending user는 switcher 아래에 “승인 대기 중” banner를 고정합니다.</td></tr>
+          <tr><th>Project switcher</th><td>최근 프로젝트, 상태 badge, 검색, “새 프로젝트” CTA. 프로젝트 내부에서는 Overview, Services, Deployments, Resources, Domains, Env, Logs, Audit, Settings tabs.</td></tr>
+          <tr><th>Admin</th><td>Pending users, User quota, Global usage, Audit logs, Provider health. 일반 member에게는 노출하지 않습니다.</td></tr>
+          <tr><th>GitHub integration</th><td>Installations, repositories, import, attach, webhook health, PR preview policy.</td></tr>
+          <tr><th>Usage/quota/audit</th><td>사용량은 user/org/project 레벨로 분리하고 quota block의 원인과 관리자 요청 CTA를 함께 표시합니다.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card spec-section">
+      <h2>2. 핵심 화면별 설계</h2>
+      <table class="table">
+        <thead><tr><th>화면</th><th>목적 / 정보 구조 / CTA</th><th>상태 / 권한 / 위험 액션 / 반응형</th></tr></thead>
+        <tbody>
+          <tr><td>Landing / intro</td><td>repo에서 runtime URL까지의 가치를 1문장으로 설명. CTA: GitHub로 시작, 이메일 가입, 데모 보기.</td><td>pending 안내를 사전 노출. 모바일은 auth card를 아래로 이동.</td></tr>
+          <tr><td>Login / Signup</td><td>GitHub OAuth 우선, email fallback. CTA: Continue with GitHub.</td><td>OAuth 오류, 승인 대기, 초대 만료 상태 분리. secret/token은 표시하지 않음.</td></tr>
+          <tr><td>Organization dashboard</td><td>프로젝트 상태, 오늘 배포, quota, 최근 이벤트, 추천 행동.</td><td>pending은 read-only. admin은 pending/admin alerts 표시. 모바일은 metrics 뒤 recent projects.</td></tr>
+          <tr><td>Project list</td><td>검색, 상태, 서비스 수, 리소스 수, 마지막 배포. CTA: 새 프로젝트.</td><td>empty: “첫 repo를 배포하세요”. quota 초과 시 CTA disabled + 요청 버튼.</td></tr>
+          <tr><td>Create project flow</td><td>Source → Service → Resource → Review. GitHub/Dockerfile/image/ZIP 선택.</td><td>loading은 repo scan skeleton. error는 권한/branch/Dockerfile 원인별. quota block 표시.</td></tr>
+          <tr><td>Project overview</td><td>services, deployments, resources, domains, env, audit를 요약.</td><td>admin은 danger zone 전체. member는 권한 있는 action만. 모바일은 service cards로 전환.</td></tr>
+          <tr><td>Create service flow</td><td>type(web/private/worker/cron/job), source, env, resource attach, preview policy.</td><td>cron/job은 schedule validator. 위험 env overwrite는 confirmation.</td></tr>
+          <tr><td>Service detail</td><td>runtime URL, repo, branch, replicas, logs, env, domains, deployments.</td><td>delete service는 typed confirmation과 audit preview.</td></tr>
+          <tr><td>Deployment list/detail</td><td>production/manual/preview filter, build logs, events, image, commit, rollback.</td><td>failed state는 원인 요약과 “로그에서 보기”. rollback은 이전 READY image만 허용.</td></tr>
+          <tr><td>PR preview</td><td>PR number, commit, preview URL, cleanup state, GitHub check plan.</td><td>closed PR은 cleanup event. 모바일은 URL/copy action 우선.</td></tr>
+          <tr><td>Runtime logs</td><td>service runtime logs, severity filter, time range, copy/download.</td><td>secret masking highlight. loading은 streaming placeholder.</td></tr>
+          <tr><td>Env / secrets</td><td>masked key table, add/edit, .env upload, rotation history.</td><td>값 reveal 없음. overwrite/delete는 confirm. viewer는 read-only.</td></tr>
+          <tr><td>Resource catalog/create</td><td>Postgres, MySQL, Redis, Object, Qdrant, NATS 등 use-case별 추천.</td><td>초보는 “웹 앱 DB”, “캐시”, “파일 저장소”부터. 고급 engine은 접힘.</td></tr>
+          <tr><td>Resource detail/console</td><td>masked connection, schema/tables/keys/browser, guarded query, attach/detach.</td><td>destructive query 차단. restore/rotate/delete는 consequence copy + audit.</td></tr>
+          <tr><td>Backup/restore/rotation</td><td>백업 목록, restore target, rotation impact plan.</td><td>restore는 downtime, data overwrite, service restart 가능성을 명시.</td></tr>
+          <tr><td>Domain management</td><td>runtime URL, custom domain, DNS record, TLS status, preview URL.</td><td>delete domain은 traffic impact copy. 모바일은 record copy UX 우선.</td></tr>
+          <tr><td>GitHub integration/import</td><td>installation, repository list, import, attach, webhook health.</td><td>bad signature / missing installation / permission denied를 분리.</td></tr>
+          <tr><td>Usage/quota</td><td>projects, services, deployments/day, preview, DB storage, build minutes, runtime hours, CPU/memory.</td><td>quota 초과는 차단 액션과 관리자 요청 CTA. admin은 quota editor.</td></tr>
+          <tr><td>Admin approval/quota</td><td>pending queue, approve/reject, account type, quota preset, audit trail.</td><td>거절은 사유 필수. quota 변경은 이전/이후 diff 표시.</td></tr>
+          <tr><td>Audit log/settings</td><td>actor, action, target, IP/session, before/after summary, export.</td><td>admin-only export. settings danger zone은 가장 아래 고정.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card spec-section">
+      <h2>3. Design System</h2>
+      <div class="grid grid-2">
+        <div><h3>Tokens</h3><div class="code-panel" style="padding:12px;white-space:pre">{
+  "color": {
+    "bg": "oklch(17% 0.018 245)",
+    "surface": "oklch(21% 0.018 245)",
+    "fg": "oklch(92% 0.008 245)",
+    "muted": "oklch(69% 0.018 245)",
+    "accent": "oklch(69% 0.16 150)",
+    "danger": "oklch(68% 0.19 25)"
+  },
+  "font": {
+    "display": "SF Pro Display, Segoe UI, system-ui",
+    "body": "SF Pro Text, Segoe UI, system-ui",
+    "mono": "JetBrains Mono, IBM Plex Mono, ui-monospace"
+  },
+  "space": [4, 8, 12, 16, 24, 32, 48],
+  "radius": {"sm": 7, "md": 10, "lg": 16}
+}</div></div>
+        <div><h3>Patterns</h3><p class="muted">StatusBadge는 Ready, Building, Queued, Failed, Paused, Provisioning, Attached, Pending, Blocked를 색상+문구+microcopy로 구분합니다. Button은 primary, secondary, ghost, danger. Card/Table/Form/LogViewer는 hairline border, tabular numerics, compact density. Modal은 typed confirmation과 consequence list. Toast는 action result만, long-running 작업은 EventStream으로 이동합니다.</p></div>
+      </div>
+    </section>
+
+    <section class="card spec-section">
+      <h2>4. 구현 컴포넌트</h2>
+      <p class="muted">AppShell, SidebarNav, TopBar, OrgSwitcher, ProjectSwitcher, ProjectTabs, StatusBadge, ServiceCard, ResourceCard, DeploymentTimeline, LogViewer, EventStream, SecretInput, EnvTable, UsageMeter, QuotaEditor, AuditLogTable, DangerZone, EmptyState, CommandPalette, RepositoryImportWizard, ResourceAttachDrawer, QueryConsole, ConfirmActionModal.</p>
+      <div class="code-panel" style="padding:12px;margin-top:12px;white-space:pre">type StatusBadgeProps = {
+  status: "ready" | "building" | "queued" | "failed" | "paused" | "pending" | "blocked";
+  label?: string;
+  tone?: "success" | "info" | "warning" | "danger" | "neutral";
+};
+
+type ResourceCardProps = {
+  engine: "postgresql" | "redis" | "object-storage" | "qdrant" | "nats";
+  status: "provisioned" | "provisioning" | "failed";
+  attachedServices: string[];
+  maskedConnection: string;
+  quotaImpact: { storageMb: number; runtimeHoursMonthly?: number };
+};</div>
+    </section>
+
+    <section class="card spec-section">
+      <h2>5. 제품화 UX flows</h2>
+      <table class="table"><tbody>
+        <tr><th>신규 승인 대기</th><td>가입 → pending dashboard → 허용된 읽기 영역만 표시 → 관리자에게 요청 메시지 → 승인되면 onboarding checklist 재개.</td></tr>
+        <tr><th>관리자 승인</th><td>Pending queue → 사용자 맥락 확인 → account type 선택 → quota preset 조정 → approve → audit log 기록 → 사용자 알림.</td></tr>
+        <tr><th>GitHub import 배포</th><td>GitHub App 설치 → repo 선택 → Dockerfile scan → service type 확인 → env/resource attach → deploy queued → logs/events → runtime URL.</td></tr>
+        <tr><th>PR preview</th><td>PR opened webhook → preview deployment 생성 → preview URL/check plan → PR closed cleanup workflow → cleanup event.</td></tr>
+        <tr><th>Resource attach</th><td>catalog 선택 → plan/size 선택 → provision → masked connection 확인 → service 선택 attach → env diff → redeploy 안내.</td></tr>
+        <tr><th>Read-only query</th><td>console 진입 → schema/table 선택 → SELECT 실행 → limit/timeout 결과 → destructive command는 차단 copy.</td></tr>
+        <tr><th>실패 후 rollback</th><td>failed badge → deployment detail → 로그 severity filter → 이벤트 원인 확인 → rollback modal → previous READY image queue.</td></tr>
+        <tr><th>Quota 초과</th><td>CTA disabled → 초과 항목/현재 사용량/필요 quota 표시 → 관리자 요청 → audit/notification.</td></tr>
+      </tbody></table>
+    </section>
+
+    <section class="card spec-section">
+      <h2>6. UI copy</h2>
+      <div class="grid grid-2">
+        <p><strong>Headline</strong><br>“Repo에서 runtime URL까지, 안전한 기본값으로 배포하세요.”</p>
+        <p><strong>Empty</strong><br>“아직 프로젝트가 없습니다. GitHub 저장소를 가져오면 첫 서비스와 preview URL을 함께 만들 수 있습니다.”</p>
+        <p><strong>Error</strong><br>“배포가 실패했습니다. Dockerfile build 단계에서 종료되었습니다. 로그에서 실패한 명령을 확인하세요.”</p>
+        <p><strong>Quota warning</strong><br>“이번 달 build minutes의 80%를 사용했습니다. 다음 배포는 가능하지만 quota 초과 시 새 배포가 차단됩니다.”</p>
+        <p><strong>Pending</strong><br>“관리자 승인 전에는 project 생성, deployment, resource provision이 잠겨 있습니다.”</p>
+        <p><strong>Secret masking</strong><br>“보안을 위해 secret 원문은 표시하지 않습니다. 필요한 경우 credential rotation으로 새 값을 발급하세요.”</p>
+        <p><strong>Confirmation</strong><br>“rollback club-api를 입력하면 이전 READY image로 되돌립니다. 이 작업은 audit log에 기록됩니다.”</p>
+        <p><strong>Tooltip</strong><br>“Preview deployment는 PR이 닫히면 자동 cleanup workflow를 생성합니다.”</p>
+      </div>
+    </section>
+
+    <section class="card spec-section">
+      <h2>7. Mock data and priority</h2>
+      <div class="code-panel" style="padding:12px;white-space:pre">{
+  "organization": "Rabbit Club",
+  "projects": [{"name": "club-api", "status": "healthy", "services": 5, "resources": 3}],
+  "deployments": [{"id": "dep_prod_241", "status": "ready", "commit": "a31f9c2"}],
+  "resources": [{"name": "club-postgres", "engine": "postgresql", "connection": "postgres://••••••@internal"}],
+  "pendingUsers": [{"email": "minji@school.ac.kr", "quota": {"projects": 3, "services": 6}}]
+}</div>
+      <p class="muted" style="margin-top:12px">첫 구현 우선순위: AppShell/RBAC visibility → GitHub import/create project → Project overview → Deployment logs/events → Resource console guarded query → Admin approval/quota → Usage/audit. 피해야 할 실수: CRUD 테이블만 나열, secret reveal, infra jargon 과노출, quota block 원인 미표시, 위험 액션 confirmation 누락, 모바일에서 desktop card만 축소.</p>
+    </section>
+  </main>
+  <script src="js/raibit.js"></script>
+</body>
+</html>
