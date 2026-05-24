@@ -18,21 +18,21 @@ import (
 )
 
 const (
-	DeploymentStatusBuilding   = "BUILDING"
-	DeploymentStatusImageReady = "IMAGE_READY"
+	DeploymentStatusBuilding    = "BUILDING"
+	DeploymentStatusImageReady  = "IMAGE_READY"
 	DeploymentStatusBuildFailed = "BUILD_FAILED"
 )
 
 type Config struct {
-	WorkerID      string
-	WorkspaceDir  string
-	Registry      string
-	DryRun        bool
-	Push          bool
-	Builder       string
-	Timeout       time.Duration
-	LeaseSeconds  int
-	MetadataDir   string
+	WorkerID     string
+	WorkspaceDir string
+	Registry     string
+	DryRun       bool
+	Push         bool
+	Builder      string
+	Timeout      time.Duration
+	LeaseSeconds int
+	MetadataDir  string
 }
 
 type Builder struct {
@@ -42,17 +42,17 @@ type Builder struct {
 }
 
 type Result struct {
-	Processed    bool              `json:"processed"`
-	JobID        string            `json:"jobId,omitempty"`
-	DeploymentID string            `json:"deploymentId,omitempty"`
-	ServiceID    string            `json:"serviceId,omitempty"`
-	ProjectID    string            `json:"projectId,omitempty"`
-	Image        string            `json:"image,omitempty"`
-	ImageDigest  string            `json:"imageDigest,omitempty"`
-	DryRun       bool              `json:"dryRun"`
-	Steps        []StepResult      `json:"steps,omitempty"`
-	Reason       string            `json:"reason,omitempty"`
-	Metadata     map[string]any    `json:"metadata,omitempty"`
+	Processed    bool           `json:"processed"`
+	JobID        string         `json:"jobId,omitempty"`
+	DeploymentID string         `json:"deploymentId,omitempty"`
+	ServiceID    string         `json:"serviceId,omitempty"`
+	ProjectID    string         `json:"projectId,omitempty"`
+	Image        string         `json:"image,omitempty"`
+	ImageDigest  string         `json:"imageDigest,omitempty"`
+	DryRun       bool           `json:"dryRun"`
+	Steps        []StepResult   `json:"steps,omitempty"`
+	Reason       string         `json:"reason,omitempty"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
 type StepResult struct {
@@ -63,18 +63,18 @@ type StepResult struct {
 }
 
 type buildContext struct {
-	Job        *controlplane.WorkflowJob
-	Deployment *controlplane.Deployment
-	Service    *controlplane.Service
-	Project    *controlplane.Project
-	Plan       buildplan.Plan
-	SourceDir  string
-	Dockerfile string
-	ContextDir string
-	Image      string
-	Push       bool
+	Job          *controlplane.WorkflowJob
+	Deployment   *controlplane.Deployment
+	Service      *controlplane.Service
+	Project      *controlplane.Project
+	Plan         buildplan.Plan
+	SourceDir    string
+	Dockerfile   string
+	ContextDir   string
+	Image        string
+	Push         bool
 	MetadataFile string
-	Steps      []StepResult
+	Steps        []StepResult
 }
 
 func New(store controlplane.Store, runner CommandRunner, config Config) *Builder {
@@ -294,7 +294,10 @@ func (b *Builder) prepareBuildPlan(ctx context.Context, state *buildContext) err
 }
 
 func resolvePathWithinSourceDir(sourceDir, candidate, field string) (string, error) {
-	sourceRoot, err := filepath.Abs(sourceDir)
+	if filepath.IsAbs(candidate) {
+		return "", fmt.Errorf("%s must be relative to source directory", field)
+	}
+	sourceRoot, err := filepath.Abs(filepath.Clean(sourceDir))
 	if err != nil {
 		return "", err
 	}
@@ -309,8 +312,8 @@ func resolvePathWithinSourceDir(sourceDir, candidate, field string) (string, err
 	if relative == "." || relative == "" {
 		return resolvedPath, nil
 	}
-	if strings.HasPrefix(relative, "..") || filepath.IsAbs(relative) {
-		return "", fmt.Errorf("%s must stay within source directory", field)
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) || filepath.IsAbs(relative) {
+		return "", fmt.Errorf("%s escapes source directory", field)
 	}
 	return resolvedPath, nil
 }
