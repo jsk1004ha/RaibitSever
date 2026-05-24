@@ -1,14 +1,14 @@
 import { Controller, Get, Req } from '@nestjs/common';
 import { RequirePermission } from '../auth/permissions.decorator';
-import { RAIBITSERVERService } from '../raibitserver.service';
+import { UsageService } from './usage.service';
 
 @Controller('usage')
 export class UsageController {
-  constructor(private readonly raibitServer: RAIBITSERVERService) {}
+  constructor(private readonly usageService: UsageService) {}
 
   @RequirePermission('metrics:read')
   @Get('me')
   me(@Req() req: any) {
-    return this.raibitServer.usageMe(req.raibitSubject);
+    return this.usageService.usageMe(req.raibitSubject);
   }
 }

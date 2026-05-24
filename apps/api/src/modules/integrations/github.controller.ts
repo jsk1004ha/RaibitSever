@@ -1,56 +1,56 @@
 import { Body, Controller, Get, Headers, Param, Post, Query, Req } from '@nestjs/common';
 import { RequirePermission } from '../../auth/permissions.decorator';
-import { RAIBITSERVERService } from '../../raibitserver.service';
+import { GitHubIntegrationService } from './github.service';
 
 @Controller()
 export class GitHubIntegrationController {
-  constructor(private readonly raibitServer: RAIBITSERVERService) {}
+  constructor(private readonly githubService: GitHubIntegrationService) {}
 
   @RequirePermission('project:read')
   @Get('github/installations')
   installations(@Query('organizationId') organizationId: string, @Req() req: any) {
-    return this.raibitServer.listGitHubInstallations(req.raibitSubject, organizationId);
+    return this.githubService.listGitHubInstallations(req.raibitSubject, organizationId);
   }
 
   @RequirePermission('team:invite')
   @Post('integrations/github')
   connect(@Body() input: Record<string, any>, @Req() req: any) {
-    return this.raibitServer.connectGitHub(input, req.raibitSubject);
+    return this.githubService.connectGitHub(input, req.raibitSubject);
   }
 
   @RequirePermission('project:read')
   @Get('integrations/github')
   list(@Query('organizationId') organizationId: string, @Req() req: any) {
-    return this.raibitServer.listGitHub(organizationId || req.raibitSubject.organizationId, req.raibitSubject);
+    return this.githubService.listGitHub(organizationId || req.raibitSubject.organizationId, req.raibitSubject);
   }
 
   @RequirePermission('deploy:run')
   @Post('projects/:projectId/services/:serviceId/github')
   attach(@Param('projectId') projectId: string, @Param('serviceId') serviceId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.raibitServer.attachGitHub(projectId, serviceId, input, req.raibitSubject);
+    return this.githubService.attachGitHub(projectId, serviceId, input, req.raibitSubject);
   }
 
   @RequirePermission('project:read')
   @Get('github/installations/:installationId/repositories')
   repositories(@Param('installationId') installationId: string, @Req() req: any) {
-    return this.raibitServer.listGitHubInstallationRepositories(installationId, req.raibitSubject);
+    return this.githubService.listGitHubInstallationRepositories(installationId, req.raibitSubject);
   }
 
   @Post('github/webhooks')
   webhook(@Headers('x-github-event') event: string, @Headers('x-github-delivery') deliveryId: string, @Headers('x-hub-signature-256') signature: string, @Body() payload: Record<string, any>, @Req() req: any) {
     const rawBody = Buffer.isBuffer(req.rawBody) ? req.rawBody.toString('utf8') : JSON.stringify(payload || {});
-    return this.raibitServer.handleGitHubWebhook({ event, deliveryId, signature, body: rawBody, payload });
+    return this.githubService.handleGitHubWebhook({ event, deliveryId, signature, body: rawBody, payload });
   }
 
   @RequirePermission('deploy:run')
   @Post('github/repositories/import')
   importRepository(@Body() input: Record<string, any>, @Req() req: any) {
-    return this.raibitServer.importGitHubRepository(input || {}, req.raibitSubject);
+    return this.githubService.importGitHubRepository(input || {}, req.raibitSubject);
   }
 
   @RequirePermission('deploy:run')
   @Post('github/repositories/:repositoryId/sync')
   syncRepository(@Param('repositoryId') repositoryId: string, @Body() input: Record<string, any>, @Req() req: any) {
-    return this.raibitServer.syncGitHubRepository(repositoryId, input || {}, req.raibitSubject);
+    return this.githubService.syncGitHubRepository(repositoryId, input || {}, req.raibitSubject);
   }
 }

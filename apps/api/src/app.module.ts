@@ -1,20 +1,30 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { RAIBITSERVERService } from './raibitserver.service';
-import { ProjectsController } from './modules/projects/projects.controller';
-import { ServiceDetailController, ServicesController } from './modules/services/services.controller';
-import { DeploymentLogsController, DeploymentsController, ServiceDeploymentsController } from './modules/deployments/deployments.controller';
-import { ResourceLifecycleController, ResourcesController } from './modules/resources/resources.controller';
-import { ResourceConsoleController } from './modules/resources/resource-console.controller';
-import { AuthController } from './modules/auth/auth.controller';
-import { EnvironmentController } from './modules/environment/environment.controller';
-import { GitHubIntegrationController } from './modules/integrations/github.controller';
-import { AdminController } from './modules/admin.controller';
-import { UsageController } from './modules/usage.controller';
 import { RbacGuard } from './auth/rbac.guard';
+import { ControlPlaneModule } from './control-plane.module';
+import { AdminModule } from './modules/admin.module';
+import { AuthModule } from './modules/auth/auth.module';
+import { DeploymentsModule } from './modules/deployments/deployments.module';
+import { EnvironmentModule } from './modules/environment/environment.module';
+import { IntegrationsModule } from './modules/integrations/integrations.module';
+import { ProjectsModule } from './modules/projects/projects.module';
+import { ResourcesModule } from './modules/resources/resources.module';
+import { ServicesModule } from './modules/services/services.module';
+import { UsageModule } from './modules/usage.module';
 
 @Module({
-  controllers: [AuthController, ProjectsController, ServicesController, ServiceDetailController, DeploymentsController, ServiceDeploymentsController, DeploymentLogsController, ResourcesController, ResourceLifecycleController, ResourceConsoleController, EnvironmentController, GitHubIntegrationController, AdminController, UsageController],
-  providers: [RAIBITSERVERService, { provide: APP_GUARD, useClass: RbacGuard }],
+  imports: [
+    ControlPlaneModule,
+    AuthModule,
+    ProjectsModule,
+    ServicesModule,
+    DeploymentsModule,
+    ResourcesModule,
+    EnvironmentModule,
+    IntegrationsModule,
+    AdminModule,
+    UsageModule,
+  ],
+  providers: [{ provide: APP_GUARD, useClass: RbacGuard }],
 })
 export class AppModule {}

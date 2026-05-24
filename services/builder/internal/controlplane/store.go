@@ -205,6 +205,7 @@ func (s *FileStore) FailWorkflowJob(ctx context.Context, jobID string, failure e
 		}
 		payload := mapField(job, "payload")
 		payload["lastError"] = Redact(failureMessage(failure))
+		payload["lastErrorSpec"] = ErrorSpecForFailure(failure, ErrorCodeUnknownInfra)
 		payload["failedAt"] = now.Format(time.RFC3339Nano)
 		job["payload"] = payload
 		if attempts < maxAttempts {

@@ -1,6 +1,7 @@
 import { deepClone, nowIso, stableId } from './ids.ts';
 import { isSecretKey, maskSecretValue } from './secrets.ts';
 import { sanitizeLogRecord } from './security.ts';
+import { normalizeInfrastructureError } from './error-spec.ts';
 
 export const WORKFLOW_TYPES = Object.freeze({
   BUILD_AND_DEPLOY: 'build-and-deploy',
@@ -106,12 +107,14 @@ export function failWorkflowJobRecord(job: Record<string, any>, error: any, opti
   const retryable = options.retryable !== false && attempts < maxAttempts;
   const nextRunAt = retryable ? new Date(now + retryDelayMs(attempts, options)).toISOString() : isoTimestamp(now);
   const safeError = workflowErrorMessage(error);
+  const errorSpec = normalizeInfrastructureError(error, options.errorCode || (safeError.includes('no workflow handler registered') ? 'WORKFLOW_HANDLER_MISSING' : 'UNKNOWN_INFRA_ERROR'));
   return {
     ...job,
     status: retryable ? WORKFLOW_STATUSES.QUEUED : WORKFLOW_STATUSES.FAILED,
     payload: {
       ...(job.payload || {}),
       lastError: safeError,
+      lastErrorSpec: errorSpec,
       failedAt: isoTimestamp(now),
     },
     runAfter: nextRunAt,

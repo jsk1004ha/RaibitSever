@@ -69,15 +69,20 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   }
 
   const appModule = await fs.readFile(new URL('../apps/api/src/app.module.ts', import.meta.url), 'utf8');
-  assert.match(appModule, /ServiceDeploymentsController/);
-  assert.match(appModule, /DeploymentLogsController/);
-  assert.match(appModule, /ResourceConsoleController/);
-  assert.match(appModule, /UsageController/);
+  for (const moduleName of ['AuthModule', 'ProjectsModule', 'ServicesModule', 'DeploymentsModule', 'ResourcesModule', 'EnvironmentModule', 'IntegrationsModule', 'AdminModule', 'UsageModule']) {
+    assert.match(appModule, new RegExp(moduleName));
+  }
 
   const servicesController = await fs.readFile(new URL('../apps/api/src/modules/services/services.controller.ts', import.meta.url), 'utf8');
+  const servicesModule = await fs.readFile(new URL('../apps/api/src/modules/services/services.module.ts', import.meta.url), 'utf8');
+  const servicesService = await fs.readFile(new URL('../apps/api/src/modules/services/services.service.ts', import.meta.url), 'utf8');
   const projectsController = await fs.readFile(new URL('../apps/api/src/modules/projects/projects.controller.ts', import.meta.url), 'utf8');
+  const projectsService = await fs.readFile(new URL('../apps/api/src/modules/projects/projects.service.ts', import.meta.url), 'utf8');
   const deploymentsController = await fs.readFile(new URL('../apps/api/src/modules/deployments/deployments.controller.ts', import.meta.url), 'utf8');
+  const deploymentsModule = await fs.readFile(new URL('../apps/api/src/modules/deployments/deployments.module.ts', import.meta.url), 'utf8');
+  const deploymentsService = await fs.readFile(new URL('../apps/api/src/modules/deployments/deployments.service.ts', import.meta.url), 'utf8');
   const resourcesController = await fs.readFile(new URL('../apps/api/src/modules/resources/resources.controller.ts', import.meta.url), 'utf8');
+  const resourcesModule = await fs.readFile(new URL('../apps/api/src/modules/resources/resources.module.ts', import.meta.url), 'utf8');
   const resourceConsoleController = await fs.readFile(new URL('../apps/api/src/modules/resources/resource-console.controller.ts', import.meta.url), 'utf8');
   const githubController = await fs.readFile(new URL('../apps/api/src/modules/integrations/github.controller.ts', import.meta.url), 'utf8');
   const authController = await fs.readFile(new URL('../apps/api/src/modules/auth/auth.controller.ts', import.meta.url), 'utf8');
@@ -85,13 +90,23 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   const persistence = await fs.readFile(new URL('../packages/core/src/persistence.ts', import.meta.url), 'utf8');
   const apiClient = await fs.readFile(new URL('../packages/api-client/src/index.ts', import.meta.url), 'utf8');
   assert.match(servicesController, /@Get\(\)/);
+  assert.match(servicesModule, /ServiceDeploymentsController|ServiceDetailController/);
+  assert.match(servicesModule, /providers: \[ServicesService\]/);
+  assert.match(servicesController, /constructor\(private readonly servicesService: ServicesService\)/);
+  assert.match(servicesService, /constructor\(private readonly controlPlane: RAIBITSERVERService\)/);
   assert.match(projectsController, /@Get\(':projectId'\)/);
+  assert.match(projectsService, /createProject\(project: ProjectSpec/);
   assert.match(projectsController, /@Patch\(':projectId'\)/);
   assert.match(projectsController, /@Delete\(':projectId'\)/);
   assert.match(servicesController, /ServiceDetailController/);
   assert.match(servicesController, /@Patch\(\)/);
   for (const marker of ["@Get('deployments/:deploymentId')", "@Patch('deployments/:deploymentId/status')", "@Post('deployments/:deploymentId/status')", "@Post('deployments/:deploymentId/cancel')", "@Post('deployments/:deploymentId/rollback')"]) assert.ok(deploymentsController.includes(marker), `${marker} missing from Deployments controller`);
+  assert.match(deploymentsModule, /ServiceDeploymentsController/);
+  assert.match(deploymentsModule, /DeploymentLogsController/);
+  assert.match(deploymentsModule, /providers: \[DeploymentsService\]/);
+  assert.match(deploymentsService, /updateDeploymentStatus/);
   assert.match(resourcesController, /@Get\(\)/);
+  assert.match(resourcesModule, /ResourceConsoleController/);
   for (const marker of ["@Get('schema')", "@Get('tables')", "@Get('collections')", "@Get('keys')", "@Post('query')", "@Post('command')", "@Post('browse')"]) assert.ok(resourceConsoleController.includes(marker), `${marker} missing from ResourceConsoleController`);
   for (const marker of ["@Get('github/installations')", "@Get('github/installations/:installationId/repositories')", "@Post('github/webhooks')", "@Post('github/repositories/import')", "@Post('github/repositories/:repositoryId/sync')"]) assert.ok(githubController.includes(marker), `${marker} missing from GitHub controller`);
   assert.ok(apiMain.includes('rawBody: true'), 'Nest bootstrap must keep raw webhook bytes for GitHub HMAC verification');

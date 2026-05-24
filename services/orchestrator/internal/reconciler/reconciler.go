@@ -184,11 +184,12 @@ func (r *ServiceReconciler) collectDiagnostics(ctx context.Context, service *sto
 }
 
 func (r *ServiceReconciler) markFailed(ctx context.Context, deployment *store.Deployment, failure error) error {
-	_, err := r.store.UpdateDeployment(ctx, deployment.ID, map[string]any{"status": store.DeploymentStatusFailed, "finishedAt": time.Now().UTC().Format(time.RFC3339Nano), "errorCode": "KUBERNETES_RECONCILE_FAILED", "errorMessage": store.Redact(failure.Error())})
+	errorSpec := store.ErrorSpecForFailure(failure, store.ErrorCodeKubernetesReconcileFailed)
+	_, err := r.store.UpdateDeployment(ctx, deployment.ID, map[string]any{"status": store.DeploymentStatusFailed, "finishedAt": time.Now().UTC().Format(time.RFC3339Nano), "errorCode": errorSpec.Code, "errorMessage": errorSpec.Message})
 	if err != nil {
 		return err
 	}
-	return r.store.AppendDeploymentEvent(ctx, store.DeploymentEventInput{DeploymentID: deployment.ID, Type: "rollout.failed", Message: failure.Error(), Metadata: map[string]any{}})
+	return r.store.AppendDeploymentEvent(ctx, store.DeploymentEventInput{DeploymentID: deployment.ID, Type: "rollout.failed", Message: errorSpec.Message, Metadata: map[string]any{"errorSpec": errorSpec}})
 }
 
 func (r *ServiceReconciler) runKubectl(ctx context.Context, args []string) (command.Result, error) {

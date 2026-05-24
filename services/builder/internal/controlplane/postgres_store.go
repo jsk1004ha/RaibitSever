@@ -143,6 +143,7 @@ func (s *PostgresStore) CompleteWorkflowJob(ctx context.Context, jobID string, r
 func (s *PostgresStore) FailWorkflowJob(ctx context.Context, jobID string, failure error) error {
 	return s.updateWorkflowJob(ctx, jobID, func(job *workflowJobUpdate, now time.Time) {
 		job.Payload["lastError"] = Redact(failureMessage(failure))
+		job.Payload["lastErrorSpec"] = ErrorSpecForFailure(failure, ErrorCodeUnknownInfra)
 		job.Payload["failedAt"] = now.Format(time.RFC3339Nano)
 		maxAttempts := job.MaxAttempts
 		if maxAttempts <= 0 {

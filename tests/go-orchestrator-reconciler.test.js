@@ -14,17 +14,23 @@ test('Go orchestrator reconciler contract is executable when Go exists or static
     return;
   }
 
-  const [main, reconciler, kube, store] = await Promise.all([
+  const [main, reconciler, kube, store, errorSpec] = await Promise.all([
     fs.readFile('services/orchestrator/cmd/orchestrator/main.go', 'utf8'),
     fs.readFile('services/orchestrator/internal/reconciler/reconciler.go', 'utf8'),
     fs.readFile('services/orchestrator/internal/kube/deployment.go', 'utf8'),
     fs.readFile('services/orchestrator/internal/store/store.go', 'utf8'),
+    fs.readFile('services/orchestrator/internal/store/error_spec.go', 'utf8'),
   ]);
   assert.match(main, /NewServiceReconcilerWithStore/);
   assert.match(store, /ListDeploymentsForReconcile/);
   assert.match(reconciler, /orchestrator\.apply\.started/);
   assert.match(reconciler, /rollout.*status/s);
   assert.match(reconciler, /preview\.cleanup\.completed/);
+  assert.match(reconciler, /ErrorCodeKubernetesReconcileFailed/);
+  assert.match(reconciler, /ErrorSpecForFailure/);
+  assert.match(errorSpec, /ErrorCodeImagePullBackoff/);
+  assert.match(errorSpec, /ErrorCodeKubernetesReconcileFailed/);
+  assert.match(errorSpec, /UserMessage/);
   assert.match(kube, /previewKey := "pr-"/);
   assert.match(kube, /serviceName = previewKey \+ "-" \+ baseServiceName/);
   assert.match(kube, /raibitserver\.io\/preview/);

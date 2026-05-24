@@ -20,7 +20,7 @@ import (
 const (
 	DeploymentStatusBuilding    = "BUILDING"
 	DeploymentStatusImageReady  = "IMAGE_READY"
-	DeploymentStatusBuildFailed = "BUILD_FAILED"
+	DeploymentStatusBuildFailed = controlplane.ErrorCodeBuildFailed
 )
 
 type Config struct {
@@ -203,11 +203,12 @@ func (b *Builder) markBuilding(ctx context.Context, state *buildContext) error {
 
 func (b *Builder) markFailed(ctx context.Context, state *buildContext, failure error) error {
 	_ = b.writeLog(ctx, state, "error", failure.Error(), "error")
-	_, err := b.Store.UpdateDeployment(ctx, state.Deployment.ID, map[string]any{"status": DeploymentStatusBuildFailed, "buildFinishedAt": time.Now().UTC().Format(time.RFC3339Nano), "errorCode": "BUILD_FAILED", "errorMessage": controlplane.Redact(failure.Error())})
+	errorSpec := controlplane.ErrorSpecForFailure(failure, controlplane.ErrorCodeBuildFailed)
+	_, err := b.Store.UpdateDeployment(ctx, state.Deployment.ID, map[string]any{"status": DeploymentStatusBuildFailed, "buildFinishedAt": time.Now().UTC().Format(time.RFC3339Nano), "errorCode": errorSpec.Code, "errorMessage": errorSpec.Message})
 	if err != nil {
 		return err
 	}
-	return b.Store.AppendDeploymentEvent(ctx, controlplane.DeploymentEventInput{DeploymentID: state.Deployment.ID, Type: "build.failed", Message: failure.Error(), Metadata: map[string]any{"jobId": state.Job.ID}})
+	return b.Store.AppendDeploymentEvent(ctx, controlplane.DeploymentEventInput{DeploymentID: state.Deployment.ID, Type: "build.failed", Message: errorSpec.Message, Metadata: map[string]any{"jobId": state.Job.ID, "errorSpec": errorSpec}})
 }
 
 func (b *Builder) prepareSource(ctx context.Context, state *buildContext) error {

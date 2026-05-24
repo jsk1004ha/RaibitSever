@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 import { signJwtHs256 } from '../packages/core/src/auth.ts';
+import { assertApiRuntimeConfig, validateApiRuntimeConfig } from '../packages/core/src/config.ts';
 
 test('env auth bypass flag is ignored unless explicitly confirmed outside production', async () => {
   const previous = snapshotEnv(['RAIBITSERVER_AUTH_DISABLED', 'RAIBITSERVER_AUTH_DISABLED_CONFIRM', 'NODE_ENV', 'RAIBITSERVER_AUTH_JWT_SECRET']);
@@ -24,6 +25,39 @@ test('env auth bypass flag is ignored unless explicitly confirmed outside produc
     server.close();
     restoreEnv(previous);
   }
+});
+
+test('API runtime config fails fast for unsafe production security settings', () => {
+  const safe = validateApiRuntimeConfig({
+    NODE_ENV: 'production',
+    PORT: '8080',
+    RAIBITSERVER_AUTH_RATE_LIMIT: '25',
+    RAIBITSERVER_AUTH_JWT_SECRET: 'x'.repeat(32),
+    RAIBITSERVER_SECRET_ENCRYPTION_KEY: 'y'.repeat(32),
+  });
+  assert.equal(safe.ok, true);
+  assert.equal(safe.config.port, 8080);
+  assert.equal(safe.config.auth.rateLimit, 25);
+
+  const unsafeEnv = {
+    NODE_ENV: 'production',
+    PORT: '70000',
+    RAIBITSERVER_AUTH_RATE_LIMIT: '0',
+    RAIBITSERVER_AUTH_DISABLED: '1',
+    RAIBITSERVER_AUTH_DEV_HEADERS: '1',
+    RAIBITSERVER_AUTH_JWT_SECRET: 'short',
+  };
+  const unsafe = validateApiRuntimeConfig(unsafeEnv);
+  assert.equal(unsafe.ok, false);
+  assert.deepEqual(unsafe.issues.map((issue) => issue.code), [
+    'INVALID_PORT',
+    'INVALID_POSITIVE_INTEGER',
+    'UNSAFE_PRODUCTION_AUTH_DISABLED',
+    'UNSAFE_PRODUCTION_DEV_HEADERS',
+    'WEAK_JWT_SECRET',
+    'MISSING_SECRET_ENCRYPTION_KEY',
+  ]);
+  assert.throws(() => assertApiRuntimeConfig(unsafeEnv), /invalid API runtime configuration/);
 });
 
 test('session JWT lifetime is server-clamped and login brute force is rate limited', async () => {

@@ -1,35 +1,35 @@
 import { Body, Controller, Get, HttpCode, Post, Query, Req } from '@nestjs/common';
 import { RequirePermission } from '../../auth/permissions.decorator';
-import { RAIBITSERVERService } from '../../raibitserver.service';
+import { AuthService } from './auth.service';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly raibitServer: RAIBITSERVERService) {}
+  constructor(private readonly authService: AuthService) {}
 
   @Post('signup')
   signup(@Body() input: Record<string, any>) {
-    return this.raibitServer.signup(input);
+    return this.authService.signup(input);
   }
 
   @Post('login')
   login(@Body() input: Record<string, any>) {
-    return this.raibitServer.login(input);
+    return this.authService.login(input);
   }
 
   @Get('github/login')
   githubLogin(@Query() input: Record<string, any>) {
-    return this.raibitServer.githubLogin(input || {});
+    return this.authService.githubLogin(input || {});
   }
 
   @Get('github/callback')
   githubCallback(@Query() input: Record<string, any>) {
-    return this.raibitServer.githubCallback(input || {});
+    return this.authService.githubCallback(input || {});
   }
 
   @RequirePermission('project:read')
   @Get('me')
   me(@Req() req: any) {
-    return this.raibitServer.currentUser(req.raibitSubject);
+    return this.authService.currentUser(req.raibitSubject);
   }
 
   @RequirePermission('project:read')

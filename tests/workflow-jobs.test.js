@@ -35,6 +35,8 @@ test('workflow processor retries failures with sanitized errors before final fai
   const failed = store.failWorkflowJob(second.id, 'TOKEN=abc123 failed', { workerId: 'worker-a', now: '2026-01-01T00:00:02.000Z' });
   assert.equal(failed.status, WORKFLOW_STATUSES.FAILED);
   assert.match(failed.payload.lastError, /TOKEN=\*\*\*\*/);
+  assert.equal(failed.payload.lastErrorSpec.code, 'UNKNOWN_INFRA_ERROR');
+  assert.equal(failed.payload.lastErrorSpec.message.includes('abc123'), false);
 });
 
 test('workflow processor completes jobs with masked result metadata', async () => {
@@ -138,7 +140,9 @@ test('deployment builder workflow records sanitized BUILD_FAILED status', async 
   assert.match(failed.errorMessage, /TOKEN=\*\*\*\*/);
   assert.equal(failed.errorMessage.includes('super-secret-value'), false);
   assert.equal(store.snapshot().workflowJobs[0].status, WORKFLOW_STATUSES.FAILED);
-  assert.equal(store.listDeploymentEvents(deployment.id).some((row) => row.type === 'build.failed'), true);
+  const buildFailedEvent = store.listDeploymentEvents(deployment.id).find((row) => row.type === 'build.failed');
+  assert.ok(buildFailedEvent);
+  assert.equal(buildFailedEvent.metadata.errorSpec.code, 'BUILD_FAILED');
 });
 
 test('rollout reconciler records sanitized FAILED status', async () => {
@@ -158,7 +162,9 @@ test('rollout reconciler records sanitized FAILED status', async () => {
   assert.equal(failed.errorCode, 'ROLLOUT_FAILED');
   assert.match(failed.errorMessage, /DATABASE_URL=\*\*\*\*/);
   assert.equal(failed.errorMessage.includes('user:pass'), false);
-  assert.equal(store.listDeploymentEvents(deployment.id).some((row) => row.type === 'rollout.failed'), true);
+  const rolloutFailedEvent = store.listDeploymentEvents(deployment.id).find((row) => row.type === 'rollout.failed');
+  assert.ok(rolloutFailedEvent);
+  assert.equal(rolloutFailedEvent.metadata.errorSpec.code, 'ROLLOUT_FAILED');
 });
 
 test('project service API accepts beta service types before deployment queueing', () => {

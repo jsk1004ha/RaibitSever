@@ -1,0 +1,13 @@
+import { Injectable } from '@nestjs/common';
+import { RAIBITSERVERService } from '../../raibitserver.service';
+
+@Injectable()
+export class AuthService {
+  constructor(private readonly controlPlane: RAIBITSERVERService) {}
+
+  signup(input: Record<string, any>) { return this.controlPlane.signup(input); }
+  login(input: Record<string, any>) { return this.controlPlane.login(input); }
+  githubLogin(input: Record<string, any>) { return this.controlPlane.githubLogin(input); }
+  githubCallback(input: Record<string, any>) { return this.controlPlane.githubCallback(input); }
+  currentUser(subject: Record<string, any>) { return this.controlPlane.currentUser(subject); }
+}

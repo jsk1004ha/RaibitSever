@@ -4,6 +4,7 @@ import { sanitizeLogRecord } from './security.ts';
 import { maskSecrets } from './secrets.ts';
 import { DEPLOYMENT_STATUSES, normalizeDeploymentStatus } from './deployments.ts';
 import { WORKFLOW_TYPES } from './workflows.ts';
+import { errorSpecForCode } from './error-spec.ts';
 
 const BUILD_WORKFLOW_TYPES = new Set([WORKFLOW_TYPES.BUILD_AND_DEPLOY, WORKFLOW_TYPES.PREVIEW_DEPLOY, 'build', 'builder']);
 
@@ -89,19 +90,20 @@ export async function processBuilderWorkflowJob(repository: any, job: AnyRecord,
       steps: build.steps || [],
     };
   } catch (error) {
+    const errorSpec = errorSpecForCode('BUILD_FAILED');
     const safeMessage = sanitizeLogRecord(error?.message || String(error));
     await appendBuildLog(repository, { deploymentId: state.deployment.id, step: 'error', line: safeMessage, level: 'error' });
     await updateDeployment(repository, state.deployment.id, {
       status: DEPLOYMENT_STATUSES.BUILD_FAILED,
       buildFinishedAt: nowIso(),
-      errorCode: 'BUILD_FAILED',
+      errorCode: errorSpec.code,
       errorMessage: safeMessage,
     });
     await appendDeploymentEvent(repository, {
       deploymentId: state.deployment.id,
       type: 'build.failed',
       message: safeMessage,
-      metadata: { jobId: job.id, dryRun },
+      metadata: { jobId: job.id, dryRun, errorSpec },
     });
     throw error;
   }
@@ -130,10 +132,11 @@ export async function reconcileDeploymentRollout(repository: any, deploymentId: 
     await appendDeploymentEvent(repository, { deploymentId, type: 'rollout.ready', message: 'Kubernetes rollout is ready', metadata: { dryRun, host, image: deployment.imageUrl || service.imageUrl || service.image || null } });
     return { processed: true, deploymentId, serviceId: service.id, status: DEPLOYMENT_STATUSES.READY, dryRun };
   } catch (error) {
+    const errorSpec = errorSpecForCode('ROLLOUT_FAILED');
     const safeMessage = sanitizeLogRecord(error?.message || String(error));
     await appendRuntimeLog(repository, { serviceId: service.id, deploymentId, podName: dryRun ? 'dry-run' : `${service.slug || service.name}-pod`, containerName: 'orchestrator', line: safeMessage, level: 'error' });
-    await updateDeployment(repository, deploymentId, { status: DEPLOYMENT_STATUSES.FAILED, finishedAt: nowIso(), errorCode: 'ROLLOUT_FAILED', errorMessage: safeMessage });
-    await appendDeploymentEvent(repository, { deploymentId, type: 'rollout.failed', message: safeMessage, metadata: { dryRun } });
+    await updateDeployment(repository, deploymentId, { status: DEPLOYMENT_STATUSES.FAILED, finishedAt: nowIso(), errorCode: errorSpec.code, errorMessage: safeMessage });
+    await appendDeploymentEvent(repository, { deploymentId, type: 'rollout.failed', message: safeMessage, metadata: { dryRun, errorSpec } });
     throw error;
   }
 }
