@@ -2,15 +2,16 @@ import { RAIBITSERVERControlPlane } from './control-plane.ts';
 import { isSecretKey, maskSecrets } from './secrets.ts';
 import { authorizeRequest, requireAction, requireScope, signJwtHs256, subjectFromRequest } from './auth.ts';
 import { organizationScopeFromProjectInput } from './scope.ts';
-import { createSessionToken, hashPassword, normalizeEmail, personalOrganizationSlug, shouldPromoteFirstLogin, signupPolicyForAccount, verifyPassword } from './identity.ts';
+import { createSessionToken, hashPassword, normalizeEmail, personalOrganizationSlug, sessionTtlSeconds, shouldPromoteFirstLogin, signupPolicyForAccount, verifyPassword } from './identity.ts';
 import { runtimeConfigStatus } from './config.ts';
 import { normalizeEnvEntries, parseDotEnv } from './env-file.ts';
 import { can } from './rbac.ts';
-import { validateServiceSecurity } from './security.ts';
+import { assertRateLimit, assertSystemDeploymentActor, createFixedWindowRateLimiter, safeAuthModeFromEnv, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, securityHeaders, validateServiceSecurity } from './security.ts';
 import { githubOAuthLoginPlan } from './github-integration.ts';
 
 export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), options: Record<string, any> = {}) {
   const auth = options.auth || authConfigFromEnv();
+  const authLimiter = createFixedWindowRateLimiter({ limit: Number(process.env.RAIBITSERVER_AUTH_RATE_LIMIT || 10), windowMs: 60_000 });
   return async function handler(req, res) {
     try {
       const url = new URL(req.url, 'http://localhost');
@@ -30,6 +31,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const body = await readJson(req);
         if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
         const email = normalizeEmail(body.email);
+        assertRateLimit(authLimiter, authRateKey(req, `signup:${email}`));
         if (controlPlane.store.findUserByEmail(email)) return send(res, 409, { error: 'user_already_exists' });
         const passwordHash = hashPassword(body.password);
         const organizationSlug = body.organizationSlug || body.orgSlug || personalOrganizationSlug(email);
@@ -38,19 +40,22 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const policy = signupPolicyForAccount(body, email, { firstUser: controlPlane.store.users.size === 0 });
         const user = controlPlane.store.createUser({ name: body.name || email, email, passwordHash, role: policy.role, accountType: policy.accountType, approvalStatus: policy.approvalStatus });
         const membership = controlPlane.store.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
-        const token = createSessionToken({ ...user, email }, [membership], auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: body.expiresInSeconds || 3600 });
+        const token = createSessionToken({ ...user, email }, [membership], auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: auth.sessionTtlSeconds || sessionTtlSeconds(auth) });
         return send(res, 201, { user, organization, membership, token });
       }
       if (method === 'POST' && url.pathname === '/auth/login') {
         const body = await readJson(req);
         if (!auth.jwtSecret) return send(res, 500, { error: 'jwt_secret_not_configured' });
-        let user = controlPlane.store.findUserByEmail(normalizeEmail(body.email));
+        const email = normalizeEmail(body.email);
+        assertRateLimit(authLimiter, authRateKey(req, `login:${email}`));
+        let user = controlPlane.store.findUserByEmail(email);
         if (!user || !verifyPassword(body.password, user.passwordHash)) return send(res, 401, { error: 'invalid_credentials' });
         if (shouldPromoteFirstLogin(user, [...controlPlane.store.users.values()])) {
           user = controlPlane.store.approveUser(user.id, { accountType: 'NON_CLUB', role: 'ADMIN' });
         }
         const memberships = controlPlane.store.listMembershipsForUser(user.id);
-        const token = createSessionToken(user, memberships, auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: body.expiresInSeconds || 3600 });
+        authLimiter.reset(authRateKey(req, `login:${email}`));
+        const token = createSessionToken(user, memberships, auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: auth.sessionTtlSeconds || sessionTtlSeconds(auth) });
         const { passwordHash: _passwordHash, ...publicUser } = user;
         return send(res, 200, { user: publicUser, memberships, token });
       }
@@ -58,6 +63,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         return send(res, 200, githubOAuthLoginPlan(Object.fromEntries(url.searchParams.entries())));
       }
       if (method === 'GET' && url.pathname === '/auth/github/callback') {
+        if (url.searchParams.get('code') && !url.searchParams.get('state')) return send(res, 400, { error: 'oauth_state_required' });
         return send(res, 200, {
           provider: 'github',
           received: true,
@@ -81,7 +87,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const body = await readJson(req);
         if (!auth.jwtSecret) return send(res, 400, { error: 'jwt_secret_not_configured' });
         if (!auth.allowDevToken) authorizeRequest(req, 'team:invite', auth);
-        const token = signJwtHs256({ sub: body.sub || 'dev-user', role: body.role || 'developer', organizationId: body.organizationId || null, projectIds: body.projectIds || null, global: body.global === true }, auth.jwtSecret, { expiresInSeconds: body.expiresInSeconds || 3600, issuer: auth.issuer || 'raibitserver' });
+        const token = signJwtHs256({ sub: body.sub || 'dev-user', role: body.role || 'developer', organizationId: body.organizationId || null, projectIds: body.projectIds || null, global: body.global === true }, auth.jwtSecret, { expiresInSeconds: auth.sessionTtlSeconds || sessionTtlSeconds(auth), issuer: auth.issuer || 'raibitserver' });
         return send(res, 201, { token });
       }
       if (method === 'GET' && url.pathname === '/snapshot') {
@@ -96,12 +102,12 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       if (method === 'POST' && url.pathname === '/plan/source') {
         authorizeRequest(req, 'project:read', auth);
         const body = await readJson(req);
-        return send(res, 200, controlPlane.planSourceCheckout(body.service || body, body.options || {}));
+        return send(res, 200, controlPlane.planSourceCheckout(sanitizeTenantServiceInput(body.service || body) as any, body.options || {}));
       }
       if (method === 'POST' && url.pathname === '/plan/build-execution') {
         authorizeRequest(req, 'project:read', auth);
         const body = await readJson(req);
-        return send(res, 200, controlPlane.planBuildExecution(body.service || body, body.files || {}, body.options || {}));
+        return send(res, 200, controlPlane.planBuildExecution(sanitizeTenantServiceInput(body.service || body) as any, body.files || {}, body.options || {}));
       }
       if (method === 'POST' && url.pathname === '/plan/registry-push') {
         authorizeRequest(req, 'project:read', auth);
@@ -212,14 +218,14 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const projectId = decodeURIComponent(projectServicesMatch[1]);
         await assertProjectAccess(controlPlane.store, projectId, subject);
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'service:create', metric: 'maxServices', increment: 1 });
-        return send(res, 201, controlPlane.store.createService({ ...body, projectId }));
+        return send(res, 201, controlPlane.store.createService({ ...sanitizeTenantServiceInput(body), projectId }));
       }
       if (method === 'POST' && url.pathname === '/services') {
         const body = await readJson(req);
         const subject = authorizeAction(req, 'deploy:run', auth);
         await assertProjectAccess(controlPlane.store, body.projectId, subject);
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'service:create', metric: 'maxServices', increment: 1 });
-        return send(res, 201, controlPlane.store.createService(body));
+        return send(res, 201, controlPlane.store.createService(sanitizeTenantServiceInput(body)));
       }
       const serviceMatch = url.pathname.match(/^\/services\/([^/]+)$/);
       if (serviceMatch && method === 'GET') {
@@ -236,7 +242,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const service = controlPlane.store.getService(serviceId);
         if (!service) return send(res, 404, { error: 'service_not_found' });
         await assertProjectAccess(controlPlane.store, service.projectId, subject);
-        return send(res, 200, controlPlane.store.updateService(serviceId, await readJson(req)));
+        return send(res, 200, controlPlane.store.updateService(serviceId, sanitizeTenantServiceUpdate(await readJson(req))));
       }
       if (serviceMatch && method === 'DELETE') {
         const subject = authorizeAction(req, 'project:delete', auth);
@@ -260,14 +266,14 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const projectId = decodeURIComponent(projectResourcesMatch[1]);
         await assertProjectAccess(controlPlane.store, projectId, subject);
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'resource:create', metric: resourceQuotaMetric(body), increment: Number(body.storageMb || body.storageGb || 1) });
-        return send(res, 201, controlPlane.store.createResource({ ...body, projectId }));
+        return send(res, 201, controlPlane.store.createResource({ ...sanitizeTenantResourceApiInput(body), projectId }));
       }
       if (method === 'POST' && url.pathname === '/resources') {
         const body = await readJson(req);
         const subject = authorizeAction(req, 'db:create', auth);
         await assertProjectAccess(controlPlane.store, body.projectId, subject);
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'resource:create', metric: resourceQuotaMetric(body), increment: Number(body.storageMb || body.storageGb || 1) });
-        return send(res, 201, controlPlane.store.createResource(body));
+        return send(res, 201, controlPlane.store.createResource(sanitizeTenantResourceApiInput(body)));
       }
       const resourceMatch = url.pathname.match(/^\/resources\/([^/]+)$/);
       if (resourceMatch && method === 'GET') {
@@ -284,7 +290,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const resource = controlPlane.store.getResource(resourceId);
         if (!resource) return send(res, 404, { error: 'resource_not_found' });
         await assertProjectAccess(controlPlane.store, resource.projectId, subject);
-        return send(res, 200, controlPlane.store.updateResource(resourceId, await readJson(req)));
+        return send(res, 200, controlPlane.store.updateResource(resourceId, sanitizeTenantResourceApiUpdate(await readJson(req))));
       }
       if (resourceMatch && method === 'DELETE') {
         const subject = authorizeAction(req, 'db:delete', auth);
@@ -327,7 +333,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         if (deploymentType === 'preview') controlPlane.store.enforceUserCan({ userId: subject.id, action: 'deployment:create', metric: 'maxPreviewDeployments', increment: 1 });
         const security = validateServiceSecurity(service.desiredState || service.desiredSpec || service);
         if (!security.ok) return send(res, 403, { error: 'security_policy_violation', findings: security.findings });
-        const deployment = controlPlane.store.createDeployment({ ...body, serviceId, deploymentType });
+        const deployment = controlPlane.store.createDeployment({ ...sanitizeTenantDeploymentCreate(body), serviceId, deploymentType, status: 'queued' });
         const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId: service.projectId, deploymentId: deployment.id, branch: body.branch || 'main', commitSha: body.commitSha || body.commitHash || null } });
         return send(res, 202, { ...deployment, workflowJob });
       }
@@ -343,7 +349,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const service = controlPlane.store.services.get(serviceId);
         const security = validateServiceSecurity(service?.desiredState || service?.desiredSpec || service || {});
         if (!security.ok) return send(res, 403, { error: 'security_policy_violation', findings: security.findings });
-        const deployment = controlPlane.store.createDeployment({ ...body, serviceId, deploymentType });
+        const deployment = controlPlane.store.createDeployment({ ...sanitizeTenantDeploymentCreate(body), serviceId, deploymentType, status: 'queued' });
         const workflowJob = controlPlane.store.enqueueWorkflowJob({ type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', targetType: 'deployment', targetId: deployment.id, payload: { serviceId, projectId, deploymentId: deployment.id, branch: body.branch || 'main', commitSha: body.commitSha || body.commitHash || null } });
         return send(res, 202, { ...deployment, workflowJob });
       }
@@ -363,7 +369,8 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const deployment = controlPlane.store.getDeployment(deploymentId);
         if (!deployment) return send(res, 404, { error: 'deployment_not_found' });
         await assertProjectAccess(controlPlane.store, deployment.projectId, subject);
-        const body = await readJson(req);
+        assertSystemDeploymentActor(subject);
+        const body = sanitizeDeploymentStatusInput(await readJson(req));
         if (Object.prototype.hasOwnProperty.call(body, 'status')) {
           const { status, ...updates } = body;
           return send(res, 200, controlPlane.store.transitionDeployment(deploymentId, status, updates, { actorUserId: subject.id }));
@@ -604,15 +611,16 @@ function enforceEnvironmentWrite(subject: Record<string, any>, entries: Array<Re
 
 function authConfigFromEnv() {
   const jwtSecret = process.env.RAIBITSERVER_AUTH_JWT_SECRET || '';
-  const disabled = process.env.RAIBITSERVER_AUTH_DISABLED === '1';
+  const mode = safeAuthModeFromEnv(process.env);
   return {
-    mode: disabled ? 'disabled' : 'jwt',
-    allowDisabled: disabled,
+    mode,
+    allowDisabled: mode === 'disabled',
     jwtSecret,
     issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver',
     allowDevHeaders: process.env.RAIBITSERVER_AUTH_DEV_HEADERS === '1',
     allowDevToken: process.env.RAIBITSERVER_AUTH_DEV_TOKEN === '1',
     defaultRole: process.env.RAIBITSERVER_ROLE || 'owner',
+    sessionTtlSeconds: sessionTtlSeconds({ sessionTtlSeconds: process.env.RAIBITSERVER_SESSION_TTL_SECONDS }),
   };
 }
 
@@ -643,15 +651,33 @@ export async function readJson(req) {
 
 export async function readRaw(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  const maxBytes = Number(process.env.RAIBITSERVER_MAX_BODY_BYTES || 1024 * 1024);
+  let total = 0;
+  for await (const chunk of req) {
+    total += Buffer.byteLength(chunk);
+    if (total > maxBytes) {
+      const error = new Error('request_body_too_large');
+      (error as any).statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
   return Buffer.concat(chunks).toString('utf8');
 }
 
 export function send(res, statusCode, body) {
   const payload = JSON.stringify(body, null, 2);
   res.writeHead(statusCode, {
+    ...securityHeaders(),
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(payload),
   });
   res.end(payload);
+}
+
+function authRateKey(req, label: string) {
+  const headers = req.headers || {};
+  const forwarded = String(headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const ip = forwarded || req.socket?.remoteAddress || 'local';
+  return `${ip}:${label}`;
 }

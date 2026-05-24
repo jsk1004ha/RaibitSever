@@ -7,7 +7,7 @@ export { compileProject } from './manifest-compiler.ts';
 export { listCatalog, getCatalogEntry } from './catalog.ts';
 export { connectionEnvForResource, injectResourceEnv } from './env-injection.ts';
 export { parseDotEnv, normalizeEnvEntries, maskEnvEntries } from './env-file.ts';
-export { validateServiceSecurity, guardDatabaseQuery, sanitizeLogRecord } from './security.ts';
+export { validateServiceSecurity, guardDatabaseQuery, sanitizeLogRecord, safeAuthModeFromEnv, unsafeDisabledAuthAllowed, securityHeaders, createFixedWindowRateLimiter, assertRateLimit, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantDeploymentCreate, sanitizeDeploymentStatusInput, assertSystemDeploymentActor, redactDbConsoleStatement, normalizeTenantGitUrl } from './security.ts';
 export { can, assertCan, visibleEnvironment } from './rbac.ts';
 export { checkQuota, quotaForPlan, usageMetricDefinitions } from './quota.ts';
 export { domainPlanForProject, serviceHostname, serviceConsoleHostname, resourceConsoleHostname } from './domain-router.ts';
@@ -21,7 +21,7 @@ export { DEPLOYMENT_STATUSES, normalizeDeploymentStatus, canTransitionDeployment
 export { createDeploymentWorkflowHandlers, processBuilderWorkflowJob, processBuildAndRolloutWorkflowJob, reconcileDeploymentRollout } from './deployment-workflow.ts';
 export { organizationScopeFromProjectInput, projectScopeFromInput } from './scope.ts';
 export { signJwtHs256, verifyJwtHs256, authorizeRequest, subjectFromRequest, requireAction, requireScope } from './auth.ts';
-export { hashPassword, verifyPassword, normalizeEmail, createSessionToken, sessionPayloadForUser, personalOrganizationSlug, normalizeAccountType, configuredAdminEmails, signupPolicyForAccount, shouldPromoteFirstLogin } from './identity.ts';
+export { hashPassword, verifyPassword, normalizeEmail, createSessionToken, sessionPayloadForUser, sessionTtlSeconds, personalOrganizationSlug, normalizeAccountType, configuredAdminEmails, signupPolicyForAccount, shouldPromoteFirstLogin } from './identity.ts';
 export { runtimeConfigStatus, assertRuntimeKeys, secretEncryptionConfigured } from './config.ts';
 export { sealSecret, openSecret, secureRandomSecret, publicSecretRecord } from './secret-vault.ts';
 export { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';

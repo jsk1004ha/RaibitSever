@@ -1,6 +1,6 @@
 import { deepClone, nowIso, stableId, slugify } from './ids.ts';
 import { maskSecretValue, maskSecrets } from './secrets.ts';
-import { sanitizeLogRecord } from './security.ts';
+import { redactDbConsoleStatement, sanitizeLogRecord } from './security.ts';
 import { claimNextWorkflowJobFromList, completeWorkflowJobRecord, createWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
 import { normalizeEnvEntries, parseDotEnv, maskEnvEntries } from './env-file.ts';
 import { githubIntegrationSummary, githubWebhookActionPlan, githubWebhookOutboundPlan, parseGitHubRepository, verifyGitHubWebhookSignature } from './github-integration.ts';
@@ -170,6 +170,9 @@ export class ControlPlaneStore {
   }
 
   createService({ projectId, name, type = 'web', runtimeType = 'container', sourceType = 'github', image = null, imageUrl = null, ...rest }: Record<string, any>) {
+    delete rest.id;
+    delete rest.projectId;
+    delete rest.desiredState;
     const resolvedImageUrl = imageUrl || image || undefined;
     const service = {
       id: stableId('svc', projectId, name),
@@ -198,6 +201,9 @@ export class ControlPlaneStore {
     const current = this.services.get(serviceId);
     if (!current) return null;
     const normalized = maskSecrets({ ...updates });
+    delete normalized.id;
+    delete normalized.projectId;
+    delete normalized.desiredState;
     if (normalized.slug) normalized.slug = slugify(normalized.slug);
     if (normalized.image && !normalized.imageUrl) normalized.imageUrl = normalized.image;
     if (normalized.imageUrl && !normalized.image) normalized.image = normalized.imageUrl;
@@ -856,7 +862,7 @@ export class ControlPlaneStore {
     const resource = this.resources.get(resourceId);
     if (!resource) throw notFound(`resource not found: ${resourceId}`);
     const result = await runDbConsoleQuery(this.resourceForConsole(resource), query, options);
-    this.audit(options.actorUserId || 'system', 'resource.console:query', 'resource', resourceId, { query, resultRows: (result as any).rowCount || result.rows?.length || 0 });
+    this.audit(options.actorUserId || 'system', 'resource.console:query', 'resource', resourceId, { queryPreview: redactDbConsoleStatement(query), queryBytes: Buffer.byteLength(String(query || '')), resultRows: (result as any).rowCount || result.rows?.length || 0 });
     return result;
   }
 
@@ -864,7 +870,7 @@ export class ControlPlaneStore {
     const resource = this.resources.get(resourceId);
     if (!resource) throw notFound(`resource not found: ${resourceId}`);
     const result = await runDbConsoleQuery(this.resourceForConsole(resource), command, { ...options, providerCommand: true });
-    this.audit(options.actorUserId || 'system', 'resource.console:command', 'resource', resourceId, { command, mode: (result as any).mode, rowCount: (result as any).rowCount || result.rows?.length || 0 });
+    this.audit(options.actorUserId || 'system', 'resource.console:command', 'resource', resourceId, { commandPreview: redactDbConsoleStatement(command), commandBytes: Buffer.byteLength(String(command || '')), mode: (result as any).mode, rowCount: (result as any).rowCount || result.rows?.length || 0 });
     return result;
   }
 

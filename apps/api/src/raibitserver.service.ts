@@ -1,6 +1,6 @@
-import { ConflictException, ForbiddenException, Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
-import { createControlPlaneRepository, createSessionToken, githubOAuthLoginPlan, hashPassword, normalizeEmail, organizationScopeFromProjectInput, personalOrganizationSlug, requireScope, shouldPromoteFirstLogin, signupPolicyForAccount, validateServiceSecurity, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
+import { assertRateLimit, assertSystemDeploymentActor, createControlPlaneRepository, createFixedWindowRateLimiter, createSessionToken, githubOAuthLoginPlan, hashPassword, normalizeEmail, organizationScopeFromProjectInput, personalOrganizationSlug, requireScope, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, signupPolicyForAccount, validateServiceSecurity, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 
 /**
  * NestJS-facing desired-state service.
@@ -10,6 +10,8 @@ import { createControlPlaneRepository, createSessionToken, githubOAuthLoginPlan,
  * actual state asynchronously. Local/dev can keep the same in-memory repository
  * instance for deterministic tests without split-brain state.
  */
+const authLimiter = createFixedWindowRateLimiter({ limit: Number(process.env.RAIBITSERVER_AUTH_RATE_LIMIT || 10), windowMs: 60_000 });
+
 @Injectable()
 export class RAIBITSERVERService implements OnModuleDestroy {
   private readonly repositoryPromise: Promise<InMemoryControlPlaneRepository | PrismaControlPlaneRepository>;
@@ -27,6 +29,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const repository: any = await this.repositoryPromise;
     const jwtSecret = jwtSecretOrThrow();
     const email = normalizeEmail(input.email);
+    assertRateLimit(authLimiter, `signup:${email}`);
     const existing = repository.findUserByEmail ? await repository.findUserByEmail(email) : repository.store.findUserByEmail(email);
     if (existing) throw new ForbiddenException('user already exists');
     const passwordHash = hashPassword(input.password);
@@ -45,20 +48,23 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       approvalStatus: policy.approvalStatus,
     });
     const membership = await repository.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
-    const token = createSessionToken({ ...user, email }, [membership], jwtSecret, { issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', expiresInSeconds: input.expiresInSeconds || 3600 });
+    const token = createSessionToken({ ...user, email }, [membership], jwtSecret, { issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver' });
     return { user, organization, membership, token };
   }
 
   async login(input: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     const jwtSecret = jwtSecretOrThrow();
-    let user = repository.findUserByEmail ? await repository.findUserByEmail(normalizeEmail(input.email)) : repository.store.findUserByEmail(normalizeEmail(input.email));
+    const email = normalizeEmail(input.email);
+    assertRateLimit(authLimiter, `login:${email}`);
+    let user = repository.findUserByEmail ? await repository.findUserByEmail(email) : repository.store.findUserByEmail(email);
     if (!user || !verifyPassword(input.password, user.passwordHash)) throw new ForbiddenException('invalid credentials');
     if (shouldPromoteFirstLogin(user, await usersForRepository(repository))) {
       user = await repository.approveUser(user.id, { accountType: 'NON_CLUB', role: 'ADMIN', actorUserId: 'system' });
     }
     const memberships = repository.listMembershipsForUser ? await repository.listMembershipsForUser(user.id) : repository.store.listMembershipsForUser(user.id);
-    const token = createSessionToken(user, memberships, jwtSecret, { issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver', expiresInSeconds: input.expiresInSeconds || 3600 });
+    authLimiter.reset(`login:${email}`);
+    const token = createSessionToken(user, memberships, jwtSecret, { issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver' });
     const { passwordHash, ...publicUser } = user;
     return { user: publicUser, memberships, token };
   }
@@ -77,8 +83,8 @@ export class RAIBITSERVERService implements OnModuleDestroy {
       ? repository.store.organizations.get(organizationId)
       : await repository.createOrganization({ name: organizationId, slug: organizationId, plan: projectInput.organization?.plan || 'free' });
     const row = await repository.createProject({ organizationId: organization.id || organizationId, name: project.name, slug: project.slug, description: project.description || '' });
-    for (const service of project.services || []) await repository.createService({ ...service, projectId: row.id });
-    for (const resource of project.resources || []) await repository.createResource({ ...resource, projectId: row.id });
+    for (const service of project.services || []) await repository.createService({ ...sanitizeTenantServiceInput(service), projectId: row.id });
+    for (const resource of project.resources || []) await repository.createResource({ ...sanitizeTenantResourceApiInput(resource), projectId: row.id });
     return row;
   }
 
@@ -126,7 +132,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const repository: any = await this.repositoryPromise;
     await assertProjectAccess(repository, projectId, subject);
     if (repository.enforceUserCan) await repository.enforceUserCan({ userId: subject.id, action: 'service:create', metric: 'maxServices', increment: 1 });
-    return repository.createService({ ...service, projectId });
+    return repository.createService({ ...sanitizeTenantServiceInput(service), projectId });
   }
 
   async getService(serviceId: string, subject: Record<string, any>) {
@@ -142,7 +148,8 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const current = await repository.getService(serviceId);
     if (!current) throw new NotFoundException(`service not found: ${serviceId}`);
     await assertProjectAccess(repository, current.projectId, subject);
-    const service = repository.updateService ? await repository.updateService(serviceId, updates || {}) : repository.store.updateService(serviceId, updates || {});
+    const safeUpdates = sanitizeTenantServiceUpdate(updates || {});
+    const service = repository.updateService ? await repository.updateService(serviceId, safeUpdates) : repository.store.updateService(serviceId, safeUpdates);
     if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
     return service;
   }
@@ -168,7 +175,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const repository: any = await this.repositoryPromise;
     await assertProjectAccess(repository, projectId, subject);
     if (repository.enforceUserCan) await repository.enforceUserCan({ userId: subject.id, action: 'resource:create', metric: String((resource as any).type || '').toLowerCase() === 'storage' ? 'maxObjectStorageMb' : 'maxDbStorageMb', increment: Number((resource as any).storageMb || (resource as any).storageGb || 1) });
-    return repository.createResource({ ...resource, projectId });
+    return repository.createResource({ ...sanitizeTenantResourceApiInput(resource), projectId });
   }
 
   async getResource(resourceId: string, subject: Record<string, any>) {
@@ -182,7 +189,8 @@ export class RAIBITSERVERService implements OnModuleDestroy {
   async updateResource(resourceId: string, updates: Record<string, any>, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     const current = await this.getResource(resourceId, subject);
-    const resource = repository.updateResource ? await repository.updateResource(resourceId, updates) : repository.store.updateResource(resourceId, updates);
+    const safeUpdates = sanitizeTenantResourceApiUpdate(updates);
+    const resource = repository.updateResource ? await repository.updateResource(resourceId, safeUpdates) : repository.store.updateResource(resourceId, safeUpdates);
     if (!resource) throw new NotFoundException(`resource not found: ${resourceId}`);
     return resource;
   }
@@ -231,7 +239,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const security = validateServiceSecurity(service.desiredState || service.desiredSpec || service);
     if (!security.ok) throw new ForbiddenException(`deployment blocked by security policy: ${security.findings.filter((finding: any) => finding.level === 'block').map((finding: any) => finding.code).join(', ')}`);
     const { deployment, workflowJob } = await repository.createDeploymentWorkflow({
-      deployment: { ...input, serviceId, projectId, status: 'queued', deploymentType },
+      deployment: { ...sanitizeTenantDeploymentCreate(input), serviceId, projectId, status: 'queued', deploymentType },
       workflow: { type: deploymentType === 'preview' ? 'preview-deploy' : 'build-and-deploy', payload: { projectId, serviceId, branch: input.branch || 'main', commitSha: input.commitSha || input.commitHash || null } },
     });
     return {
@@ -253,8 +261,8 @@ export class RAIBITSERVERService implements OnModuleDestroy {
   async updateDeploymentStatus(deploymentId: string, input: Record<string, any>, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     const deployment = await this.getDeployment(deploymentId, subject);
-    const updates = { ...input };
-    delete updates.workflowJob;
+    assertSystemDeploymentActor(subject);
+    const updates = sanitizeDeploymentStatusInput(input);
     let updated;
     if (Object.prototype.hasOwnProperty.call(updates, 'status')) {
       const { status, ...statusUpdates } = updates;
@@ -442,6 +450,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
   }
 
   async githubCallback(input: Record<string, any> = {}) {
+    if (input.code && !input.state) throw new BadRequestException('oauth_state_required');
     return {
       provider: 'github',
       received: true,

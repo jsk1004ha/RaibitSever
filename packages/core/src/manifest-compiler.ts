@@ -309,6 +309,24 @@ function httpProbe(path: string, port: number): AnyRecord {
 function networkPolicyManifest(namespace: string, services: AnyRecord[], resources: AnyRecord[]): AnyRecord {
   const serviceNames = services.map((service) => slugify(service.name));
   const resourceNames = resources.map((resource) => slugify(resource.name));
+  const publicEgressServices = services
+    .filter((service) => service.allowPublicEgress === true || service.publicEgress === true || service.egress?.publicInternet === true)
+    .map((service) => slugify(service.name));
+  const egress: AnyRecord[] = [
+    {
+      to: [
+        {
+          namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } },
+          podSelector: { matchLabels: { 'k8s-app': 'kube-dns' } },
+        },
+      ],
+      ports: [{ protocol: 'UDP', port: 53 }, { protocol: 'TCP', port: 53 }],
+    },
+    { to: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': namespace } } }] },
+  ];
+  if (publicEgressServices.length) {
+    egress.push({ to: [{ ipBlock: { cidr: '0.0.0.0/0', except: ['10.0.0.0/8', '100.64.0.0/10', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16'] } }] });
+  }
   return {
     apiVersion: 'networking.k8s.io/v1',
     kind: 'NetworkPolicy',
@@ -320,19 +338,7 @@ function networkPolicyManifest(namespace: string, services: AnyRecord[], resourc
         { from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': namespace } } }] },
         { from: [{ namespaceSelector: { matchLabels: { 'raibitserver.io/ingress-gateway': 'true' } } }] },
       ],
-      egress: [
-        {
-          to: [
-            {
-              namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } },
-              podSelector: { matchLabels: { 'k8s-app': 'kube-dns' } },
-            },
-          ],
-          ports: [{ protocol: 'UDP', port: 53 }, { protocol: 'TCP', port: 53 }],
-        },
-        { to: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': namespace } } }] },
-        { to: [{ ipBlock: { cidr: '0.0.0.0/0', except: ['10.0.0.0/8', '100.64.0.0/10', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16'] } }] },
-      ],
+      egress,
     },
     raibitserver: {
       allowsOwnServices: serviceNames,
@@ -341,6 +347,7 @@ function networkPolicyManifest(namespace: string, services: AnyRecord[], resourc
       blocksMetadataEndpoint: true,
       blocksControlPlane: true,
       blocksCrossProject: true,
+      publicEgressServices,
     },
   };
 }

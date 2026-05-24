@@ -3,6 +3,102 @@ import { can } from './rbac.ts';
 
 type AnyRecord = Record<string, any>;
 
+const SAFE_SERVICE_KEYS = new Set([
+  'projectId',
+  'name',
+  'slug',
+  'type',
+  'runtimeType',
+  'sourceType',
+  'buildMode',
+  'repoUrl',
+  'repositoryUrl',
+  'githubRepositoryId',
+  'githubRepository',
+  'githubIntegrationId',
+  'branch',
+  'rootDirectory',
+  'buildContext',
+  'localPath',
+  'dockerfilePath',
+  'installCommand',
+  'buildCommand',
+  'startCommand',
+  'outputDirectory',
+  'image',
+  'imageUrl',
+  'port',
+  'resources',
+  'scaling',
+  'healthCheck',
+  'schedule',
+  'concurrencyPolicy',
+  'backoffLimit',
+  'availability',
+  'sleepPolicy',
+  'environment',
+  'env',
+  'attachedResources',
+  'desiredSpec',
+]);
+
+const SAFE_RESOURCE_API_KEYS = new Set([
+  'projectId',
+  'name',
+  'slug',
+  'type',
+  'engine',
+  'provider',
+  'plan',
+  'region',
+  'version',
+  'storageMb',
+  'storageGb',
+  'databaseName',
+  'database',
+  'username',
+  'bucket',
+  'collection',
+  'topic',
+  'backup',
+  'desiredSpec',
+]);
+
+const SAFE_DEPLOYMENT_CREATE_KEYS = new Set([
+  'serviceId',
+  'projectId',
+  'commitHash',
+  'commitSha',
+  'imageUrl',
+  'image',
+  'imageDigest',
+  'deploymentType',
+  'type',
+  'branch',
+  'previewUrl',
+  'triggerType',
+  'pullRequestNumber',
+]);
+
+const SAFE_DEPLOYMENT_STATUS_KEYS = new Set([
+  'status',
+  'imageUrl',
+  'image',
+  'imageDigest',
+  'buildStartedAt',
+  'buildFinishedAt',
+  'deployedAt',
+  'finishedAt',
+  'errorCode',
+  'errorMessage',
+  'previewUrl',
+  'eventType',
+  'message',
+  'metadata',
+]);
+
+const DEFAULT_ALLOWED_GIT_HOSTS = ['github.com', 'gitlab.com', 'bitbucket.org'];
+
 export const DEFAULT_CONTAINER_SECURITY_CONTEXT = Object.freeze({
   runAsNonRoot: true,
   runAsUser: 10001,
@@ -86,6 +182,171 @@ export function secureContainerDefaults(service: AnyRecord = {}) {
   };
 }
 
+export function unsafeDisabledAuthAllowed(env: AnyRecord = process.env) {
+  if (env.RAIBITSERVER_AUTH_DISABLED !== '1') return false;
+  if (env.NODE_ENV === 'production') return false;
+  return env.RAIBITSERVER_AUTH_DISABLED_CONFIRM === 'I_UNDERSTAND_THIS_GRANTS_GLOBAL_OWNER';
+}
+
+export function safeAuthModeFromEnv(env: AnyRecord = process.env) {
+  return unsafeDisabledAuthAllowed(env) ? 'disabled' : 'jwt';
+}
+
+export function securityHeaders() {
+  return {
+    'x-content-type-options': 'nosniff',
+    'x-frame-options': 'DENY',
+    'referrer-policy': 'no-referrer',
+    'permissions-policy': 'camera=(), microphone=(), geolocation=()',
+    'content-security-policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    'cache-control': 'no-store',
+  };
+}
+
+export function createFixedWindowRateLimiter({ limit = 10, windowMs = 60_000 } = {}) {
+  const entries = new Map<string, { count: number; resetAt: number }>();
+  return {
+    check(key: string) {
+      const now = Date.now();
+      const normalized = String(key || 'global');
+      const current = entries.get(normalized);
+      if (!current || current.resetAt <= now) {
+        const row = { count: 1, resetAt: now + windowMs };
+        entries.set(normalized, row);
+        return { allowed: true, remaining: Math.max(0, limit - 1), resetAt: row.resetAt };
+      }
+      current.count += 1;
+      return { allowed: current.count <= limit, remaining: Math.max(0, limit - current.count), resetAt: current.resetAt };
+    },
+    reset(key: string) {
+      entries.delete(String(key || 'global'));
+    },
+  };
+}
+
+export function assertRateLimit(limiter: ReturnType<typeof createFixedWindowRateLimiter>, key: string) {
+  const result = limiter.check(key);
+  if (!result.allowed) {
+    const error = new Error('rate_limit_exceeded');
+    (error as any).statusCode = 429;
+    (error as any).retryAfterSeconds = Math.max(1, Math.ceil((result.resetAt - Date.now()) / 1000));
+    throw error;
+  }
+  return result;
+}
+
+export function sanitizeTenantServiceInput(input: AnyRecord = {}, options: AnyRecord = {}) {
+  const output = pickKnown(input, SAFE_SERVICE_KEYS);
+  if (output.name !== undefined) output.name = String(output.name || '').trim();
+  if (output.sourceType !== undefined) output.sourceType = String(output.sourceType || 'github').toLowerCase();
+  if (output.port !== undefined && output.port !== null && output.port !== '') output.port = Number(output.port);
+  if (output.repoUrl || output.repositoryUrl) output.repoUrl = normalizeTenantGitUrl(output.repoUrl || output.repositoryUrl, options);
+  if (output.repositoryUrl) delete output.repositoryUrl;
+  const sourceType = String(output.sourceType || 'github').toLowerCase();
+  if (sourceType === 'local' || output.localPath || isLocalOrFileSource(output.repoUrl || output.buildContext || '')) {
+    if (!tenantLocalSourceAllowed(options.env || process.env)) {
+      const error = new Error('local service sources are disabled for tenant API requests');
+      (error as any).statusCode = 400;
+      throw error;
+    }
+  }
+  if (output.desiredSpec && typeof output.desiredSpec === 'object') {
+    output.desiredSpec = pickKnown(output.desiredSpec, SAFE_SERVICE_KEYS);
+    delete output.desiredSpec.status;
+    delete output.desiredSpec.desiredState;
+  }
+  delete output.status;
+  delete output.desiredState;
+  delete output.id;
+  return output;
+}
+
+export function sanitizeTenantServiceUpdate(input: AnyRecord = {}, options: AnyRecord = {}) {
+  const output = sanitizeTenantServiceInput(input, options);
+  delete output.projectId;
+  return output;
+}
+
+export function sanitizeTenantResourceApiInput(input: AnyRecord = {}) {
+  const output = pickKnown(input, SAFE_RESOURCE_API_KEYS);
+  delete output.status;
+  delete output.desiredState;
+  delete output.connectionSecretName;
+  return output;
+}
+
+export function sanitizeTenantResourceApiUpdate(input: AnyRecord = {}) {
+  const output = sanitizeTenantResourceApiInput(input);
+  delete output.projectId;
+  return output;
+}
+
+export function sanitizeTenantDeploymentCreate(input: AnyRecord = {}) {
+  const output = pickKnown(input, SAFE_DEPLOYMENT_CREATE_KEYS);
+  if (output.deploymentType === undefined && output.type !== undefined) output.deploymentType = output.type;
+  delete output.type;
+  delete output.id;
+  delete output.status;
+  delete output.workflowJob;
+  return output;
+}
+
+export function sanitizeDeploymentStatusInput(input: AnyRecord = {}) {
+  const output = pickKnown(input, SAFE_DEPLOYMENT_STATUS_KEYS);
+  delete output.workflowJob;
+  return output;
+}
+
+export function assertSystemDeploymentActor(subject: AnyRecord = {}) {
+  if (subject.authMode === 'disabled' || subject.claims?.system === true || subject.role === 'system') return true;
+  const error = new Error('deployment status updates require a builder/system actor');
+  (error as any).statusCode = 403;
+  throw error;
+}
+
+export function redactDbConsoleStatement(statement: any) {
+  const withoutLiteralValues = String(statement || '')
+    .replace(/'([^']|'')*'/g, "'?'")
+    .replace(/"([^"]|"")*"/g, '"?"');
+  const text = sanitizeLogString(withoutLiteralValues.replace(/\s+/g, ' ').trim()).slice(0, 160);
+  return text ? `${text}${String(statement || '').length > 160 ? '…' : ''}` : '';
+}
+
+export function tenantLocalSourceAllowed(env: AnyRecord = process.env) {
+  return env.RAIBITSERVER_ALLOW_LOCAL_SOURCE === '1' || env.NODE_ENV !== 'production';
+}
+
+export function normalizeTenantGitUrl(repoUrl: any, options: AnyRecord = {}) {
+  const value = String(repoUrl || '').trim();
+  if (!value) return value;
+  if (/^https:\/\/[^/@\s]+@/i.test(value)) badRequest('credentialed git URLs are not allowed; pass tokens through integration secrets');
+  if (isLocalOrFileSource(value)) {
+    if (tenantLocalSourceAllowed(options.env || process.env)) return value;
+    badRequest('local/file git URLs are not allowed for tenant API requests');
+  }
+  const allowedHosts = new Set([
+    ...DEFAULT_ALLOWED_GIT_HOSTS,
+    ...String((options.env || process.env).RAIBITSERVER_ALLOWED_GIT_HOSTS || '').split(',').map((host) => host.trim().toLowerCase()).filter(Boolean),
+  ]);
+  const ssh = value.match(/^git@([^:]+):[^/\s]+\/[^/\s]+(?:\.git)?$/i);
+  if (ssh) {
+    const host = ssh[1].toLowerCase();
+    if (!allowedHosts.has(host)) badRequest(`git host is not allowed: ${host}`);
+    return value;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    badRequest(`unsupported git URL: ${value}`);
+  }
+  if (parsed.protocol !== 'https:') badRequest('git URLs must use https');
+  const host = parsed.hostname.toLowerCase();
+  if (!allowedHosts.has(host)) badRequest(`git host is not allowed: ${host}`);
+  if (!/\/[^/]+\/[^/]+/.test(parsed.pathname)) badRequest(`unsupported git URL: ${value}`);
+  return value;
+}
+
 export function guardDatabaseQuery(query: any, { confirmed = false, role = 'developer' }: AnyRecord = {}) {
   const text = String(query || '').trim();
   const readOnly = isReadOnlyDatabaseQuery(text);
@@ -104,6 +365,26 @@ export function guardDatabaseQuery(query: any, { confirmed = false, role = 'deve
     return { allowed: false, reason: 'destructive query requires explicit confirmation', destructive };
   }
   return { allowed: true, reason: 'query accepted', destructive, readOnly };
+}
+
+function pickKnown(input: AnyRecord = {}, allowed: Set<string>) {
+  const output: AnyRecord = {};
+  for (const [key, value] of Object.entries(input || {})) {
+    if (!allowed.has(key)) continue;
+    output[key] = sanitizeLogRecord(value);
+  }
+  return output;
+}
+
+function isLocalOrFileSource(value: any) {
+  const text = String(value || '').trim();
+  return text.startsWith('/') || text.startsWith('./') || text.startsWith('../') || /^file:\/\//i.test(text);
+}
+
+function badRequest(message: string): never {
+  const error = new Error(message);
+  (error as any).statusCode = 400;
+  throw error;
 }
 
 function canMutateDatabase(role: string) {

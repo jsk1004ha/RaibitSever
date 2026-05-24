@@ -8,7 +8,7 @@ import { providerConnectionEnvForResource, provisionResourceProvider as provisio
 import { completeWorkflowJobRecord, failWorkflowJobRecord, processNextWorkflowJob } from './workflows.ts';
 import { providerOwnedSqlitePath, sanitizeTenantResourceInput } from './resource-sanitizer.ts';
 import { normalizeResourceEngine } from './catalog.ts';
-import { sanitizeLogRecord } from './security.ts';
+import { redactDbConsoleStatement, sanitizeLogRecord, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate } from './security.ts';
 import { assertDeploymentTransition, normalizeDeploymentStatus } from './deployments.ts';
 import { previewRuntimePlan } from './preview-deployments.ts';
 import { normalizeAccountType } from './identity.ts';
@@ -807,7 +807,7 @@ export class PrismaControlPlaneRepository {
       throw error;
     }
     const result = await runDbConsoleQuery(await this.resourceForConsole(resource), query, options);
-    await this.prisma.auditLog.create({ data: { actorUserId: options.actorUserId || 'system', action: 'resource.console:query', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ query, resultRows: (result as any).rowCount || result.rows?.length || 0 }) } });
+    await this.prisma.auditLog.create({ data: { actorUserId: options.actorUserId || 'system', action: 'resource.console:query', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ queryPreview: redactDbConsoleStatement(query), queryBytes: Buffer.byteLength(String(query || '')), resultRows: (result as any).rowCount || result.rows?.length || 0 }) } });
     return result;
   }
 
@@ -819,7 +819,7 @@ export class PrismaControlPlaneRepository {
       throw error;
     }
     const result = await runDbConsoleQuery(await this.resourceForConsole(resource), command, { ...options, providerCommand: true });
-    await this.prisma.auditLog.create({ data: { actorUserId: options.actorUserId || 'system', action: 'resource.console:command', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ command, mode: (result as any).mode }) } });
+    await this.prisma.auditLog.create({ data: { actorUserId: options.actorUserId || 'system', action: 'resource.console:command', targetType: 'resource', targetId: resourceId, metadata: maskSecrets({ commandPreview: redactDbConsoleStatement(command), commandBytes: Buffer.byteLength(String(command || '')), mode: (result as any).mode }) } });
     return result;
   }
 
@@ -1012,27 +1012,28 @@ async function resolveDesiredOrganization(tx: any, orgInput: Record<string, any>
 }
 
 function serviceData(input: Record<string, any>) {
+  const safe = sanitizeTenantServiceInput(input);
   return {
-    type: input.type || 'web',
-    runtimeType: input.runtimeType || 'container',
-    sourceType: input.sourceType || 'github',
-    buildMode: input.buildMode || 'AUTO',
-    repoUrl: input.repoUrl || null,
-    githubRepositoryId: input.githubRepositoryId || null,
-    branch: input.branch || null,
-    rootDirectory: input.rootDirectory || null,
-    buildContext: input.buildContext || null,
-    dockerfilePath: input.dockerfilePath || null,
-    installCommand: input.installCommand || null,
-    buildCommand: input.buildCommand || null,
-    startCommand: input.startCommand || null,
-    outputDirectory: input.outputDirectory || null,
-    image: input.image || null,
-    imageUrl: input.imageUrl || input.image || null,
-    port: input.port ? Number(input.port) : null,
-    status: input.status || 'created',
-    desiredSpec: sanitizeJson(input.desiredSpec || input),
-    desiredState: sanitizeJson(input),
+    type: safe.type || 'web',
+    runtimeType: safe.runtimeType || 'container',
+    sourceType: safe.sourceType || 'github',
+    buildMode: safe.buildMode || 'AUTO',
+    repoUrl: safe.repoUrl || null,
+    githubRepositoryId: safe.githubRepositoryId || null,
+    branch: safe.branch || null,
+    rootDirectory: safe.rootDirectory || null,
+    buildContext: safe.buildContext || null,
+    dockerfilePath: safe.dockerfilePath || null,
+    installCommand: safe.installCommand || null,
+    buildCommand: safe.buildCommand || null,
+    startCommand: safe.startCommand || null,
+    outputDirectory: safe.outputDirectory || null,
+    image: safe.image || null,
+    imageUrl: safe.imageUrl || safe.image || null,
+    port: safe.port ? Number(safe.port) : null,
+    status: 'created',
+    desiredSpec: sanitizeJson(safe.desiredSpec || safe),
+    desiredState: sanitizeJson(safe),
   };
 }
 
@@ -1060,19 +1061,19 @@ function resourceData(input: Record<string, any>, options: Record<string, any> =
 
 
 function serviceUpdateData(input: Record<string, any> = {}) {
-  const allowed = ['name', 'type', 'runtimeType', 'sourceType', 'buildMode', 'repoUrl', 'githubRepositoryId', 'branch', 'rootDirectory', 'buildContext', 'dockerfilePath', 'installCommand', 'buildCommand', 'startCommand', 'outputDirectory', 'image', 'imageUrl', 'port', 'status'];
+  const inputSafe = sanitizeTenantServiceUpdate(input);
+  const allowed = ['name', 'type', 'runtimeType', 'sourceType', 'buildMode', 'repoUrl', 'githubRepositoryId', 'branch', 'rootDirectory', 'buildContext', 'dockerfilePath', 'installCommand', 'buildCommand', 'startCommand', 'outputDirectory', 'image', 'imageUrl', 'port'];
   const data: Record<string, any> = {};
   for (const key of allowed) {
-    if (!Object.prototype.hasOwnProperty.call(input || {}, key)) continue;
-    const value = input[key] === '' ? null : input[key];
+    if (!Object.prototype.hasOwnProperty.call(inputSafe || {}, key)) continue;
+    const value = inputSafe[key] === '' ? null : inputSafe[key];
     data[key] = key === 'port' && value !== null && value !== undefined ? Number(value) : value;
   }
-  if (input.slug !== undefined) data.slug = slugInput(input.slug);
-  if (input.image && !input.imageUrl) data.imageUrl = input.image;
-  if (input.imageUrl && !input.image) data.image = input.imageUrl;
-  if (Object.prototype.hasOwnProperty.call(input || {}, 'desiredSpec')) data.desiredSpec = sanitizeJson(input.desiredSpec || {});
-  if (Object.prototype.hasOwnProperty.call(input || {}, 'desiredState')) data.desiredState = sanitizeJson(input.desiredState || {});
-  if (Object.keys(input || {}).length && !data.desiredState) data.desiredState = sanitizeJson(input);
+  if (inputSafe.slug !== undefined) data.slug = slugInput(inputSafe.slug);
+  if (inputSafe.image && !inputSafe.imageUrl) data.imageUrl = inputSafe.image;
+  if (inputSafe.imageUrl && !inputSafe.image) data.image = inputSafe.imageUrl;
+  if (Object.prototype.hasOwnProperty.call(inputSafe || {}, 'desiredSpec')) data.desiredSpec = sanitizeJson(inputSafe.desiredSpec || {});
+  if (Object.keys(inputSafe || {}).length && !data.desiredState) data.desiredState = sanitizeJson(inputSafe);
   return data;
 }
 

@@ -41,10 +41,23 @@ test('tenant network policy allows DNS but blocks metadata and private control-p
   const dnsRule = policy.spec.egress.find((rule) => rule.ports?.some((port) => port.port === 53));
   assert.ok(dnsRule, 'DNS egress rule exists');
   const externalRule = policy.spec.egress.find((rule) => rule.to?.[0]?.ipBlock?.cidr === '0.0.0.0/0');
-  assert.ok(externalRule, 'external egress rule exists');
-  assert.deepEqual(externalRule.to[0].ipBlock.except, ['10.0.0.0/8', '100.64.0.0/10', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16']);
+  assert.equal(externalRule, undefined, 'public internet egress is opt-in');
   assert.equal(policy.raibitserver.blocksMetadataEndpoint, true);
   assert.equal(policy.raibitserver.blocksControlPlane, true);
+});
+
+test('tenant network policy adds bounded public egress only when service opts in', () => {
+  const optIn = compileProject({
+    organization: { slug: 'gdg' },
+    project: { name: 'egress' },
+    services: [{ name: 'web', type: 'web', sourceType: 'image', image: 'example/web:1', allowPublicEgress: true }],
+    resources: [],
+  });
+  const policy = optIn.manifests.find((manifest) => manifest.kind === 'NetworkPolicy');
+  const externalRule = policy.spec.egress.find((rule) => rule.to?.[0]?.ipBlock?.cidr === '0.0.0.0/0');
+  assert.ok(externalRule, 'external egress rule exists after explicit opt-in');
+  assert.deepEqual(externalRule.to[0].ipBlock.except, ['10.0.0.0/8', '100.64.0.0/10', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16']);
+  assert.deepEqual(policy.raibitserver.publicEgressServices, ['web']);
 });
 
 test('private services do not receive public ingress', () => {

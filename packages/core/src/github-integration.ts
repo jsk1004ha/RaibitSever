@@ -121,7 +121,7 @@ export function githubWebhookOutboundPlan(actionPlan: Record<string, any>, actio
 export function githubOAuthLoginPlan(options: Record<string, any> = {}) {
   const clientId = options.clientId || process.env.GITHUB_CLIENT_ID || process.env.RAIBITSERVER_GITHUB_CLIENT_ID || '';
   const redirectUri = options.redirectUri || process.env.RAIBITSERVER_GITHUB_REDIRECT_URI || '';
-  const state = options.state || 'local-dev';
+  const state = options.state || crypto.randomBytes(24).toString('base64url');
   const configured = Boolean(clientId && redirectUri);
   const oauthUrl = configured
     ? `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(options.scope || 'read:user user:email')}&state=${encodeURIComponent(state)}`

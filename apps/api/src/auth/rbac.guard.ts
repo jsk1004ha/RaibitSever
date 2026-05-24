@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { authorizeRequest } from '@raibitserver/core';
+import { authorizeRequest, safeAuthModeFromEnv } from '@raibitserver/core';
 import { RAIBITSERVER_PERMISSION } from './permissions.decorator';
 
 @Injectable()
@@ -20,10 +20,10 @@ export class RbacGuard implements CanActivate {
 
 function authConfig() {
   const jwtSecret = process.env.RAIBITSERVER_AUTH_JWT_SECRET || '';
-  const disabled = process.env.RAIBITSERVER_AUTH_DISABLED === '1';
+  const mode = safeAuthModeFromEnv(process.env);
   return {
-    mode: disabled ? 'disabled' : 'jwt',
-    allowDisabled: disabled,
+    mode,
+    allowDisabled: mode === 'disabled',
     jwtSecret,
     issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver',
     allowDevHeaders: process.env.RAIBITSERVER_AUTH_DEV_HEADERS === '1',

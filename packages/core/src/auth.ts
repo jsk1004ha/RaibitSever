@@ -17,7 +17,9 @@ export function signJwtHs256(payload: Record<string, any>, secret: string, { exp
   if (!secret) throw new Error('jwt secret is required');
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: 'HS256', typ: 'JWT' };
-  const body = { iss: issuer, iat: now, exp: now + expiresInSeconds, ...payload };
+  const ttl = Math.max(60, Math.min(Number(expiresInSeconds || 3600), 24 * 60 * 60));
+  const { exp: _exp, iat: _iat, nbf: _nbf, iss: _iss, ...safePayload } = payload || {};
+  const body = { ...safePayload, iss: issuer, iat: now, exp: now + ttl };
   const encodedHeader = base64url(JSON.stringify(header));
   const encodedBody = base64url(JSON.stringify(body));
   const signature = crypto.createHmac('sha256', secret).update(`${encodedHeader}.${encodedBody}`).digest('base64url');
@@ -37,7 +39,9 @@ export function verifyJwtHs256(token: string, secret: string, { issuer = 'raibit
   if (!signatureOk) throw unauthorized('invalid bearer token signature');
   const payload = parseJsonSegment(payloadSegment);
   const now = Math.floor(Date.now() / 1000);
-  if (payload.exp && now >= Number(payload.exp)) throw unauthorized('expired bearer token');
+  if (!payload.exp) throw unauthorized('missing bearer token expiration');
+  if (now >= Number(payload.exp)) throw unauthorized('expired bearer token');
+  if (payload.nbf && now < Number(payload.nbf)) throw unauthorized('bearer token is not active yet');
   if (issuer && payload.iss && payload.iss !== issuer) throw unauthorized('invalid token issuer');
   return payload;
 }

@@ -12,7 +12,7 @@ const SQL_IDENTIFIER_RE = /^[a-z_][a-z0-9_]{0,62}$/;
 type AnyRecord = Record<string, any>;
 
 export function buildPostgresProviderPlan(resource: AnyRecord = {}, options: AnyRecord = {}) {
-  const databaseName = safeSqlIdentifier(resource.databaseName || resource.database || tenantResourceName(resource, 'db'));
+  const databaseName = safeSqlIdentifier(resource.databaseName || resource.database || tenantResourceName(resource, 'db', uniqueTenantScope(resource, options)));
   const username = safeSqlIdentifier(resource.username || `${databaseName}_app`);
   const password = String(options.password || resource.generatedPassword || resource.password || (options.generatePassword === true ? secureRandomSecret(24) : '<generated-provider-password>'));
   const providerHost = options.providerHost || resource.providerHost || resource.sharedHost || resource.host || resource.internalHost || 'postgresql.shared-providers.svc.cluster.local';
@@ -81,7 +81,7 @@ export function buildPostgresProviderPlan(resource: AnyRecord = {}, options: Any
 
 export async function provisionPostgresProvider(resource: AnyRecord = {}, options: AnyRecord = {}) {
   const liveProvisioningEnabled = process.env.RAIBITSERVER_ENABLE_LIVE_PROVIDER_PROVISIONING === 'true';
-  const sanitized = {
+  const sanitized: AnyRecord = {
     ...options,
     providerHost: undefined,
     host: undefined,

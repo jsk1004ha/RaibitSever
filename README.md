@@ -132,7 +132,7 @@ node src/cli.js compose examples/docker-compose.yml
 | 분류 | 변수 |
 | --- | --- |
 | DB/상태 | `DATABASE_URL`, `RAIBITSERVER_PERSISTENCE`, `RAIBITSERVER_CONTROL_PLANE_DATABASE_URL`, `RAIBITSERVER_CONTROL_PLANE_STORE`, `RAIBITSERVER_CONTROL_PLANE_FILE`, `REDIS_URL` |
-| Secret/Auth | `JWT_SECRET`, `RAIBITSERVER_AUTH_JWT_SECRET`, `RAIBITSERVER_AUTH_ISSUER`, `ENCRYPTION_KEY`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, `ADMIN_EMAILS` |
+| Secret/Auth | `JWT_SECRET`, `RAIBITSERVER_AUTH_JWT_SECRET`, `RAIBITSERVER_AUTH_ISSUER`, `RAIBITSERVER_SESSION_TTL_SECONDS`, `RAIBITSERVER_AUTH_RATE_LIMIT`, `ENCRYPTION_KEY`, `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, `ADMIN_EMAILS` |
 | Dashboard/API | `PORT`, `RAIBITSERVER_API_URL`, `RAIBITSERVER_DASHBOARD_TOKEN`, `RAIBITSERVER_TOKEN`, `RAIBITSERVER_DASHBOARD_BASIC_AUTH` |
 | Build/Runtime | `REGISTRY_URL`, `RAIBITSERVER_REGISTRY`, `RAIBITSERVER_REGISTRY_USERNAME`, `RAIBITSERVER_REGISTRY_PASSWORD`, `KUBECONFIG`, `RAIBITSERVER_KUBE_CONTEXT`, `BASE_DOMAIN`, `RAIBITSERVER_BASE_DOMAIN`, `RAIBITSERVER_EXECUTE`, `RAIBITSERVER_PUSH` |
 | Object Storage | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` |
@@ -199,7 +199,7 @@ GitHub webhook 엔드포인트(`POST /github/webhooks`)는 HMAC 검증을 반드
 
 서비스/preview host는 `<service>--<project>--<org>` 또는 `pr-<number>--<service>--<project>--<org>` 패턴으로 생성됩니다. 따라서 `*.apps`, `*.preview`, `*.console`, `*.resources` wildcard 인증서를 준비해야 합니다.
 
-> 보안 필수: `/admin` 경로는 API 토큰 기반 서버 렌더링 데이터를 표시하므로 public ingress에 노출할 때 반드시 별도 인증 계층을 적용하세요. 기본 구성에서는 `RAIBITSERVER_DASHBOARD_BASIC_AUTH`를 `username:password` 형식으로 설정해야 하며, 미설정 시 `/admin`은 503으로 차단됩니다.
+> 보안 필수: 대시보드는 서버 토큰(`RAIBITSERVER_DASHBOARD_TOKEN`/`RAIBITSERVER_TOKEN`)으로 API 데이터를 렌더링할 수 있으므로 public ingress에 노출할 때 반드시 별도 인증 계층을 적용하세요. 기본 구성에서는 `RAIBITSERVER_DASHBOARD_BASIC_AUTH`를 `username:password` 형식으로 설정해야 하며, 서버 토큰이 있는데 basic auth가 없으면 대시보드 요청은 503으로 차단됩니다.
 
 ### 4. production 환경 변수 예시
 
@@ -262,7 +262,8 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
 
 운영에서 사용하면 안 되는 개발 편의 변수도 있습니다.
 
-- `RAIBITSERVER_AUTH_DISABLED`, `RAIBITSERVER_AUTH_DEV_HEADERS`, `RAIBITSERVER_AUTH_DEV_TOKEN`, `RAIBITSERVER_ROLE`은 로컬 개발 전용입니다.
+- `RAIBITSERVER_AUTH_DISABLED`, `RAIBITSERVER_AUTH_DEV_HEADERS`, `RAIBITSERVER_AUTH_DEV_TOKEN`, `RAIBITSERVER_ROLE`은 로컬 개발 전용입니다. 특히 인증 비활성화는 `NODE_ENV=production`에서는 무시되며, 로컬에서도 `RAIBITSERVER_AUTH_DISABLED_CONFIRM=I_UNDERSTAND_THIS_GRANTS_GLOBAL_OWNER` 확인값이 있어야만 활성화됩니다.
+- production tenant API는 local/file source와 기본 허용 목록 밖 Git host를 거부합니다. 예외가 필요하면 `RAIBITSERVER_ALLOWED_GIT_HOSTS`로 Git host를 명시하고, 로컬 source는 개발 환경에서만 사용하세요.
 - `RAIBITSERVER_ALLOW_MEMORY_PERSISTENCE=1`은 production 안전 조건을 깨뜨립니다.
 - `RAIBITSERVER_DRY_RUN=1` 또는 `RAIBITSERVER_EXECUTE` 미설정 상태에서는 worker가 실제 apply/push/provision을 수행하지 않습니다.
 - builder는 `localPath`, `buildContext`, `dockerfilePath`를 workspace/source 경계 안으로만 해석합니다. 상위 디렉터리(`..`) 또는 절대 경로로 경계를 벗어나는 빌드 입력은 거부됩니다.

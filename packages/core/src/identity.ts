@@ -13,6 +13,9 @@ const ACCOUNT_TYPE_ALIASES: Record<string, string> = Object.freeze({
   NONMEMBER: 'NON_CLUB',
 });
 
+export const DEFAULT_SESSION_TTL_SECONDS = 3600;
+export const MAX_SESSION_TTL_SECONDS = 24 * 60 * 60;
+
 export function normalizeEmail(email: string) {
   const value = String(email || '').trim().toLowerCase();
   if (!EMAIL_RE.test(value)) {
@@ -65,7 +68,13 @@ export function sessionPayloadForUser(user: Record<string, any>, memberships: Ar
 }
 
 export function createSessionToken(user: Record<string, any>, memberships: Array<Record<string, any>>, jwtSecret: string, options: Record<string, any> = {}) {
-  return signJwtHs256(sessionPayloadForUser(user, memberships), jwtSecret, { expiresInSeconds: Number(options.expiresInSeconds || 3600), issuer: options.issuer || 'raibitserver' });
+  return signJwtHs256(sessionPayloadForUser(user, memberships), jwtSecret, { expiresInSeconds: sessionTtlSeconds(options), issuer: options.issuer || 'raibitserver' });
+}
+
+export function sessionTtlSeconds(options: Record<string, any> = {}) {
+  const configured = Number(options.sessionTtlSeconds || options.expiresInSeconds || process.env.RAIBITSERVER_SESSION_TTL_SECONDS || DEFAULT_SESSION_TTL_SECONDS);
+  if (!Number.isFinite(configured) || configured <= 0) return DEFAULT_SESSION_TTL_SECONDS;
+  return Math.max(60, Math.min(Math.floor(configured), MAX_SESSION_TTL_SECONDS));
 }
 
 export function personalOrganizationSlug(email: string) {
