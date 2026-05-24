@@ -347,7 +347,7 @@ Production 세부 항목은 [Production 배포 문서](deploy/production/README.
 
 ## DB와 리소스 지원 범위
 
-RAIBITSERVER의 관리형 리소스는 raw compose container가 아니라 프로젝트에 연결되는 catalog resource입니다. `shared-small` DBaaS/cache 플랜은 resource마다 PostgreSQL/MySQL/MongoDB/Redis 컨테이너를 새로 띄우지 않고, 공유 provider 안에 database/user/bucket/collection/prefix를 생성합니다.
+RAIBITSERVER의 관리형 리소스는 raw compose container가 아니라 프로젝트에 연결되는 catalog resource입니다. `shared-small` DBaaS/cache 플랜은 resource마다 PostgreSQL/MySQL/MongoDB/Redis 컨테이너를 새로 띄우지 않고, 공유 provider 안에 database/user/bucket/collection/prefix를 생성합니다. 이때 shared-provider tenant 이름(prefix 포함)은 `projectSlug`가 없더라도 `organizationId/projectId/resourceId` 기반으로 생성되어 프로젝트 간 충돌을 방지합니다.
 
 | 엔진 | 로컬 proof | Provider contract |
 | --- | --- | --- |
