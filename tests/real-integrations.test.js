@@ -82,6 +82,12 @@ test('BuildKit/Docker and registry execution plans are real commands but dry-run
   assert.equal(parseImageReference('ghcr.io/acme/demo-web@sha256:abc123').digest, 'sha256:abc123');
 });
 
+
+test('build execution plan rejects escaping build context and Dockerfile paths', () => {
+  assert.throws(() => buildExecutionPlan({ ...service, buildContext: '../../..' }, { Dockerfile: 'FROM scratch' }, { sourceDir: '/workspace/demo' }), /buildContext must stay within source directory/);
+  assert.throws(() => buildExecutionPlan({ ...service, dockerfilePath: '../Dockerfile' }, { Dockerfile: 'FROM scratch' }, { sourceDir: '/workspace/demo' }), /dockerfilePath must stay within source directory/);
+});
+
 test('kubectl apply and DB provisioning paths create executable dry-run artifacts', async () => {
   const apply = await applyProject(project, { web: { Dockerfile: 'FROM scratch' } });
   assert.equal(apply.apply.dryRun, true);

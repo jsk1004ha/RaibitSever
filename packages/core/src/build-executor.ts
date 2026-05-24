@@ -41,13 +41,25 @@ export function buildctlCommand({ image, context = '.', dockerfile = '.', push =
   } satisfies CommandSpec;
 }
 
+
+function resolvePathWithinSourceDir(sourceDir: string, requestedPath: string, field: string) {
+  const sourceRoot = path.resolve(sourceDir);
+  const resolvedPath = path.resolve(sourceRoot, requestedPath);
+  const relative = path.relative(sourceRoot, resolvedPath);
+  if (relative === '' || relative === '.') return resolvedPath;
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`${field} must stay within source directory`);
+  }
+  return resolvedPath;
+}
+
 export function buildExecutionPlan(service: Record<string, any>, files: Record<string, string> = {}, options: Record<string, any> = {}) {
   const buildPlan = resolveBuildStrategy(service, files);
   const checkout = sourceCheckoutPlan(service, options);
-  const sourceDir = options.sourceDir || checkout.localPath || checkout.destination || '.';
+  const sourceDir = path.resolve(options.sourceDir || checkout.localPath || checkout.destination || '.');
   const dockerfile = service.dockerfilePath || 'Dockerfile';
-  const context = path.resolve(sourceDir, service.buildContext || service.rootDirectory || '.');
-  const dockerfilePath = path.isAbsolute(dockerfile) ? dockerfile : path.resolve(sourceDir, dockerfile);
+  const context = resolvePathWithinSourceDir(sourceDir, service.buildContext || service.rootDirectory || '.', 'buildContext');
+  const dockerfilePath = resolvePathWithinSourceDir(sourceDir, dockerfile, 'dockerfilePath');
   const push = Boolean(options.push || service.push);
   const builder = options.builder || 'docker-buildx';
   const buildCommand = builder === 'buildctl'
