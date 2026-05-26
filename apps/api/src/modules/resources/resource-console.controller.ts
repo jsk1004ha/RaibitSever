@@ -19,6 +19,12 @@ export class ResourceConsoleController {
   }
 
   @RequirePermission('db:connect-limited')
+  @Get('tables/:table')
+  tableRows(@Param('resourceId') resourceId: string, @Param('table') table: string, @Query() input: Record<string, any>, @Req() req: any) {
+    return this.resourcesService.resourceConsoleView(resourceId, 'table', { ...(input || {}), table }, req.raibitSubject);
+  }
+
+  @RequirePermission('db:connect-limited')
   @Get('collections')
   collections(@Param('resourceId') resourceId: string, @Query() input: Record<string, any>, @Req() req: any) {
     return this.resourcesService.resourceConsoleView(resourceId, 'collections', input || {}, req.raibitSubject);

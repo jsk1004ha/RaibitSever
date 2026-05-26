@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, Patch, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Patch, Post, Req, Res } from '@nestjs/common';
 import { RequirePermission } from '../../auth/permissions.decorator';
 import { DeploymentsService } from './deployments.service';
 
@@ -87,8 +87,33 @@ export class DeploymentLogsController {
   }
 
   @RequirePermission('logs:read')
+  @Get('deployments/:deploymentId/stream')
+  async deploymentStream(@Param('deploymentId') deploymentId: string, @Req() req: any, @Res() res: any) {
+    const snapshot = await this.deploymentsService.deploymentActivitySnapshot(deploymentId, req.raibitSubject);
+    writeSseSnapshot(res, 'deployment.snapshot', snapshot);
+  }
+
+  @RequirePermission('logs:read')
   @Get('services/:serviceId/logs')
   runtime(@Param('serviceId') serviceId: string, @Req() req: any) {
     return this.deploymentsService.listRuntimeLogs(serviceId, req.raibitSubject);
   }
+
+  @RequirePermission('logs:read')
+  @Get('services/:serviceId/logs/stream')
+  async runtimeStream(@Param('serviceId') serviceId: string, @Req() req: any, @Res() res: any) {
+    const snapshot = await this.deploymentsService.serviceLogSnapshot(serviceId, req.raibitSubject);
+    writeSseSnapshot(res, 'service.logs.snapshot', snapshot);
+  }
+}
+
+function writeSseSnapshot(res: any, event: string, payload: Record<string, any>) {
+  res.status(200);
+  res.setHeader('content-type', 'text/event-stream; charset=utf-8');
+  res.setHeader('cache-control', 'no-cache, no-transform');
+  res.setHeader('connection', 'keep-alive');
+  res.write(`retry: ${payload.stream?.retryMs || 3000}\n`);
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  res.end();
 }

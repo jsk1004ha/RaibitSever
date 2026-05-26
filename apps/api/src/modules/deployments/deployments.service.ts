@@ -15,5 +15,7 @@ export class DeploymentsService {
   rollbackDeployment(deploymentId: string, input: Record<string, any>, subject: Record<string, any>) { return this.controlPlane.rollbackDeployment(deploymentId, input, subject); }
   listDeploymentLogs(deploymentId: string, subject: Record<string, any>) { return this.controlPlane.listDeploymentLogs(deploymentId, subject); }
   listDeploymentEvents(deploymentId: string, subject: Record<string, any>) { return this.controlPlane.listDeploymentEvents(deploymentId, subject); }
+  deploymentActivitySnapshot(deploymentId: string, subject: Record<string, any>) { return this.controlPlane.deploymentActivitySnapshot(deploymentId, subject); }
   listRuntimeLogs(serviceId: string, subject: Record<string, any>) { return this.controlPlane.listRuntimeLogs(serviceId, subject); }
+  serviceLogSnapshot(serviceId: string, subject: Record<string, any>) { return this.controlPlane.serviceLogSnapshot(serviceId, subject); }
 }

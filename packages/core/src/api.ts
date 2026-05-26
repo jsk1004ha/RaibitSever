@@ -6,6 +6,7 @@ import { createSessionToken, hashPassword, normalizeEmail, personalOrganizationS
 import { runtimeConfigStatus } from './config.ts';
 import { normalizeEnvEntries, parseDotEnv } from './env-file.ts';
 import { can } from './rbac.ts';
+import { quotaUsageGauges, quotaWarnings } from './quota.ts';
 import { assertRateLimit, assertSystemDeploymentActor, createFixedWindowRateLimiter, safeAuthModeFromEnv, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, securityHeaders, validateServiceSecurity } from './security.ts';
 import { githubOAuthLoginPlan } from './github-integration.ts';
 
@@ -396,10 +397,46 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const [deploymentId, kind] = deploymentLogsMatch.slice(1).map(decodeURIComponent);
         return send(res, 200, kind === 'logs' ? { logs: controlPlane.store.listDeploymentLogs(deploymentId) } : { events: controlPlane.store.listDeploymentEvents(deploymentId) });
       }
+      const deploymentStreamMatch = url.pathname.match(/^\/deployments\/([^/]+)\/stream$/);
+      if (deploymentStreamMatch && method === 'GET') {
+        const subject = authorizeAction(req, 'logs:read', auth);
+        const deploymentId = decodeURIComponent(deploymentStreamMatch[1]);
+        const deployment = controlPlane.store.getDeployment(deploymentId);
+        if (!deployment) return send(res, 404, { error: 'deployment_not_found' });
+        await assertProjectAccess(controlPlane.store, deployment.projectId, subject);
+        return sendSseSnapshot(res, 'deployment.snapshot', {
+          deployment,
+          logs: controlPlane.store.listDeploymentLogs(deploymentId),
+          events: controlPlane.store.listDeploymentEvents(deploymentId),
+          stream: { mode: 'sse-snapshot', retryMs: 3000 },
+        });
+      }
       const runtimeLogsMatch = url.pathname.match(/^\/services\/([^/]+)\/logs$/);
       if (runtimeLogsMatch && method === 'GET') {
         authorizeAction(req, 'logs:read', auth);
         return send(res, 200, { logs: controlPlane.store.listRuntimeLogs(decodeURIComponent(runtimeLogsMatch[1])) });
+      }
+      const runtimeStreamMatch = url.pathname.match(/^\/services\/([^/]+)\/logs\/stream$/);
+      if (runtimeStreamMatch && method === 'GET') {
+        const subject = authorizeAction(req, 'logs:read', auth);
+        const serviceId = decodeURIComponent(runtimeStreamMatch[1]);
+        const service = controlPlane.store.getService(serviceId);
+        if (!service) return send(res, 404, { error: 'service_not_found' });
+        await assertProjectAccess(controlPlane.store, service.projectId, subject);
+        return sendSseSnapshot(res, 'service.logs.snapshot', {
+          service,
+          logs: controlPlane.store.listRuntimeLogs(serviceId),
+          stream: { mode: 'sse-snapshot', retryMs: 3000 },
+        });
+      }
+      const resourceConsoleTableMatch = url.pathname.match(/^\/resources\/([^/]+)\/console\/tables\/([^/]+)$/);
+      if (resourceConsoleTableMatch && method === 'GET') {
+        const subject = authorizeAction(req, 'db:connect-limited', auth);
+        const [resourceId, table] = resourceConsoleTableMatch.slice(1).map(decodeURIComponent);
+        const resource = controlPlane.store.resources.get(resourceId);
+        if (!resource) return send(res, 404, { error: 'resource_not_found' });
+        await assertProjectAccess(controlPlane.store, resource.projectId, subject);
+        return send(res, 200, await controlPlane.store.resourceConsoleView(resourceId, 'table', { ...Object.fromEntries(url.searchParams.entries()), table, role: subject.role, actorUserId: subject.id }));
       }
       const resourceConsoleGetMatch = url.pathname.match(/^\/resources\/([^/]+)\/console\/(schema|tables|collections|keys)$/);
       if (resourceConsoleGetMatch && method === 'GET') {
@@ -442,7 +479,8 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const usage = controlPlane.store.usageRecords.filter((row) => String(row.userId) === String(subject.id));
         const unlimited = subject.userRole === 'ADMIN' || subject.accountType === 'CLUB_MEMBER';
         const quota = unlimited ? null : [...controlPlane.store.quotas.values()].find((row) => String(row.userId) === String(subject.id));
-        return send(res, 200, { accountType: subject.accountType, approvalStatus: subject.approvalStatus, unlimited, quota: quota || null, usage });
+        const current = controlPlane.store.quotaUsageForUser(subject.id);
+        return send(res, 200, { accountType: subject.accountType, approvalStatus: subject.approvalStatus, unlimited, quota: quota || null, usage, current, gauges: quotaUsageGauges(current, quota || null), warnings: quotaWarnings(current, quota || null) });
       }
       const envMatch = url.pathname.match(/^\/projects\/([^/]+)\/services\/([^/]+)\/env$/);
       if (envMatch && method === 'GET') {
@@ -673,6 +711,20 @@ export function send(res, statusCode, body) {
     'content-length': Buffer.byteLength(payload),
   });
   res.end(payload);
+}
+
+export function sendSseSnapshot(res, event, body) {
+  const payload = JSON.stringify(body);
+  res.writeHead(200, {
+    ...securityHeaders(),
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+  });
+  res.write(`retry: ${body?.stream?.retryMs || 3000}\n`);
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${payload}\n\n`);
+  res.end();
 }
 
 function authRateKey(req, label: string) {

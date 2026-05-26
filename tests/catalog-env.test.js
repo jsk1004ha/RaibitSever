@@ -17,6 +17,16 @@ test('postgres resource generates standard connection variables', () => {
   assert.equal(env.PGDATABASE, 'todo');
 });
 
+test('shared database resources inject bounded connection limits', () => {
+  const pg = connectionEnvForResource({ name: 'todo-postgres', engine: 'postgresql', plan: 'shared-small', databaseName: 'todo', username: 'todo_app', password: 'pw' }, 'todo');
+  assert.equal(pg.DATABASE_URL, 'postgresql://todo_app:pw@pgbouncer.shared-providers.svc.cluster.local:5432/todo?connection_limit=3');
+  assert.equal(pg.PG_CONNECTION_LIMIT, '3');
+
+  const mysql = connectionEnvForResource({ name: 'todo-mysql', engine: 'mysql', plan: 'shared-small', connectionLimit: 2, databaseName: 'todo', username: 'todo_app', password: 'pw' }, 'todo');
+  assert.equal(mysql.MYSQL_URL, 'mysql://todo_app:pw@mysql.shared-providers.svc.cluster.local:3306/todo?connection_limit=2');
+  assert.equal(mysql.MYSQL_CONNECTION_LIMIT, '2');
+});
+
 test('service env injection attaches selected resources only', () => {
   const env = injectResourceEnv(
     { name: 'api', attachedResources: ['redis'], environment: { NODE_ENV: 'production' } },

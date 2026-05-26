@@ -347,6 +347,7 @@ func (b *Builder) executeBuild(ctx context.Context, state *buildContext) error {
 		} else {
 			args = append(args, "--load")
 		}
+		args = append(args, buildCacheArgs(state)...)
 		for key, value := range buildArgsFromPayload(state.Job.Payload) {
 			args = append(args, "--build-arg", key+"="+value)
 		}
@@ -382,8 +383,8 @@ func (b *Builder) writeGeneratedDockerfile(ctx context.Context, state *buildCont
 	}
 	start := firstNonEmpty(state.Service.StartCommand, "npm start")
 	build := firstNonEmpty(state.Service.BuildCommand, "npm run build --if-present")
-	install := firstNonEmpty(state.Service.InstallCommand, "npm ci --omit=dev || npm install --omit=dev")
-	content := fmt.Sprintf("FROM node:24-alpine\nWORKDIR /app\nCOPY . .\nRUN %s\nRUN %s\nENV NODE_ENV=production\nCMD [\"sh\", \"-lc\", %q]\n", install, build, start)
+	install := firstNonEmpty(state.Service.InstallCommand, "if [ -f pnpm-lock.yaml ]; then corepack enable && pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack enable && yarn install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f requirements.txt ]; then pip install --cache-dir=/root/.cache/pip -r requirements.txt; elif [ -f package.json ]; then npm install; fi")
+	content := fmt.Sprintf("# syntax=docker/dockerfile:1.7\nFROM node:24-alpine\nWORKDIR /app\nCOPY . .\nRUN --mount=type=cache,target=/root/.npm --mount=type=cache,target=/root/.pnpm-store --mount=type=cache,target=/root/.cache/yarn --mount=type=cache,target=/root/.cache/pip %s\nRUN %s\nENV NODE_ENV=production\nCMD [\"sh\", \"-lc\", %q]\n", install, build, start)
 	if err := os.WriteFile(state.Dockerfile, []byte(content), 0o644); err != nil {
 		return err
 	}
@@ -461,6 +462,21 @@ func resolvePathWithin(baseDir, value string) (string, error) {
 		return "", fmt.Errorf("path %q escapes allowed base directory", value)
 	}
 	return candidate, nil
+}
+
+func buildCacheArgs(state *buildContext) []string {
+	if stringValue(state.Job.Payload["cache"]) == "false" || stringValue(state.Job.Payload["buildCache"]) == "false" {
+		return nil
+	}
+	cacheRef := firstNonEmpty(stringValue(state.Job.Payload["cacheRef"]), stringValue(state.Job.Payload["buildCacheRef"]), os.Getenv("RAIBITSERVER_BUILDKIT_CACHE_REF"))
+	cacheMode := firstNonEmpty(stringValue(state.Job.Payload["buildCache"]), os.Getenv("RAIBITSERVER_BUILDKIT_CACHE"))
+	if cacheRef == "" && (cacheMode == "registry" || cacheMode == "true") {
+		cacheRef = state.Image + "-buildcache"
+	}
+	if cacheRef != "" {
+		return []string{"--cache-from", "type=registry,ref=" + cacheRef, "--cache-to", "type=registry,ref=" + cacheRef + ",mode=max"}
+	}
+	return []string{"--cache-to", "type=inline"}
 }
 
 func (b *Builder) writeLog(ctx context.Context, state *buildContext, step, line, level string) error {

@@ -35,6 +35,8 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
     manifests.push(...serviceManifests);
   }
 
+  const prePullImages = imagePrePullList(spec, buildPlans);
+  if (prePullImages.length) manifests.push(imagePrePullDaemonSetManifest(namespace, projectSlug, prePullImages));
   manifests.push(networkPolicyManifest(namespace, services, resources));
   return {
     apiVersion: 'raibitserver.io/v1alpha1',
@@ -45,6 +47,11 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
       namespace,
     },
     buildPlans,
+    prePullPlan: {
+      enabled: prePullImages.length > 0,
+      images: prePullImages,
+      strategy: prePullImages.length ? 'tenant-daemonset-init-container-cache-warmup' : 'disabled',
+    },
     resourcePlans,
     domainPlan: domainPlanForProject(spec),
     manifests,
@@ -350,6 +357,60 @@ function networkPolicyManifest(namespace: string, services: AnyRecord[], resourc
       publicEgressServices,
     },
   };
+}
+
+function imagePrePullList(spec: AnyRecord, buildPlans: AnyRecord[]) {
+  const explicit = spec.prePullImages || spec.performance?.prePullImages || spec.runtime?.prePullImages || [];
+  const includeBuildOutputs = spec.performance?.prePullBuildImages === true || spec.runtime?.prePullBuildImages === true;
+  const images = [
+    ...arrayStrings(explicit),
+    ...(includeBuildOutputs ? buildPlans.map((plan) => plan.image) : []),
+  ];
+  return [...new Set(images.filter(Boolean).map(String))].slice(0, 20);
+}
+
+function imagePrePullDaemonSetManifest(namespace: string, projectSlug: string, images: string[]): AnyRecord {
+  const labels = {
+    'app.kubernetes.io/name': 'image-prepull',
+    'app.kubernetes.io/managed-by': 'raibitserver',
+    'raibitserver.io/project': projectSlug,
+    'raibitserver.io/performance': 'image-prepull',
+  };
+  return {
+    apiVersion: 'apps/v1',
+    kind: 'DaemonSet',
+    metadata: { name: 'image-prepull', namespace, labels },
+    spec: {
+      selector: { matchLabels: { 'app.kubernetes.io/name': 'image-prepull' } },
+      template: {
+        metadata: { labels, annotations: { 'raibitserver.io/prepull-images': images.join(',') } },
+        spec: {
+          securityContext: DEFAULT_POD_SECURITY_CONTEXT,
+          automountServiceAccountToken: false,
+          restartPolicy: 'Always',
+          initContainers: images.map((image, index) => ({
+            name: `pull-${index + 1}`,
+            image,
+            imagePullPolicy: 'IfNotPresent',
+            command: ['sh', '-lc', 'true'],
+            resources: { requests: { cpu: '10m', memory: '16Mi' }, limits: { cpu: '50m', memory: '64Mi' } },
+            securityContext: DEFAULT_CONTAINER_SECURITY_CONTEXT,
+          })),
+          containers: [{
+            name: 'pause',
+            image: 'registry.k8s.io/pause:3.10',
+            imagePullPolicy: 'IfNotPresent',
+            resources: { requests: { cpu: '10m', memory: '16Mi' }, limits: { cpu: '50m', memory: '64Mi' } },
+            securityContext: DEFAULT_CONTAINER_SECURITY_CONTEXT,
+          }],
+        },
+      },
+    },
+  };
+}
+
+function arrayStrings(value: any) {
+  return (Array.isArray(value) ? value : [value]).filter((item) => item !== undefined && item !== null && String(item).trim()).map((item) => String(item).trim());
 }
 
 function resourcePlan(resource: AnyRecord, namespace: string, projectSlug: string): AnyRecord {

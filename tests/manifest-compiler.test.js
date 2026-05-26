@@ -73,3 +73,18 @@ test('resource plans expose catalog lifecycle and env variable names', () => {
   assert.equal(postgres.lifecycle.includes('backup'), true);
   assert.equal(postgres.env.includes('DATABASE_URL'), true);
 });
+
+test('compiler can emit safe image pre-pull DaemonSet for rollout latency reduction', () => {
+  const prePull = compileProject({
+    organization: { slug: 'gdg' },
+    project: { name: 'warm' },
+    performance: { prePullImages: ['node:24-alpine', 'python:3.13-alpine'] },
+    services: [{ name: 'web', sourceType: 'image', image: 'registry.local/web:1' }],
+  });
+  const daemonSet = prePull.manifests.find((manifest) => manifest.kind === 'DaemonSet' && manifest.metadata.name === 'image-prepull');
+  assert.ok(daemonSet);
+  assert.equal(prePull.prePullPlan.enabled, true);
+  assert.deepEqual(daemonSet.spec.template.spec.initContainers.map((container) => container.image), ['node:24-alpine', 'python:3.13-alpine']);
+  assert.equal(daemonSet.spec.template.spec.automountServiceAccountToken, false);
+  assert.equal(daemonSet.spec.template.spec.initContainers[0].securityContext.runAsNonRoot, true);
+});

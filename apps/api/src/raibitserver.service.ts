@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
-import { assertRateLimit, assertSystemDeploymentActor, createControlPlaneRepository, createFixedWindowRateLimiter, createSessionToken, githubOAuthLoginPlan, hashPassword, normalizeEmail, organizationScopeFromProjectInput, personalOrganizationSlug, requireScope, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, signupPolicyForAccount, validateServiceSecurity, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
+import { assertRateLimit, assertSystemDeploymentActor, createControlPlaneRepository, createFixedWindowRateLimiter, createSessionToken, githubOAuthLoginPlan, hashPassword, normalizeEmail, organizationScopeFromProjectInput, personalOrganizationSlug, quotaUsageGauges, quotaWarnings, requireScope, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, signupPolicyForAccount, validateServiceSecurity, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 
 /**
  * NestJS-facing desired-state service.
@@ -328,12 +328,37 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     return { events: await repository.listDeploymentEvents(deploymentId) };
   }
 
+  async deploymentActivitySnapshot(deploymentId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const deployment = repository.getDeployment ? await repository.getDeployment(deploymentId) : (await repository.snapshot()).deployments.find((candidate: Record<string, any>) => String(candidate.id) === String(deploymentId));
+    if (!deployment) throw new NotFoundException(`deployment not found: ${deploymentId}`);
+    await assertProjectAccess(repository, deployment.projectId, subject);
+    return {
+      deployment,
+      logs: await repository.listDeploymentLogs(deploymentId),
+      events: await repository.listDeploymentEvents(deploymentId),
+      stream: { mode: 'sse-snapshot', retryMs: 3000 },
+    };
+  }
+
   async listRuntimeLogs(serviceId: string, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     const service = await repository.getService(serviceId);
     if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
     await assertProjectAccess(repository, service.projectId, subject);
     return { logs: await repository.listRuntimeLogs(serviceId) };
+  }
+
+  async serviceLogSnapshot(serviceId: string, subject: Record<string, any>) {
+    const repository: any = await this.repositoryPromise;
+    const service = await repository.getService(serviceId);
+    if (!service) throw new NotFoundException(`service not found: ${serviceId}`);
+    await assertProjectAccess(repository, service.projectId, subject);
+    return {
+      service,
+      logs: await repository.listRuntimeLogs(serviceId),
+      stream: { mode: 'sse-snapshot', retryMs: 3000 },
+    };
   }
 
   async queryResource(resourceId: string, input: Record<string, any>, subject: Record<string, any>) {
@@ -374,7 +399,8 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const usage = (snapshot.usageRecords || []).filter((row: Record<string, any>) => String(row.userId) === String(subject.id));
     const unlimited = subject.userRole === 'ADMIN' || subject.accountType === 'CLUB_MEMBER';
     const quota = unlimited ? null : (snapshot.quotas || []).find((row: Record<string, any>) => String(row.userId) === String(subject.id)) || null;
-    return { accountType: subject.accountType, approvalStatus: subject.approvalStatus, unlimited, quota, usage };
+    const current = repository.quotaUsageForUser ? await repository.quotaUsageForUser(subject.id) : {};
+    return { accountType: subject.accountType, approvalStatus: subject.approvalStatus, unlimited, quota, usage, current, gauges: quotaUsageGauges(current, quota), warnings: quotaWarnings(current, quota) };
   }
 
   async listEnvironment(projectId: string, serviceId: string, subject: Record<string, any>) {

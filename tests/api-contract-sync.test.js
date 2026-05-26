@@ -45,8 +45,13 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
     '/deployments/{deploymentId}/status',
     '/deployments/{deploymentId}/cancel',
     '/deployments/{deploymentId}/rollback',
+    '/deployments/{deploymentId}/logs',
+    '/deployments/{deploymentId}/events',
+    '/deployments/{deploymentId}/stream',
     '/projects/{projectId}/services/{serviceId}/env',
     '/projects/{projectId}/services/{serviceId}/env-file',
+    '/services/{serviceId}/logs',
+    '/services/{serviceId}/logs/stream',
     '/auth/github/login',
     '/auth/github/callback',
     '/github/installations',
@@ -58,6 +63,7 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
     '/github/repositories/{repositoryId}/sync',
     '/resources/{resourceId}/console/schema',
     '/resources/{resourceId}/console/tables',
+    '/resources/{resourceId}/console/tables/{table}',
     '/resources/{resourceId}/console/collections',
     '/resources/{resourceId}/console/keys',
     '/resources/{resourceId}/console/query',
@@ -100,14 +106,14 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   assert.match(projectsController, /@Delete\(':projectId'\)/);
   assert.match(servicesController, /ServiceDetailController/);
   assert.match(servicesController, /@Patch\(\)/);
-  for (const marker of ["@Get('deployments/:deploymentId')", "@Patch('deployments/:deploymentId/status')", "@Post('deployments/:deploymentId/status')", "@Post('deployments/:deploymentId/cancel')", "@Post('deployments/:deploymentId/rollback')"]) assert.ok(deploymentsController.includes(marker), `${marker} missing from Deployments controller`);
+  for (const marker of ["@Get('deployments/:deploymentId')", "@Patch('deployments/:deploymentId/status')", "@Post('deployments/:deploymentId/status')", "@Post('deployments/:deploymentId/cancel')", "@Post('deployments/:deploymentId/rollback')", "@Get('deployments/:deploymentId/stream')", "@Get('services/:serviceId/logs/stream')"]) assert.ok(deploymentsController.includes(marker), `${marker} missing from Deployments controller`);
   assert.match(deploymentsModule, /ServiceDeploymentsController/);
   assert.match(deploymentsModule, /DeploymentLogsController/);
   assert.match(deploymentsModule, /providers: \[DeploymentsService\]/);
   assert.match(deploymentsService, /updateDeploymentStatus/);
   assert.match(resourcesController, /@Get\(\)/);
   assert.match(resourcesModule, /ResourceConsoleController/);
-  for (const marker of ["@Get('schema')", "@Get('tables')", "@Get('collections')", "@Get('keys')", "@Post('query')", "@Post('command')", "@Post('browse')"]) assert.ok(resourceConsoleController.includes(marker), `${marker} missing from ResourceConsoleController`);
+  for (const marker of ["@Get('schema')", "@Get('tables')", "@Get('tables/:table')", "@Get('collections')", "@Get('keys')", "@Post('query')", "@Post('command')", "@Post('browse')"]) assert.ok(resourceConsoleController.includes(marker), `${marker} missing from ResourceConsoleController`);
   for (const marker of ["@Get('github/installations')", "@Get('github/installations/:installationId/repositories')", "@Post('github/webhooks')", "@Post('github/repositories/import')", "@Post('github/repositories/:repositoryId/sync')"]) assert.ok(githubController.includes(marker), `${marker} missing from GitHub controller`);
   assert.ok(apiMain.includes('rawBody: true'), 'Nest bootstrap must keep raw webhook bytes for GitHub HMAC verification');
   assert.ok(githubController.includes('req.rawBody'), 'GitHub webhook controller must verify the original raw payload bytes');

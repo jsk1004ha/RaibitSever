@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveBuildStrategy } from '../packages/core/src/build-strategy.ts';
+import { buildExecutionPlan } from '../packages/core/src/build-executor.ts';
 
 const nodeFiles = {
   'package.json': JSON.stringify({ dependencies: { next: 'latest' }, scripts: { build: 'next build', start: 'next start' } }),
@@ -32,4 +33,17 @@ test('prebuilt image bypasses build and still has workload pipeline', () => {
   assert.equal(plan.mode, 'prebuilt-image');
   assert.deepEqual(plan.buildSteps, []);
   assert.equal(plan.pipeline.includes('kubernetes-workload'), true);
+});
+
+test('build execution plan can emit registry-backed BuildKit cache hints', () => {
+  const plan = buildExecutionPlan(
+    { name: 'api', projectSlug: 'demo', buildCache: 'registry' },
+    nodeFiles,
+    { sourceDir: '.', push: true },
+  );
+  assert.equal(plan.cache.registry, true);
+  assert.equal(plan.cache.cacheFrom[0], 'type=registry,ref=registry.raibitserver.local/demo/api:latest-buildcache');
+  assert.equal(plan.cache.cacheTo[0], 'type=registry,ref=registry.raibitserver.local/demo/api:latest-buildcache,mode=max');
+  assert.match(plan.buildCommand, /--cache-from type=registry,ref=registry\.raibitserver\.local\/demo\/api:latest-buildcache/);
+  assert.match(plan.buildCommand, /--cache-to type=registry,ref=registry\.raibitserver\.local\/demo\/api:latest-buildcache,mode=max/);
 });

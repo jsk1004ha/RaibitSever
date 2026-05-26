@@ -9,10 +9,10 @@ export { connectionEnvForResource, injectResourceEnv } from './env-injection.ts'
 export { parseDotEnv, normalizeEnvEntries, maskEnvEntries } from './env-file.ts';
 export { validateServiceSecurity, guardDatabaseQuery, sanitizeLogRecord, safeAuthModeFromEnv, unsafeDisabledAuthAllowed, securityHeaders, createFixedWindowRateLimiter, assertRateLimit, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantDeploymentCreate, sanitizeDeploymentStatusInput, assertSystemDeploymentActor, redactDbConsoleStatement, normalizeTenantGitUrl } from './security.ts';
 export { can, assertCan, visibleEnvironment } from './rbac.ts';
-export { checkQuota, quotaForPlan, usageMetricDefinitions } from './quota.ts';
+export { checkQuota, quotaForPlan, usageMetricDefinitions, quotaUsageGauges, quotaWarnings } from './quota.ts';
 export { domainPlanForProject, serviceHostname, serviceConsoleHostname, resourceConsoleHostname } from './domain-router.ts';
 export { sourceCheckoutPlan } from './source-control.ts';
-export { buildExecutionPlan } from './build-executor.ts';
+export { buildExecutionPlan, buildCachePlan } from './build-executor.ts';
 export { registryPushPlan } from './registry.ts';
 export { kubernetesApplyPlan } from './kubernetes.ts';
 export { compileResourceProvisioningPlan, compileProjectProvisioning, provisionProjectResources } from './provisioner.ts';

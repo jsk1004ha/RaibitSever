@@ -81,6 +81,20 @@ function requestWithStatus(port, method, path, body) {
   });
 }
 
+function requestRaw(port, method, path, body) {
+  return new Promise((resolve, reject) => {
+    const payload = body ? JSON.stringify(body) : null;
+    const req = http.request({ port, path, method, headers: payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {} }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve({ statusCode: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
 
 test('repository creates deployment and workflow job as one operation', async () => {
   const repository = new InMemoryControlPlaneRepository();
@@ -130,6 +144,14 @@ test('HTTP API exposes deployment detail, status transition, cancel, and rollbac
     assert.equal(rollback.body.deployment.imageUrl, previous.imageUrl);
     assert.equal(rollback.body.workflowJob.type, 'rollback-deploy');
     assert.equal(controlPlane.store.listDeploymentEvents(queued.id).some((event) => event.type === 'deployment.rollback.requested'), true);
+
+    controlPlane.store.appendRuntimeLog({ serviceId: service.id, deploymentId: queued.id, line: 'ready' });
+    const deploymentStream = await requestRaw(port, 'GET', `/deployments/${queued.id}/stream`);
+    assert.equal(deploymentStream.statusCode, 200);
+    assert.match(deploymentStream.headers['content-type'], /text\/event-stream/);
+    assert.match(deploymentStream.body, /event: deployment\.snapshot/);
+    const runtimeStream = await requestRaw(port, 'GET', `/services/${service.id}/logs/stream`);
+    assert.match(runtimeStream.body, /event: service\.logs\.snapshot/);
   } finally {
     server.close();
   }

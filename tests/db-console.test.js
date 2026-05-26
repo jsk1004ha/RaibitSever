@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { browseDbConsole, runDbConsoleQuery } from '../packages/core/src/db-console.ts';
+import { browseDbConsole, resourceConsoleView, runDbConsoleQuery } from '../packages/core/src/db-console.ts';
 import { ControlPlaneStore } from '../packages/core/src/store.ts';
 
 test('SQLite console creates parent directories and browses tables', async () => {
@@ -15,6 +15,9 @@ test('SQLite console creates parent directories and browses tables', async () =>
   assert.equal(result.rows[0].status, 'ok');
   const browse = await browseDbConsole(resource);
   assert.deepEqual(browse.tables, ['health']);
+  const rows = await resourceConsoleView(resource, 'table', { table: 'health' });
+  assert.equal(rows.rows[0].status, 'ok');
+  assert.deepEqual(rows.fields, ['status']);
 });
 
 test('PostgreSQL console exposes live execution contract without local credentials', async () => {

@@ -30,26 +30,29 @@ export function connectionEnvForResource(resource: AnyRecord, projectSlug = 'pro
   const database = databaseFor(resource, projectSlug);
   const bucket = resource.bucket || slugify(resource.name || 'bucket');
   const protocol = resource.tls ? 'rediss' : 'redis';
+  const connectionLimit = connectionLimitForResource(resource);
 
   const env: AnyRecord = {};
   switch (entry.key) {
     case 'postgresql':
-      env.DATABASE_URL = `postgresql://${username}:${password}@${host}:${port}/${database}`;
+      env.DATABASE_URL = appendConnectionLimit(`postgresql://${username}:${password}@${host}:${port}/${database}`, connectionLimit);
       env.POSTGRES_URL = env.DATABASE_URL;
       env.PGHOST = host;
       env.PGPORT = String(port);
       env.PGDATABASE = database;
       env.PGUSER = username;
       env.PGPASSWORD = password;
+      if (connectionLimit) env.PG_CONNECTION_LIMIT = String(connectionLimit);
       break;
     case 'mysql':
     case 'mariadb':
-      env.MYSQL_URL = `mysql://${username}:${password}@${host}:${port}/${database}`;
+      env.MYSQL_URL = appendConnectionLimit(`mysql://${username}:${password}@${host}:${port}/${database}`, connectionLimit);
       env.MYSQL_HOST = host;
       env.MYSQL_PORT = String(port);
       env.MYSQL_DATABASE = database;
       env.MYSQL_USER = username;
       env.MYSQL_PASSWORD = password;
+      if (connectionLimit) env.MYSQL_CONNECTION_LIMIT = String(connectionLimit);
       if (entry.key === 'mariadb') env.MARIADB_URL = env.MYSQL_URL;
       break;
     case 'mongodb':
@@ -132,6 +135,26 @@ function uniqueTenantScope(resource: AnyRecord, projectSlug: any) {
     .map((value) => slugify(value));
   if (parts.length) return parts.join('-').slice(0, 48);
   return 'project';
+}
+
+function connectionLimitForResource(resource: AnyRecord) {
+  const explicit = resource.connectionLimit ?? resource.maxConnections ?? resource.desiredState?.connectionLimit ?? resource.desiredSpec?.connectionLimit;
+  if (explicit !== undefined && explicit !== null && explicit !== '') return clampConnectionLimit(explicit);
+  const plan = String(resource.plan || resource.tier || resource.desiredState?.plan || resource.desiredSpec?.plan || '').toLowerCase();
+  if (plan === 'shared-small' || plan === 'shared' || plan.startsWith('shared-')) return 3;
+  return null;
+}
+
+function clampConnectionLimit(value: any) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.min(Math.max(Math.floor(parsed), 1), 50);
+}
+
+function appendConnectionLimit(url: string, limit: number | null) {
+  if (!limit) return url;
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}connection_limit=${limit}`;
 }
 
 export function injectResourceEnv(service: AnyRecord, resources: AnyRecord[] = [], projectSlug = 'project') {

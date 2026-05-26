@@ -118,6 +118,14 @@ export async function browseDbConsole(resource: Record<string, any>, options: Re
 export async function resourceConsoleView(resource: Record<string, any>, view: string, options: Record<string, any> = {}) {
   const surface = await browseDbConsole(resource, options) as Record<string, any>;
   const engine = surface.engine || String(resource.engine || '').toLowerCase();
+  if (view === 'table' || view === 'rows' || view === 'data') {
+    const table = String(options.table || options.name || '').trim();
+    if (!table) return { engine, rows: [], fields: [], rowCount: 0, warning: 'table view requires a table query parameter', connectionInfo: surface.connectionInfo, mode: surface.mode };
+    if (engine === 'sqlite') return runDbConsoleQuery(resource, `SELECT * FROM ${quoteSqlIdentifier(table, 'sqlite')}`, { ...options, role: options.role || 'viewer' });
+    if (engine === 'postgresql' || engine === 'postgres') return runDbConsoleQuery(resource, `SELECT * FROM ${quoteSqlIdentifier(table, 'postgresql')}`, { ...options, role: options.role || 'viewer' });
+    if (engine === 'mysql' || engine === 'mariadb') return runProviderConsole(resource, `SELECT * FROM ${quoteSqlIdentifier(table, 'mysql')}`, { ...options, role: options.role || 'viewer' });
+    return { engine, mode: surface.mode || 'provider-contract', rows: [], fields: [], rowCount: 0, warning: `${engine} table data grid is not available for this resource type`, connectionInfo: surface.connectionInfo };
+  }
   if (view === 'schema') {
     return {
       engine,
@@ -140,6 +148,16 @@ export async function resourceConsoleView(resource: Record<string, any>, view: s
   if (view === 'collections') return { engine, collections: surface.collections || [], connectionInfo: surface.connectionInfo, warning: surface.warning, mode: surface.mode };
   if (view === 'keys') return { engine, keys: surface.keys || [], connectionInfo: surface.connectionInfo, warning: surface.warning, mode: surface.mode, command: surface.command };
   return surface;
+}
+
+function quoteSqlIdentifier(identifier: string, engine: string) {
+  const parts = identifier.split('.').map((part) => part.trim()).filter(Boolean);
+  if (!parts.length || parts.length > 2) throw new Error('invalid table identifier');
+  const quote = engine === 'mysql' ? '`' : '"';
+  return parts.map((part) => {
+    if (!/^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(part)) throw new Error('invalid table identifier');
+    return `${quote}${part.replaceAll(quote, `${quote}${quote}`)}${quote}`;
+  }).join('.');
 }
 
 async function ensureSqliteDirectory(dbPath: string) {
@@ -219,9 +237,17 @@ function runSqlContract(resource: Record<string, any>, query: string, options: R
   const upper = query.replace(/;+\s*$/, '').trim().toUpperCase();
   let rows: Record<string, any>[] = [];
   if (/^SELECT\s+1(?:\s+AS\s+([A-Z_][A-Z0-9_]*))?$/.test(upper)) rows = [{ raibitserver_connection_test: 1 }];
+  else if (/^SELECT\s+\*\s+FROM\s+[`"A-Z0-9_.-]+/.test(upper)) {
+    const tableName = query.match(/FROM\s+([`"a-zA-Z0-9_.-]+)/i)?.[1]?.replace(/[`"]/g, '') || 'table';
+    rows = arrayRows((resource.desiredState?.rows || resource.desiredSpec?.rows || resource.rows || {})[tableName] || []);
+  }
   else if (/^SHOW\s+TABLES/.test(upper)) rows = (surface.tables || []).map((table: any) => ({ table: typeof table === 'string' ? table : table.name || String(table) }));
   else if (/^SHOW\s+DATABASES|^SHOW\s+SCHEMAS/.test(upper)) rows = (surface.schemas || []).map((schema: any) => ({ schema }));
   return { engine, mode: 'provider-contract', rows, fields: rows[0] ? Object.keys(rows[0]) : [], rowCount: rows.length, warning: surface.warning, connectionInfo: surface.connectionInfo, guard: { ...providerGuard, sql: sqlGuard } };
+}
+
+function arrayRows(value: any) {
+  return Array.isArray(value) ? value : [];
 }
 
 function runRedisContract(resource: Record<string, any>, command: string, options: Record<string, any>, guard: Record<string, any>, engine: string) {

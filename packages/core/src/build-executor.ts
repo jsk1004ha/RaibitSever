@@ -9,14 +9,24 @@ import { pushImage, registryLogin } from './registry.ts';
 import { isSecretKey, maskSecretValue } from './secrets.ts';
 import { sanitizeLogRecord } from './security.ts';
 
-export function dockerBuildxCommand({ image, context = '.', dockerfile = 'Dockerfile', push = false, load = false, platforms = [], buildArgs = {}, target = null, cache = true, metadataFile = null }: Record<string, any>) {
+export function dockerBuildxCommand({ image, context = '.', dockerfile = 'Dockerfile', push = false, load = false, platforms = [], buildArgs = {}, target = null, cache = true, cacheFrom = [], cacheTo = [], metadataFile = null }: Record<string, any>) {
   if (!image) throw new Error('image is required for docker buildx');
   const args = ['buildx', 'build', '--file', String(dockerfile), '--tag', String(image)];
   const redactedArgs = [...args];
   if (metadataFile) { args.push('--metadata-file', String(metadataFile)); redactedArgs.push('--metadata-file', String(metadataFile)); }
   if (push) { args.push('--push'); redactedArgs.push('--push'); }
   if (load) { args.push('--load'); redactedArgs.push('--load'); }
-  if (cache) { args.push('--cache-to', 'type=inline'); redactedArgs.push('--cache-to', 'type=inline'); }
+  if (cache) {
+    const from = normalizeCacheEntries(cacheFrom);
+    const to = normalizeCacheEntries(cacheTo);
+    for (const entry of from) { args.push('--cache-from', entry); redactedArgs.push('--cache-from', entry); }
+    if (to.length) {
+      for (const entry of to) { args.push('--cache-to', entry); redactedArgs.push('--cache-to', entry); }
+    } else {
+      args.push('--cache-to', 'type=inline');
+      redactedArgs.push('--cache-to', 'type=inline');
+    }
+  }
   for (const platform of platforms || []) { args.push('--platform', String(platform)); redactedArgs.push('--platform', String(platform)); }
   for (const [key, value] of Object.entries(buildArgs || {})) {
     args.push('--build-arg', `${key}=${value}`);
@@ -41,6 +51,21 @@ export function buildctlCommand({ image, context = '.', dockerfile = '.', push =
   } satisfies CommandSpec;
 }
 
+export function buildCachePlan(service: Record<string, any>, options: Record<string, any> = {}, image = service.image || service.imageUrl) {
+  const disabled = options.cache === false || service.cache === false || service.buildCache === false;
+  const registryCacheEnabled = options.registryCache === true || service.registryCache === true || service.buildCache === 'registry' || service.buildCache?.mode === 'registry';
+  const cacheRef = options.cacheRef || service.cacheRef || service.buildCache?.ref || (image ? `${image}-buildcache` : null);
+  const cacheFrom = normalizeCacheEntries(options.cacheFrom || service.cacheFrom || (registryCacheEnabled && cacheRef ? [`type=registry,ref=${cacheRef}`] : []));
+  const cacheTo = normalizeCacheEntries(options.cacheTo || service.cacheTo || (registryCacheEnabled && cacheRef ? [`type=registry,ref=${cacheRef},mode=max`] : []));
+  return {
+    enabled: !disabled,
+    registry: registryCacheEnabled,
+    ref: cacheRef,
+    cacheFrom,
+    cacheTo: !disabled && cacheTo.length ? cacheTo : (!disabled ? ['type=inline'] : []),
+    packageManagerMounts: packageManagerCacheMounts(service),
+  };
+}
 
 function resolvePathWithinSourceDir(sourceDir: string, requestedPath: string, field: string) {
   const sourceRoot = path.resolve(sourceDir);
@@ -62,9 +87,10 @@ export function buildExecutionPlan(service: Record<string, any>, files: Record<s
   const dockerfilePath = resolvePathWithinSourceDir(sourceDir, dockerfile, 'dockerfilePath');
   const push = Boolean(options.push || service.push);
   const builder = options.builder || 'docker-buildx';
+  const cachePlan = buildCachePlan(service, options, buildPlan.image);
   const buildCommand = builder === 'buildctl'
     ? buildctlCommand({ image: buildPlan.image, context, dockerfile: path.dirname(dockerfilePath), push })
-    : dockerBuildxCommand({ image: buildPlan.image, context, dockerfile: dockerfilePath, push, load: !push, platforms: options.platforms || service.platforms || [], buildArgs: options.buildArgs || service.buildArgs || {}, target: options.target || service.target || null, metadataFile: options.metadataFile || service.metadataFile || null });
+    : dockerBuildxCommand({ image: buildPlan.image, context, dockerfile: dockerfilePath, push, load: !push, platforms: options.platforms || service.platforms || [], buildArgs: options.buildArgs || service.buildArgs || {}, target: options.target || service.target || null, cache: cachePlan.enabled, cacheFrom: cachePlan.cacheFrom, cacheTo: cachePlan.cacheTo, metadataFile: options.metadataFile || service.metadataFile || null });
 
   return {
     service: buildPlan.service,
@@ -76,6 +102,7 @@ export function buildExecutionPlan(service: Record<string, any>, files: Record<s
     context,
     dockerfile: dockerfilePath,
     push,
+    cache: cachePlan,
     buildCommand: commandToString(buildCommand),
     registryPush: push ? null : { note: 'image can be pushed later with registry push command' },
     buildPlan,
@@ -119,7 +146,7 @@ export async function executeBuildWorkflow(service: Record<string, any>, files: 
 
   const buildCommand = options.builder === 'buildctl'
     ? buildctlCommand({ image: plan.image, context: plan.context, dockerfile: path.dirname(plan.dockerfile), push: plan.push })
-    : dockerBuildxCommand({ image: plan.image, context: plan.context, dockerfile: plan.dockerfile, push: plan.push, load: !plan.push, platforms: options.platforms || service.platforms || [], buildArgs: options.buildArgs || service.buildArgs || {}, target: options.target || service.target || null, metadataFile: options.metadataFile || service.metadataFile || null });
+    : dockerBuildxCommand({ image: plan.image, context: plan.context, dockerfile: plan.dockerfile, push: plan.push, load: !plan.push, platforms: options.platforms || service.platforms || [], buildArgs: options.buildArgs || service.buildArgs || {}, target: options.target || service.target || null, cache: plan.cache?.enabled !== false, cacheFrom: plan.cache?.cacheFrom || [], cacheTo: plan.cache?.cacheTo || [], metadataFile: options.metadataFile || service.metadataFile || null });
   await ensureSyntheticDockerfileIfNeeded(plan, service, { dryRun });
   const result = await runCommand(buildCommand, { dryRun, timeoutMs: options.timeoutMs || 30 * 60 * 1000 });
   const imageDigest = await resolveBuildDigest(options.metadataFile || service.metadataFile, plan.image, dryRun);
@@ -137,10 +164,28 @@ async function ensureSyntheticDockerfileIfNeeded(plan: Record<string, any>, serv
   await fs.mkdir(path.dirname(plan.dockerfile), { recursive: true });
   const start = service.startCommand || plan.buildPlan.runtime?.startCommand || 'npm start';
   const build = service.buildCommand || service.customBuildCommand || 'npm run build --if-present';
-  const install = service.installCommand || 'if [ -f package-lock.json ]; then npm ci; elif [ -f package.json ]; then npm install; fi';
+  const install = service.installCommand || 'if [ -f pnpm-lock.yaml ]; then corepack enable && pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack enable && yarn install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f requirements.txt ]; then pip install --cache-dir=/root/.cache/pip -r requirements.txt; elif [ -f package.json ]; then npm install; fi';
   const prune = service.pruneCommand || 'if [ -f package.json ]; then npm prune --omit=dev; fi';
-  const dockerfile = `FROM node:24-alpine\nWORKDIR /app\nCOPY . .\nRUN ${install}\nRUN ${build}\nRUN ${prune}\nRUN chown -R node:node /app\nENV NODE_ENV=production\nUSER node\nCMD ${JSON.stringify(['sh', '-lc', start])}\n`;
+  const dockerfile = `# syntax=docker/dockerfile:1.7\nFROM node:24-alpine\nWORKDIR /app\nCOPY . .\nRUN --mount=type=cache,target=/root/.npm --mount=type=cache,target=/root/.pnpm-store --mount=type=cache,target=/root/.cache/yarn --mount=type=cache,target=/root/.cache/pip ${install}\nRUN ${build}\nRUN ${prune}\nRUN chown -R node:node /app\nENV NODE_ENV=production\nUSER node\nCMD ${JSON.stringify(['sh', '-lc', start])}\n`;
   await fs.writeFile(plan.dockerfile, dockerfile);
+}
+
+function normalizeCacheEntries(value: any) {
+  if (!value) return [];
+  const entries = Array.isArray(value) ? value : [value];
+  return entries.filter((entry) => entry !== undefined && entry !== null && String(entry).trim()).map((entry) => String(entry).trim());
+}
+
+function packageManagerCacheMounts(service: Record<string, any>) {
+  const requested = service.packageManager || service.framework || service.language || 'auto';
+  const all = [
+    { manager: 'npm', target: '/root/.npm' },
+    { manager: 'pnpm', target: '/root/.pnpm-store' },
+    { manager: 'yarn', target: '/root/.cache/yarn' },
+    { manager: 'pip', target: '/root/.cache/pip' },
+  ];
+  if (requested === 'auto') return all;
+  return all.filter((entry) => String(requested).toLowerCase().includes(entry.manager));
 }
 
 

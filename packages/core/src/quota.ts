@@ -74,3 +74,33 @@ export function usageMetricDefinitions() {
     'backup-retention-days',
   ];
 }
+
+export function quotaUsageGauges(usage = {}, quota = null, options: Record<string, any> = {}) {
+  if (!quota) return [];
+  const threshold = Number(options.warningThreshold ?? 0.8);
+  return Object.entries(quota)
+    .filter(([metric, limit]) => metric.startsWith('max') && typeof limit === 'number' && Number.isFinite(limit) && limit > 0)
+    .map(([metric, limit]) => {
+      const used = Math.max(0, Number(usage[metric] || 0));
+      const ratio = used / Number(limit);
+      return {
+        metric,
+        used,
+        limit,
+        remaining: Math.max(0, Number(limit) - used),
+        percent: Math.round(ratio * 100),
+        level: ratio >= 1 ? 'blocked' : (ratio >= threshold ? 'warning' : 'ok'),
+      };
+    });
+}
+
+export function quotaWarnings(usage = {}, quota = null, options = {}) {
+  return quotaUsageGauges(usage, quota, options)
+    .filter((gauge) => gauge.level !== 'ok')
+    .map((gauge) => ({
+      code: gauge.level === 'blocked' ? 'QUOTA_EXHAUSTED' : 'QUOTA_NEAR_LIMIT',
+      metric: gauge.metric,
+      message: `${gauge.metric} is ${gauge.percent}% used (${gauge.used}/${gauge.limit})`,
+      level: gauge.level,
+    }));
+}

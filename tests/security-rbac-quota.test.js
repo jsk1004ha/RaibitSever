@@ -4,7 +4,7 @@ import { guardDatabaseQuery, sanitizeLogRecord, secureContainerDefaults, validat
 import { ControlPlaneStore } from '../packages/core/src/store.ts';
 import { sealSecret } from '../packages/core/src/secret-vault.ts';
 import { can, visibleEnvironment } from '../packages/core/src/rbac.ts';
-import { checkQuota } from '../packages/core/src/quota.ts';
+import { checkQuota, quotaUsageGauges, quotaWarnings } from '../packages/core/src/quota.ts';
 
 
 test('security validator blocks privileged and hostPath workloads', () => {
@@ -112,6 +112,9 @@ test('quota usage includes build minutes, runtime hours, CPU, and memory', () =>
   assert.equal(usage.maxRuntimeHoursPerMonth, 3);
   assert.equal(usage.maxCpuMillicores, 500);
   assert.equal(usage.maxMemoryMb, 512);
+  const gauges = quotaUsageGauges(usage, { maxBuildMinutesPerMonth: 8, maxRuntimeHoursPerMonth: 10, accountType: 'NON_CLUB' });
+  assert.equal(gauges.find((gauge) => gauge.metric === 'maxBuildMinutesPerMonth').level, 'warning');
+  assert.equal(quotaWarnings(usage, { maxBuildMinutesPerMonth: 7 })[0].code, 'QUOTA_EXHAUSTED');
 });
 
 test('production secret sealing requires a runtime encryption key', () => {
