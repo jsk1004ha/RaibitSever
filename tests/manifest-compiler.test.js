@@ -53,11 +53,17 @@ test('tenant network policy adds bounded public egress only when service opts in
     services: [{ name: 'web', type: 'web', sourceType: 'image', image: 'example/web:1', allowPublicEgress: true }],
     resources: [],
   });
-  const policy = optIn.manifests.find((manifest) => manifest.kind === 'NetworkPolicy');
-  const externalRule = policy.spec.egress.find((rule) => rule.to?.[0]?.ipBlock?.cidr === '0.0.0.0/0');
+  const policy = optIn.manifests.find((manifest) => manifest.kind === 'NetworkPolicy' && manifest.metadata.name === 'tenant-isolation');
+  assert.equal(policy.spec.egress.some((rule) => rule.to?.[0]?.ipBlock?.cidr === '0.0.0.0/0'), false, 'tenant-wide isolation policy must not get public egress');
+  const publicPolicy = optIn.manifests.find((manifest) => manifest.kind === 'NetworkPolicy' && manifest.metadata.name === 'web-public-egress');
+  assert.ok(publicPolicy, 'service-scoped public egress policy exists');
+  assert.deepEqual(publicPolicy.spec.podSelector.matchLabels, { 'app.kubernetes.io/name': 'web' });
+  assert.equal(publicPolicy.raibitserver.scopedToServicePodSelector, true);
+  assert.deepEqual(publicPolicy.raibitserver.ipv6Except, ['::1/128', 'fc00::/7', 'fe80::/10', 'fd00:ec2::254/128']);
+  assert.deepEqual(policy.raibitserver.publicEgressServices, ['web']);
+  const externalRule = publicPolicy.spec.egress.find((rule) => rule.to?.[0]?.ipBlock?.cidr === '0.0.0.0/0');
   assert.ok(externalRule, 'external egress rule exists after explicit opt-in');
   assert.deepEqual(externalRule.to[0].ipBlock.except, ['10.0.0.0/8', '100.64.0.0/10', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16']);
-  assert.deepEqual(policy.raibitserver.publicEgressServices, ['web']);
 });
 
 test('private services do not receive public ingress', () => {

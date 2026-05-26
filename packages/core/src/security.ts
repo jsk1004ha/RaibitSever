@@ -351,15 +351,14 @@ export function guardDatabaseQuery(query: any, { confirmed = false, role = 'deve
   const text = String(query || '').trim();
   const readOnly = isReadOnlyDatabaseQuery(text);
   const destructive = !readOnly;
-  const readOnlyRole = ['viewer'].includes(role);
   if (!text) {
     return { allowed: false, reason: 'query is required', destructive: false, readOnly: false };
   }
-  if (readOnlyRole && !readOnly) {
-    return { allowed: false, reason: 'viewer role can only run read-only queries', destructive };
+  if (readOnly && !can(role, 'db:data:read')) {
+    return { allowed: false, reason: `role ${role} requires db:data:read permission for read-only queries`, destructive, readOnly };
   }
   if (destructive && !canMutateDatabase(role)) {
-    return { allowed: false, reason: `role ${role} requires db:query permission for destructive queries`, destructive };
+    return { allowed: false, reason: `role ${role} requires db:query:write permission for destructive queries`, destructive, readOnly };
   }
   if (destructive && !confirmed) {
     return { allowed: false, reason: 'destructive query requires explicit confirmation', destructive };
@@ -388,7 +387,7 @@ function badRequest(message: string): never {
 }
 
 function canMutateDatabase(role: string) {
-  return can(role, 'db:query');
+  return can(role, 'db:query:write');
 }
 
 export function isReadOnlyDatabaseQuery(query: any) {

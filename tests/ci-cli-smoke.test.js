@@ -27,7 +27,8 @@ test('CI dry-run CLI smoke commands return stable PaaS and DBaaS artifacts', asy
   assert.equal(apply.compiled.manifests.some((resource) => resource.kind === 'Ingress'), true);
 
   const readOnlyQuery = await runCli(['guard-query', 'SELECT', '1']);
-  assert.equal(readOnlyQuery.allowed, true);
+  assert.equal(readOnlyQuery.allowed, false);
+  assert.match(readOnlyQuery.reason, /db:data:read/);
   assert.equal(readOnlyQuery.readOnly, true);
 
   const destructiveQuery = await runCli(['guard-query', 'DROP']);

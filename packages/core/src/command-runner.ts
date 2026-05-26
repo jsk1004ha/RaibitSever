@@ -49,6 +49,7 @@ export async function runCommand(command: CommandSpec, { dryRun = false, timeout
   }
 
   const child = spawn(command.executable, args, {
+    detached: true,
     cwd: command.cwd,
     env: { ...process.env, ...(command.env || {}) },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -56,7 +57,7 @@ export async function runCommand(command: CommandSpec, { dryRun = false, timeout
 
   let stdout = '';
   let stderr = '';
-  const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
+  const timer = setTimeout(() => terminateProcessGroup(child.pid), timeoutMs);
   child.stdout?.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
   child.stderr?.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
   if (command.stdin) child.stdin?.write(command.stdin);
@@ -74,6 +75,27 @@ export async function runCommand(command: CommandSpec, { dryRun = false, timeout
     throw error;
   }
   return result;
+}
+
+function terminateProcessGroup(pid: number | undefined) {
+  if (!pid) return;
+  try {
+    process.kill(-pid, 'SIGTERM');
+    const killTimer = setTimeout(() => {
+      try {
+        process.kill(-pid, 'SIGKILL');
+      } catch {
+        // Process group already exited.
+      }
+    }, 5000);
+    if (typeof (killTimer as any).unref === 'function') (killTimer as any).unref();
+  } catch {
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      // Process already exited.
+    }
+  }
 }
 
 export async function commandExists(executable: string) {

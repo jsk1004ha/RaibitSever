@@ -61,7 +61,9 @@ test('query guard requires confirmation for destructive queries', () => {
   assert.equal(guardDatabaseQuery('COPY users TO STDOUT', { role: 'developer', confirmed: true }).allowed, false);
   assert.equal(guardDatabaseQuery('REFRESH MATERIALIZED VIEW reporting', { role: 'developer', confirmed: true }).allowed, false);
   assert.equal(guardDatabaseQuery('CALL rotate_keys()', { role: 'db-admin', confirmed: true }).allowed, true);
-  assert.equal(guardDatabaseQuery('SELECT * FROM users', { role: 'viewer' }).allowed, true);
+  assert.equal(guardDatabaseQuery('SELECT * FROM users', { role: 'viewer' }).allowed, false);
+  assert.equal(guardDatabaseQuery('SELECT * FROM users', { role: 'developer' }).allowed, false);
+  assert.equal(guardDatabaseQuery('SELECT * FROM users', { role: 'maintainer' }).allowed, true);
   assert.equal(guardDatabaseQuery('UPDATE users SET admin = true', { role: 'viewer' }).allowed, false);
 });
 

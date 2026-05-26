@@ -321,8 +321,8 @@ function guardProviderCommand(command: string, options: Record<string, any>) {
   const role = options.role || 'developer';
   const readOnly = isProviderReadOnly(command);
   if (!command) return { allowed: false, reason: 'query is required', destructive: false, readOnly: false, providerCommand: true };
-  if (role === 'viewer' && !readOnly) return { allowed: false, reason: 'viewer role can only run read-only queries', destructive: true, readOnly, providerCommand: true };
-  if (!readOnly && !can(role, 'db:query')) return { allowed: false, reason: `role ${role} requires db:query permission for destructive queries`, destructive: true, readOnly, providerCommand: true };
+  if (readOnly && !can(role, 'db:data:read')) return { allowed: false, reason: `role ${role} requires db:data:read permission for read-only provider commands`, destructive: false, readOnly, providerCommand: true };
+  if (!readOnly && !can(role, 'db:query:write')) return { allowed: false, reason: `role ${role} requires db:query:write permission for destructive queries`, destructive: true, readOnly, providerCommand: true };
   if (!readOnly && options.confirmed !== true && options.confirmed !== 'true') return { allowed: false, reason: 'destructive query requires explicit confirmation', destructive: true, readOnly, providerCommand: true };
   return { allowed: true, reason: 'provider console command accepted', destructive: !readOnly, readOnly, providerCommand: true };
 }

@@ -4,6 +4,8 @@ type EnvRecord = Record<string, any>;
 
 export const RUNTIME_KEY_CATALOG = Object.freeze([
   { name: 'RAIBITSERVER_AUTH_JWT_SECRET', category: 'auth', required: true, secret: true, description: 'HS256 JWT signing secret for signup/login and API sessions' },
+  { name: 'RAIBITSERVER_AUTH_AUDIENCE', category: 'auth', required: false, secret: false, description: 'Expected JWT audience for API session tokens' },
+  { name: 'RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN', category: 'auth', required: false, secret: true, description: 'Production-only token required to bootstrap an ADMIN account for an ADMIN_EMAILS address' },
   { name: 'RAIBITSERVER_SECRET_ENCRYPTION_KEY', category: 'secrets', required: true, secret: true, description: '32+ character key used by production secret stores before persisting credentials' },
   { name: 'RAIBITSERVER_GITHUB_CLIENT_ID', category: 'github', required: false, secret: false, description: 'GitHub OAuth/App client id' },
   { name: 'RAIBITSERVER_GITHUB_CLIENT_SECRET', category: 'github', required: false, secret: true, description: 'GitHub OAuth/App client secret' },
@@ -59,7 +61,7 @@ export function parseApiRuntimeConfig(env: EnvRecord = process.env) {
       issuer: stringValue(env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver'),
       jwtSecret,
       rateLimit: authRateLimit,
-      allowDevHeaders: env.RAIBITSERVER_AUTH_DEV_HEADERS === '1' && !production,
+      allowDevHeaders: devHeaderAuthAllowed(env),
     },
     secrets: {
       encryptionConfigured: secretEncryptionKey.length >= 32,
@@ -88,6 +90,9 @@ export function validateApiRuntimeConfig(env: EnvRecord = process.env) {
   }
   if (production && !secretEncryptionConfigured(env)) {
     issues.push({ key: 'RAIBITSERVER_SECRET_ENCRYPTION_KEY', code: 'MISSING_SECRET_ENCRYPTION_KEY', message: 'RAIBITSERVER_SECRET_ENCRYPTION_KEY must be at least 32 characters in production' });
+  }
+  if (production && configuredAdminEmailsFromEnv(env).length > 0 && stringValue(env.RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN || '').length < 32) {
+    issues.push({ key: 'RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN', code: 'MISSING_ADMIN_BOOTSTRAP_TOKEN', message: 'RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN must be at least 32 characters when ADMIN_EMAILS is configured in production' });
   }
   return {
     ok: issues.length === 0,
@@ -143,4 +148,17 @@ function configError(key: string, code: string, message: string) {
 
 function stringValue(value: any) {
   return String(value || '').trim();
+}
+
+export function devHeaderAuthAllowed(env: EnvRecord = process.env) {
+  return env.RAIBITSERVER_AUTH_DEV_HEADERS === '1'
+    && env.NODE_ENV !== 'production'
+    && env.RAIBITSERVER_DEV_HEADER_BIND_LOCAL === '1';
+}
+
+function configuredAdminEmailsFromEnv(env: EnvRecord) {
+  return String(env.ADMIN_EMAILS || '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
 }

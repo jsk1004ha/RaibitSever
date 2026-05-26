@@ -25,7 +25,7 @@ export class ProjectsController {
     return this.projectsService.getProject(projectId, req.raibitSubject);
   }
 
-  @RequirePermission('project:create')
+  @RequirePermission('project:update')
   @Patch(':projectId')
   update(@Param('projectId') projectId: string, @Body() input: Record<string, any>, @Req() req: any) {
     return this.projectsService.updateProject(projectId, input || {}, req.raibitSubject);

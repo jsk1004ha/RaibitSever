@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { authorizeRequest, safeAuthModeFromEnv } from '@raibitserver/core';
+import { authorizeRequest, devHeaderAuthAllowed, safeAuthModeFromEnv } from '@raibitserver/core';
 import { RAIBITSERVER_PERMISSION } from './permissions.decorator';
 
 @Injectable()
@@ -26,7 +26,8 @@ function authConfig() {
     allowDisabled: mode === 'disabled',
     jwtSecret,
     issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver',
-    allowDevHeaders: process.env.RAIBITSERVER_AUTH_DEV_HEADERS === '1',
+    audience: process.env.RAIBITSERVER_AUTH_AUDIENCE || 'raibitserver-api',
+    allowDevHeaders: devHeaderAuthAllowed(process.env),
     defaultRole: process.env.RAIBITSERVER_ROLE || 'owner',
   };
 }

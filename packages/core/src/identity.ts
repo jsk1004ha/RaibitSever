@@ -101,9 +101,24 @@ export function configuredAdminEmails(env: Record<string, any> = process.env) {
 }
 
 export function signupPolicyForAccount(input: Record<string, any>, email: string, options: Record<string, any> = {}) {
-  const adminEmails = configuredAdminEmails(options.env || process.env);
+  const env = options.env || process.env;
+  const production = env.NODE_ENV === 'production';
+  const adminEmails = configuredAdminEmails(env);
   const isAdminEmail = adminEmails.includes(String(email || '').toLowerCase());
   const firstUser = options.firstUser === true;
+  if (production) {
+    const token = String(input.bootstrapToken || input.adminBootstrapToken || '');
+    const expected = String(env.RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN || '');
+    const tokenOk = Boolean(expected && token && token === expected);
+    const isAdminBootstrap = tokenOk && isAdminEmail;
+    return {
+      isAdminBootstrap,
+      bootstrapReason: isAdminBootstrap ? 'admin-invite-token' : null,
+      role: isAdminBootstrap ? 'ADMIN' : 'USER',
+      accountType: 'NON_CLUB',
+      approvalStatus: isAdminBootstrap ? 'APPROVED' : 'PENDING',
+    };
+  }
   const isAdminBootstrap = firstUser || isAdminEmail;
   if (isAdminBootstrap) {
     return {
@@ -124,6 +139,7 @@ export function signupPolicyForAccount(input: Record<string, any>, email: string
 }
 
 export function shouldPromoteFirstLogin(user: Record<string, any>, users: Array<Record<string, any>> = []) {
+  if (process.env.NODE_ENV === 'production') return false;
   if (!user || user.role === 'ADMIN') return false;
   if (!users.length) return false;
   if (users.some((candidate) => candidate.role === 'ADMIN')) return false;

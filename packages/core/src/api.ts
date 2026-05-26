@@ -4,6 +4,7 @@ import { authorizeRequest, requireAction, requireScope, signJwtHs256, subjectFro
 import { organizationScopeFromProjectInput } from './scope.ts';
 import { createSessionToken, hashPassword, normalizeEmail, personalOrganizationSlug, sessionTtlSeconds, shouldPromoteFirstLogin, signupPolicyForAccount, verifyPassword } from './identity.ts';
 import { runtimeConfigStatus } from './config.ts';
+import { devHeaderAuthAllowed } from './config.ts';
 import { normalizeEnvEntries, parseDotEnv } from './env-file.ts';
 import { can } from './rbac.ts';
 import { quotaUsageGauges, quotaWarnings } from './quota.ts';
@@ -142,7 +143,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       }
       if (method === 'POST' && url.pathname === '/guard/query') {
         const body = await readJson(req);
-        const subject = authorizeRequest(req, body.options?.confirmed ? 'db:query' : 'db:connect', auth, body.options?.scope || {});
+        const subject = authorizeRequest(req, body.options?.confirmed ? 'db:query:write' : 'db:data:read', auth, body.options?.scope || {});
         return send(res, 200, controlPlane.guardQuery(body.query, { role: subject.role, ...(body.options || {}) }));
       }
       if (method === 'GET' && url.pathname === '/organizations') {
@@ -163,7 +164,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         return send(res, 200, { projects: [...controlPlane.store.projects.values()].filter((project) => String(project.organizationId) === String(organizationId)) });
       }
       if (organizationProjectsMatch && method === 'POST') {
-        const subject = authorizeAction(req, 'project:create', auth);
+        const subject = authorizeAction(req, 'project:update', auth);
         const organizationId = decodeURIComponent(organizationProjectsMatch[1]);
         requireScope(subject, { organizationId });
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'project:create', metric: 'maxProjects', increment: 1 });
@@ -215,7 +216,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       }
       if (projectServicesMatch && method === 'POST') {
         const body = await readJson(req);
-        const subject = authorizeAction(req, 'deploy:run', auth);
+        const subject = authorizeAction(req, 'service:create', auth);
         const projectId = decodeURIComponent(projectServicesMatch[1]);
         await assertProjectAccess(controlPlane.store, projectId, subject);
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'service:create', metric: 'maxServices', increment: 1 });
@@ -223,7 +224,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       }
       if (method === 'POST' && url.pathname === '/services') {
         const body = await readJson(req);
-        const subject = authorizeAction(req, 'deploy:run', auth);
+        const subject = authorizeAction(req, 'service:create', auth);
         await assertProjectAccess(controlPlane.store, body.projectId, subject);
         controlPlane.store.enforceUserCan({ userId: subject.id, action: 'service:create', metric: 'maxServices', increment: 1 });
         return send(res, 201, controlPlane.store.createService(sanitizeTenantServiceInput(body)));
@@ -238,7 +239,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         return send(res, 200, service);
       }
       if (serviceMatch && method === 'PATCH') {
-        const subject = authorizeAction(req, 'deploy:run', auth);
+        const subject = authorizeAction(req, 'service:update', auth);
         const serviceId = decodeURIComponent(serviceMatch[1]);
         const service = controlPlane.store.getService(serviceId);
         if (!service) return send(res, 404, { error: 'service_not_found' });
@@ -431,7 +432,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       }
       const resourceConsoleTableMatch = url.pathname.match(/^\/resources\/([^/]+)\/console\/tables\/([^/]+)$/);
       if (resourceConsoleTableMatch && method === 'GET') {
-        const subject = authorizeAction(req, 'db:connect-limited', auth);
+        const subject = authorizeAction(req, 'db:data:read', auth);
         const [resourceId, table] = resourceConsoleTableMatch.slice(1).map(decodeURIComponent);
         const resource = controlPlane.store.resources.get(resourceId);
         if (!resource) return send(res, 404, { error: 'resource_not_found' });
@@ -440,7 +441,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       }
       const resourceConsoleGetMatch = url.pathname.match(/^\/resources\/([^/]+)\/console\/(schema|tables|collections|keys)$/);
       if (resourceConsoleGetMatch && method === 'GET') {
-        const subject = authorizeAction(req, 'db:connect-limited', auth);
+        const subject = authorizeAction(req, 'db:schema:read', auth);
         const [resourceId, view] = resourceConsoleGetMatch.slice(1).map(decodeURIComponent);
         const resource = controlPlane.store.resources.get(resourceId);
         if (!resource) return send(res, 404, { error: 'resource_not_found' });
@@ -449,8 +450,9 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
       }
       const resourceConsoleQueryMatch = url.pathname.match(/^\/resources\/([^/]+)\/console\/(query|browse|command)$/);
       if (resourceConsoleQueryMatch && method === 'POST') {
-        const subject = authorizeAction(req, 'db:connect-limited', auth);
         const [resourceId, action] = resourceConsoleQueryMatch.slice(1).map(decodeURIComponent);
+        const permission = action === 'command' ? 'db:query:write' : 'db:data:read';
+        const subject = authorizeAction(req, permission, auth);
         const body = await readJson(req);
         const resource = controlPlane.store.resources.get(resourceId);
         if (!resource) return send(res, 404, { error: 'resource_not_found' });
@@ -655,7 +657,8 @@ function authConfigFromEnv() {
     allowDisabled: mode === 'disabled',
     jwtSecret,
     issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver',
-    allowDevHeaders: process.env.RAIBITSERVER_AUTH_DEV_HEADERS === '1',
+    audience: process.env.RAIBITSERVER_AUTH_AUDIENCE || 'raibitserver-api',
+    allowDevHeaders: devHeaderAuthAllowed(process.env),
     allowDevToken: process.env.RAIBITSERVER_AUTH_DEV_TOKEN === '1',
     defaultRole: process.env.RAIBITSERVER_ROLE || 'owner',
     sessionTtlSeconds: sessionTtlSeconds({ sessionTtlSeconds: process.env.RAIBITSERVER_SESSION_TTL_SECONDS }),

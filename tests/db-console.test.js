@@ -11,17 +11,17 @@ test('SQLite console creates parent directories and browses tables', async () =>
   const resource = { engine: 'sqlite', desiredSpec: { sqlitePath: dbPath } };
   await runDbConsoleQuery(resource, 'CREATE TABLE IF NOT EXISTS health (status TEXT)', { confirmed: true, role: 'db-admin' });
   await runDbConsoleQuery(resource, "INSERT INTO health(status) VALUES ('ok')", { confirmed: true, role: 'db-admin' });
-  const result = await runDbConsoleQuery(resource, 'SELECT status FROM health');
+  const result = await runDbConsoleQuery(resource, 'SELECT status FROM health', { role: 'db-admin' });
   assert.equal(result.rows[0].status, 'ok');
   const browse = await browseDbConsole(resource);
   assert.deepEqual(browse.tables, ['health']);
-  const rows = await resourceConsoleView(resource, 'table', { table: 'health' });
+  const rows = await resourceConsoleView(resource, 'table', { table: 'health', role: 'db-admin' });
   assert.equal(rows.rows[0].status, 'ok');
   assert.deepEqual(rows.fields, ['status']);
 });
 
 test('PostgreSQL console exposes live execution contract without local credentials', async () => {
-  const query = await runDbConsoleQuery({ engine: 'postgresql' }, 'SELECT 1', { role: 'viewer' });
+  const query = await runDbConsoleQuery({ engine: 'postgresql' }, 'SELECT 1', { role: 'db-admin' });
   assert.equal(query.engine, 'postgresql');
   assert.equal(query.mode, 'connection-info');
   assert.match(query.warning, /provider-owned connection URL/);
@@ -35,7 +35,7 @@ test('PostgreSQL console rejects request-supplied URLs and non-admin mutations',
   const ignoredOverride = await runDbConsoleQuery(
     { engine: 'postgresql' },
     'SELECT 1',
-    { role: 'viewer', connectionUrl: 'postgresql://attacker:secret@127.0.0.1:1/evil' },
+    { role: 'db-admin', connectionUrl: 'postgresql://attacker:secret@127.0.0.1:1/evil' },
   );
   assert.equal(ignoredOverride.mode, 'connection-info');
   assert.match(ignoredOverride.warning, /provider-owned connection URL/);
@@ -46,7 +46,7 @@ test('PostgreSQL console rejects request-supplied URLs and non-admin mutations',
       'UPDATE users SET admin = true WHERE id = 1',
       { role: 'developer', confirmed: true },
     ),
-    /requires db:query permission/,
+    /requires db:query:write permission/,
   );
 });
 
@@ -106,8 +106,17 @@ test('resource creation strips provider connection and credential fields from te
   assert.equal(resource.desiredSpec.connectionSecretName, undefined);
   assert.deepEqual(resource.desiredSpec.nested, {});
   assert.equal(resource.desiredSpec.sqlitePath, undefined);
-  const query = await runDbConsoleQuery(resource, 'SELECT 1', { role: 'developer' });
+  const query = await runDbConsoleQuery(resource, 'SELECT 1', { role: 'db-admin' });
   assert.equal(query.mode, 'connection-info');
+});
+
+test('developer can browse schema but cannot read DB row data by default', async () => {
+  const schema = await browseDbConsole({ engine: 'postgresql' }, { role: 'developer' });
+  assert.equal(schema.engine, 'postgresql');
+  await assert.rejects(
+    () => runDbConsoleQuery({ engine: 'postgresql' }, 'SELECT 1', { role: 'developer' }),
+    /requires db:data:read permission/,
+  );
 });
 
 test('provider-owned connection secrets resolve without exposing tenant input', async () => {

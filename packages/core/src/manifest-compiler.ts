@@ -1,5 +1,5 @@
 import { DEFAULT_CONTAINER_SECURITY_CONTEXT, DEFAULT_POD_SECURITY_CONTEXT, secureContainerDefaults, splitEnvForSecret, validateServiceSecurity } from './security.ts';
-import { injectResourceEnv } from './env-injection.ts';
+import { connectionEnvForResource, injectResourceEnv } from './env-injection.ts';
 import { resolveBuildStrategy } from './build-strategy.ts';
 import { DEFAULT_DOMAIN, DEFAULT_PORT, SERVICE_TYPES } from './constants.ts';
 import { getCatalogEntry, normalizeResourceEngine } from './catalog.ts';
@@ -20,6 +20,7 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
   const manifests: AnyRecord[] = [namespaceManifest(namespace, projectSlug)];
   const buildPlans: AnyRecord[] = [];
   const resourcePlans = resources.map((resource) => resourcePlan(resource, namespace, projectSlug));
+  const resourceEnvByName = Object.fromEntries(resources.map((resource) => [resource.name, connectionEnvForResource(resource, projectSlug)]));
 
   for (const service of services) {
     const serviceName = slugify(service.name);
@@ -31,13 +32,13 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
     };
     const buildPlan = resolveBuildStrategy(fullService, filesByService[service.name] || filesByService[serviceName] || {});
     buildPlans.push(buildPlan);
-    const serviceManifests = compileService({ namespace, organizationSlug, projectSlug, baseDomain, service: fullService, resources, image: buildPlan.image });
+    const serviceManifests = compileService({ namespace, organizationSlug, projectSlug, baseDomain, service: fullService, resources, resourceEnvByName, image: buildPlan.image });
     manifests.push(...serviceManifests);
   }
 
   const prePullImages = imagePrePullList(spec, buildPlans);
   if (prePullImages.length) manifests.push(imagePrePullDaemonSetManifest(namespace, projectSlug, prePullImages));
-  manifests.push(networkPolicyManifest(namespace, services, resources));
+  manifests.push(...networkPolicyManifests(namespace, projectSlug, services, resources));
   return {
     apiVersion: 'raibitserver.io/v1alpha1',
     kind: 'ProjectDeploymentPlan',
@@ -67,11 +68,11 @@ export function compileProject(spec: AnyRecord = {}, filesByService: AnyRecord =
   };
 }
 
-function compileService({ namespace, organizationSlug, projectSlug, baseDomain, service, resources, image }: AnyRecord) {
+function compileService({ namespace, organizationSlug, projectSlug, baseDomain, service, resources, resourceEnvByName, image }: AnyRecord) {
   const serviceName = slugify(service.name);
   const type = service.type || SERVICE_TYPES.WEB;
   const port = Number(service.port || DEFAULT_PORT);
-  const env = injectResourceEnv(service, resources, projectSlug);
+  const env = injectResourceEnv(service, resources, projectSlug, { resourceEnvByName });
   const { plain, secret } = splitEnvForSecret(env);
   const labels = labelsFor(projectSlug, serviceName, type);
   const out: AnyRecord[] = [];
@@ -313,12 +314,18 @@ function httpProbe(path: string, port: number): AnyRecord {
   };
 }
 
-function networkPolicyManifest(namespace: string, services: AnyRecord[], resources: AnyRecord[]): AnyRecord {
+function networkPolicyManifests(namespace: string, projectSlug: string, services: AnyRecord[], resources: AnyRecord[]): AnyRecord[] {
+  const base = tenantIsolationNetworkPolicy(namespace, services, resources);
+  const publicEgress = services
+    .filter((service) => service.allowPublicEgress === true || service.publicEgress === true || service.egress?.publicInternet === true)
+    .map((service) => servicePublicEgressPolicy(namespace, projectSlug, slugify(service.name)));
+  base.raibitserver.publicEgressServices = publicEgress.map((policy) => policy.raibitserver.service);
+  return [base, ...publicEgress];
+}
+
+function tenantIsolationNetworkPolicy(namespace: string, services: AnyRecord[], resources: AnyRecord[]): AnyRecord {
   const serviceNames = services.map((service) => slugify(service.name));
   const resourceNames = resources.map((resource) => slugify(resource.name));
-  const publicEgressServices = services
-    .filter((service) => service.allowPublicEgress === true || service.publicEgress === true || service.egress?.publicInternet === true)
-    .map((service) => slugify(service.name));
   const egress: AnyRecord[] = [
     {
       to: [
@@ -331,9 +338,6 @@ function networkPolicyManifest(namespace: string, services: AnyRecord[], resourc
     },
     { to: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': namespace } } }] },
   ];
-  if (publicEgressServices.length) {
-    egress.push({ to: [{ ipBlock: { cidr: '0.0.0.0/0', except: ['10.0.0.0/8', '100.64.0.0/10', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16'] } }] });
-  }
   return {
     apiVersion: 'networking.k8s.io/v1',
     kind: 'NetworkPolicy',
@@ -354,10 +358,37 @@ function networkPolicyManifest(namespace: string, services: AnyRecord[], resourc
       blocksMetadataEndpoint: true,
       blocksControlPlane: true,
       blocksCrossProject: true,
-      publicEgressServices,
+      publicEgressServices: [],
     },
   };
 }
+
+function servicePublicEgressPolicy(namespace: string, projectSlug: string, serviceName: string): AnyRecord {
+  const labels = labelsFor(projectSlug, serviceName, 'egress-policy');
+  return {
+    apiVersion: 'networking.k8s.io/v1',
+    kind: 'NetworkPolicy',
+    metadata: { name: `${serviceName}-public-egress`, namespace, labels },
+    spec: {
+      podSelector: { matchLabels: { 'app.kubernetes.io/name': serviceName } },
+      policyTypes: ['Egress'],
+      egress: [
+        { to: [{ ipBlock: { cidr: '0.0.0.0/0', except: PRIVATE_IPV4_EGRESS_EXCEPTIONS } }] },
+        { to: [{ ipBlock: { cidr: '::/0', except: PRIVATE_IPV6_EGRESS_EXCEPTIONS } }] },
+      ],
+    },
+    raibitserver: {
+      service: serviceName,
+      publicInternetEgress: true,
+      scopedToServicePodSelector: true,
+      ipv4Except: PRIVATE_IPV4_EGRESS_EXCEPTIONS,
+      ipv6Except: PRIVATE_IPV6_EGRESS_EXCEPTIONS,
+    },
+  };
+}
+
+const PRIVATE_IPV4_EGRESS_EXCEPTIONS = Object.freeze(['10.0.0.0/8', '100.64.0.0/10', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16']);
+const PRIVATE_IPV6_EGRESS_EXCEPTIONS = Object.freeze(['::1/128', 'fc00::/7', 'fe80::/10', 'fd00:ec2::254/128']);
 
 function imagePrePullList(spec: AnyRecord, buildPlans: AnyRecord[]) {
   const explicit = spec.prePullImages || spec.performance?.prePullImages || spec.runtime?.prePullImages || [];

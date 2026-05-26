@@ -224,8 +224,10 @@ RAIBITSERVER_CONTROL_PLANE_DATABASE_URL=postgresql://raibitserver:<password>@pos
 # Auth / secret
 RAIBITSERVER_AUTH_JWT_SECRET=<32바이트-이상-랜덤값>
 RAIBITSERVER_AUTH_ISSUER=raibitserver
+RAIBITSERVER_AUTH_AUDIENCE=raibitserver-api
 RAIBITSERVER_SECRET_ENCRYPTION_KEY=<32바이트-이상-랜덤값>
 ADMIN_EMAILS=admin@example.com
+RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN=<32바이트-이상-랜덤-초기-admin-token>
 
 # Dashboard -> API
 RAIBITSERVER_API_URL=https://api.raibitserver.app/api
@@ -265,8 +267,11 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
 
 운영에서 사용하면 안 되는 개발 편의 변수도 있습니다.
 
-- Nest API는 부팅 시 `PORT`, `RAIBITSERVER_AUTH_RATE_LIMIT`, production auth/secret 설정을 먼저 검증합니다. `NODE_ENV=production`에서는 32자 미만 `RAIBITSERVER_AUTH_JWT_SECRET`, 32자 미만 `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, `RAIBITSERVER_AUTH_DISABLED=1`, `RAIBITSERVER_AUTH_DEV_HEADERS=1`이 모두 fail-fast로 차단됩니다.
-- `RAIBITSERVER_AUTH_DISABLED`, `RAIBITSERVER_AUTH_DEV_HEADERS`, `RAIBITSERVER_AUTH_DEV_TOKEN`, `RAIBITSERVER_ROLE`은 로컬 개발 전용입니다. 특히 인증 비활성화는 `NODE_ENV=production`에서는 무시되며, 로컬에서도 `RAIBITSERVER_AUTH_DISABLED_CONFIRM=I_UNDERSTAND_THIS_GRANTS_GLOBAL_OWNER` 확인값이 있어야만 활성화됩니다.
+- Nest API는 부팅 시 `PORT`, `RAIBITSERVER_AUTH_RATE_LIMIT`, production auth/secret 설정을 먼저 검증합니다. `NODE_ENV=production`에서는 32자 미만 `RAIBITSERVER_AUTH_JWT_SECRET`, 32자 미만 `RAIBITSERVER_SECRET_ENCRYPTION_KEY`, `ADMIN_EMAILS`가 있는데 32자 미만 `RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN`, `RAIBITSERVER_AUTH_DISABLED=1`, `RAIBITSERVER_AUTH_DEV_HEADERS=1`이 모두 fail-fast로 차단됩니다.
+- `RAIBITSERVER_AUTH_DISABLED`, `RAIBITSERVER_AUTH_DEV_HEADERS`, `RAIBITSERVER_AUTH_DEV_TOKEN`, `RAIBITSERVER_ROLE`은 로컬 개발 전용입니다. 특히 인증 비활성화는 `NODE_ENV=production`에서는 무시되며, 로컬에서도 `RAIBITSERVER_AUTH_DISABLED_CONFIRM=I_UNDERSTAND_THIS_GRANTS_GLOBAL_OWNER` 확인값이 있어야만 활성화됩니다. dev header 인증은 추가로 `RAIBITSERVER_DEV_HEADER_BIND_LOCAL=1`이 있어야만 켜집니다.
+- 운영 첫 admin은 더 이상 “첫 가입자”만으로 자동 승격되지 않습니다. `ADMIN_EMAILS`에 포함된 이메일이 `RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN`을 함께 제출할 때만 admin bootstrap이 허용됩니다.
+- DB console 권한은 `db:schema:read`, `db:data:read`, `db:query:write`로 분리됩니다. 기본 developer는 schema metadata만 볼 수 있고 row data `SELECT`는 maintainer/db-admin 이상 권한이 필요합니다.
+- public egress는 프로젝트 namespace 전체가 아니라 `*-public-egress` 서비스별 NetworkPolicy로만 열립니다. ingress/proxy에서는 `x-raibitserver-user`, `x-raibitserver-role`, `x-raibitserver-organization`, `x-raibitserver-project` 헤더를 외부 요청에서 제거하세요.
 - production tenant API는 local/file source와 기본 허용 목록 밖 Git host를 거부합니다. 예외가 필요하면 `RAIBITSERVER_ALLOWED_GIT_HOSTS`로 Git host를 명시하고, 로컬 source는 개발 환경에서만 사용하세요.
 - `RAIBITSERVER_ALLOW_MEMORY_PERSISTENCE=1`은 production 안전 조건을 깨뜨립니다.
 - `RAIBITSERVER_DRY_RUN=1` 또는 `RAIBITSERVER_EXECUTE` 미설정 상태에서는 worker가 실제 apply/push/provision을 수행하지 않습니다.

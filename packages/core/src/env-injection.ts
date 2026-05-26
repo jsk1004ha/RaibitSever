@@ -157,12 +157,13 @@ function appendConnectionLimit(url: string, limit: number | null) {
   return `${url}${separator}connection_limit=${limit}`;
 }
 
-export function injectResourceEnv(service: AnyRecord, resources: AnyRecord[] = [], projectSlug = 'project') {
+export function injectResourceEnv(service: AnyRecord, resources: AnyRecord[] = [], projectSlug = 'project', options: AnyRecord = {}) {
   const base = { ...(service.environment || {}) };
   const attachedNames = new Set(service.attachedResources || resources.map((resource) => resource.name));
+  const resourceEnvByName = options.resourceEnvByName || {};
   for (const resource of resources) {
     if (!attachedNames.has(resource.name)) continue;
-    Object.assign(base, connectionEnvForResource(resource, projectSlug));
+    Object.assign(base, resourceEnvByName[resource.name] || connectionEnvForResource(resource, projectSlug));
   }
   return base;
 }

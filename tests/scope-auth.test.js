@@ -16,7 +16,7 @@ test('project create derives scope from nested organization before persistence',
   await once(server, 'listening');
   const { port } = server.address();
   try {
-    const scopedToken = signJwtHs256({ sub: 'dev-1', role: 'developer', organizationId: 'org-a' }, secret);
+    const scopedToken = signJwtHs256({ sub: 'admin-1', role: 'admin', organizationId: 'org-a' }, secret);
     const denied = await request(port, 'POST', '/projects', { organization: { slug: 'org-b' }, name: 'demo', slug: 'demo' }, scopedToken);
     assert.equal(denied.statusCode, 403);
 

@@ -6,6 +6,7 @@ import { createApiHandler } from '../packages/core/src/api.ts';
 import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts';
 import { signJwtHs256 } from '../packages/core/src/auth.ts';
 import { assertApiRuntimeConfig, validateApiRuntimeConfig } from '../packages/core/src/config.ts';
+import { signupPolicyForAccount, shouldPromoteFirstLogin } from '../packages/core/src/identity.ts';
 
 test('env auth bypass flag is ignored unless explicitly confirmed outside production', async () => {
   const previous = snapshotEnv(['RAIBITSERVER_AUTH_DISABLED', 'RAIBITSERVER_AUTH_DISABLED_CONFIRM', 'NODE_ENV', 'RAIBITSERVER_AUTH_JWT_SECRET']);
@@ -58,6 +59,37 @@ test('API runtime config fails fast for unsafe production security settings', ()
     'MISSING_SECRET_ENCRYPTION_KEY',
   ]);
   assert.throws(() => assertApiRuntimeConfig(unsafeEnv), /invalid API runtime configuration/);
+});
+
+test('production admin bootstrap requires configured admin email plus bootstrap token', () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  try {
+    process.env.NODE_ENV = 'production';
+    const env = {
+      NODE_ENV: 'production',
+      ADMIN_EMAILS: 'admin@example.com',
+      RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN: 'x'.repeat(32),
+    };
+    const firstUser = signupPolicyForAccount({}, 'first@example.com', { env, firstUser: true });
+    assert.equal(firstUser.role, 'USER');
+    assert.equal(firstUser.approvalStatus, 'PENDING');
+    const wrongToken = signupPolicyForAccount({ bootstrapToken: 'wrong' }, 'admin@example.com', { env, firstUser: true });
+    assert.equal(wrongToken.role, 'USER');
+    const bootstrapped = signupPolicyForAccount({ bootstrapToken: 'x'.repeat(32) }, 'admin@example.com', { env, firstUser: true });
+    assert.equal(bootstrapped.role, 'ADMIN');
+    assert.equal(shouldPromoteFirstLogin({ id: 'u1', role: 'USER' }, [{ id: 'u1', role: 'USER' }]), false);
+
+    const unsafe = validateApiRuntimeConfig({
+      NODE_ENV: 'production',
+      RAIBITSERVER_AUTH_JWT_SECRET: 'x'.repeat(32),
+      RAIBITSERVER_SECRET_ENCRYPTION_KEY: 'y'.repeat(32),
+      ADMIN_EMAILS: 'admin@example.com',
+    });
+    assert.equal(unsafe.issues.some((issue) => issue.code === 'MISSING_ADMIN_BOOTSTRAP_TOKEN'), true);
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+  }
 });
 
 test('session JWT lifetime is server-clamped and login brute force is rate limited', async () => {

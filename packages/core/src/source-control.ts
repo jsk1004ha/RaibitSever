@@ -2,19 +2,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runCommand, commandToString, type CommandSpec } from './command-runner.ts';
 import { slugify } from './ids.ts';
-
-function isLocalPath(repoUrl: string) {
-  return repoUrl.startsWith('/') || repoUrl.startsWith('./') || repoUrl.startsWith('../') || repoUrl.startsWith('file://');
-}
+import { normalizeTenantGitUrl } from './security.ts';
 
 export function validateGitUrl(repoUrl: string) {
   const value = String(repoUrl || '').trim();
   if (!value) throw new Error('repoUrl is required for github/git source');
-  if (/^https:\/\/[^/@\s]+@/i.test(value)) throw new Error('credentialed git URLs are not allowed; pass tokens through the token option');
-  if (isLocalPath(value)) return value;
-  if (/^https:\/\/(github\.com|gitlab\.com|bitbucket\.org|[^\s/]+)\/.+\/.+/.test(value)) return value;
-  if (/^git@[^:]+:.+\/.+/.test(value)) return value;
-  throw new Error(`unsupported git URL: ${repoUrl}`);
+  return normalizeTenantGitUrl(value, { env: process.env });
 }
 
 export function redactGitUrl(url: string) {

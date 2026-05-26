@@ -110,7 +110,7 @@ test('resource console surfaces deterministic adapters for Redis and provider co
   const redis = await browseDbConsole({ engine: 'redis', desiredSpec: { keys: ['session:1', 'queue:jobs'] } });
   assert.deepEqual(redis.keys, ['session:1', 'queue:jobs']);
   assert.equal(redis.mode, 'deterministic-adapter');
-  const redisQuery = await runDbConsoleQuery({ engine: 'redis' }, 'GET session:1', { role: 'viewer' });
+  const redisQuery = await runDbConsoleQuery({ engine: 'redis' }, 'GET session:1', { role: 'db-admin' });
   assert.match(redisQuery.command, /SCAN/);
   for (const [engine, field] of [['mysql', 'tables'], ['mariadb', 'tables'], ['mongodb', 'collections'], ['object-storage', 'buckets'], ['qdrant', 'collections'], ['nats', 'subjects']]) {
     const surface = providerConsoleSurface({ engine, desiredSpec: { [field]: ['sample'] } });

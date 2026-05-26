@@ -13,7 +13,7 @@ export class ServicesController {
     return this.servicesService.listServices(projectId, req.raibitSubject);
   }
 
-  @RequirePermission('deploy:run')
+  @RequirePermission('service:create')
   @Post()
   create(@Param('projectId') projectId: string, @Body() service: ServiceSpec, @Req() req: any) {
     return this.servicesService.addService(projectId, service, req.raibitSubject);
@@ -30,7 +30,7 @@ export class ServiceDetailController {
     return this.servicesService.getService(serviceId, req.raibitSubject);
   }
 
-  @RequirePermission('deploy:run')
+  @RequirePermission('service:update')
   @Patch()
   update(@Param('serviceId') serviceId: string, @Body() input: Record<string, any>, @Req() req: any) {
     return this.servicesService.updateService(serviceId, input || {}, req.raibitSubject);

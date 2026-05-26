@@ -142,11 +142,14 @@ test('HS256 JWT auth enforces RBAC on protected API routes', async () => {
     const viewerConsole = await request(port, 'POST', `/resources/${ownResource.id}/console/query`, { query: 'SELECT 1' }, scopedViewer);
     assert.equal(viewerConsole.statusCode, 403);
     const scopedDeveloper = signJwtHs256({ sub: 'dev-a', role: 'developer', organizationId: orgA.id }, secret);
-    const ownConsole = await request(port, 'POST', `/resources/${ownResource.id}/console/query`, { query: 'SELECT 1', connectionUrl: 'postgresql://attacker:secret@127.0.0.1:1/evil' }, scopedDeveloper);
+    const developerConsole = await request(port, 'POST', `/resources/${ownResource.id}/console/query`, { query: 'SELECT 1' }, scopedDeveloper);
+    assert.equal(developerConsole.statusCode, 403);
+    const scopedMaintainer = signJwtHs256({ sub: 'maint-a', role: 'maintainer', organizationId: orgA.id }, secret);
+    const ownConsole = await request(port, 'POST', `/resources/${ownResource.id}/console/query`, { query: 'SELECT 1', connectionUrl: 'postgresql://attacker:secret@127.0.0.1:1/evil' }, scopedMaintainer);
     assert.equal(ownConsole.statusCode, 200);
     assert.equal(ownConsole.body.mode, 'connection-info');
     assert.match(ownConsole.body.warning, /provider-owned connection URL/);
-    const deniedConsole = await request(port, 'POST', `/resources/${otherResource.id}/console/query`, { query: 'SELECT 1' }, scopedDeveloper);
+    const deniedConsole = await request(port, 'POST', `/resources/${otherResource.id}/console/query`, { query: 'SELECT 1' }, scopedMaintainer);
     assert.equal(deniedConsole.statusCode, 403);
 
     const executeRemoved = await request(port, 'POST', '/execute/kubernetes-apply', project, ownerToken);

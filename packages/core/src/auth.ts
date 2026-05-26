@@ -13,20 +13,20 @@ function parseJsonSegment(segment: string) {
   }
 }
 
-export function signJwtHs256(payload: Record<string, any>, secret: string, { expiresInSeconds = 3600, issuer = 'raibitserver' } = {}) {
+export function signJwtHs256(payload: Record<string, any>, secret: string, { expiresInSeconds = 3600, issuer = 'raibitserver', audience = 'raibitserver-api' } = {}) {
   if (!secret) throw new Error('jwt secret is required');
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: 'HS256', typ: 'JWT' };
   const ttl = Math.max(60, Math.min(Number(expiresInSeconds || 3600), 24 * 60 * 60));
-  const { exp: _exp, iat: _iat, nbf: _nbf, iss: _iss, ...safePayload } = payload || {};
-  const body = { ...safePayload, iss: issuer, iat: now, exp: now + ttl };
+  const { exp: _exp, iat: _iat, nbf: _nbf, iss: _iss, aud: _aud, jti: _jti, ...safePayload } = payload || {};
+  const body = { ...safePayload, iss: issuer, aud: audience, jti: crypto.randomUUID(), iat: now, exp: now + ttl };
   const encodedHeader = base64url(JSON.stringify(header));
   const encodedBody = base64url(JSON.stringify(body));
   const signature = crypto.createHmac('sha256', secret).update(`${encodedHeader}.${encodedBody}`).digest('base64url');
   return `${encodedHeader}.${encodedBody}.${signature}`;
 }
 
-export function verifyJwtHs256(token: string, secret: string, { issuer = 'raibitserver' } = {}) {
+export function verifyJwtHs256(token: string, secret: string, { issuer = 'raibitserver', audience = 'raibitserver-api' } = {}) {
   if (!secret) throw unauthorized('jwt auth is not configured');
   const [headerSegment, payloadSegment, signature] = String(token || '').split('.');
   if (!headerSegment || !payloadSegment || !signature) throw unauthorized('invalid bearer token');
@@ -42,7 +42,9 @@ export function verifyJwtHs256(token: string, secret: string, { issuer = 'raibit
   if (!payload.exp) throw unauthorized('missing bearer token expiration');
   if (now >= Number(payload.exp)) throw unauthorized('expired bearer token');
   if (payload.nbf && now < Number(payload.nbf)) throw unauthorized('bearer token is not active yet');
-  if (issuer && payload.iss && payload.iss !== issuer) throw unauthorized('invalid token issuer');
+  if (issuer && (!payload.iss || payload.iss !== issuer)) throw unauthorized('invalid token issuer');
+  if (audience && (!payload.aud || payload.aud !== audience)) throw unauthorized('invalid token audience');
+  if (!payload.jti) throw unauthorized('missing token id');
   return payload;
 }
 
@@ -65,7 +67,7 @@ export function subjectFromRequest(req: any, auth: Record<string, any> = {}) {
     };
   }
   if (!token) throw unauthorized('missing bearer token');
-  const payload = verifyJwtHs256(token, auth.jwtSecret, { issuer: auth.issuer || 'raibitserver' });
+  const payload = verifyJwtHs256(token, auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', audience: auth.audience || 'raibitserver-api' });
   return {
     id: payload.sub || payload.userId || payload.email || 'user',
     role: payload.role || payload.orgRole || 'viewer',
