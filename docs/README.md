@@ -10,6 +10,7 @@ RAIBITSERVER 문서는 README를 짧은 진입점으로 유지하고, 세부 설
 | 로컬에서 검증하고 싶다 | [로컬 E2E](local-e2e.md), [검증 명령](verification-commands.md) |
 | 실제 클러스터 smoke test가 필요하다 | [Live E2E](live-e2e.md) |
 | 배포/운영 준비가 필요하다 | [Staging 배포](../deploy/staging/README.md), [Production 배포](../deploy/production/README.md) |
+| Cloudflare Tunnel로 공개하고 싶다 | [Cloudflare Tunnel 운영](cloudflare-tunnel.md), [Production 배포](../deploy/production/README.md) |
 | GitHub 연동과 PR preview를 봐야 한다 | [GitHub App](github-app.md), [Preview Deployment](preview-deployments.md) |
 | 보안/권한/쿼터를 확인해야 한다 | [보안](security.md), [승인·쿼터](quota.md) |
 | DB와 리소스 동작을 확인해야 한다 | [프로비저닝](provisioning.md), [DB Console](db-console.md) |
@@ -24,6 +25,7 @@ RAIBITSERVER 문서는 README를 짧은 진입점으로 유지하고, 세부 설
 | [local-e2e.md](local-e2e.md) | 외부 부작용 없는 dry-run E2E 실행법 | 개발자, CI 관리자 |
 | [live-e2e.md](live-e2e.md) | Docker/kind·k3d/kubectl 기반 live E2E 절차 | 운영자, 릴리스 담당자 |
 | [verification-commands.md](verification-commands.md) | 변경 영역별 검증 명령 매트릭스 | 모든 기여자 |
+| [cloudflare-tunnel.md](cloudflare-tunnel.md) | Tunnel wildcard routing, Access, cache/WAF, TCP 공개 금지, origin-bypass guardrail | 운영자, 보안 담당자 |
 | [github-app.md](github-app.md) | GitHub App/OAuth/webhook 계약 | 개발자, 운영자 |
 | [preview-deployments.md](preview-deployments.md) | PR preview URL과 cleanup 모델 | 개발자, QA |
 | [security.md](security.md) | workload, secret, DB console 보안 정책 | 보안/운영 담당자 |

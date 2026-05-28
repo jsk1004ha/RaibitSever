@@ -202,6 +202,8 @@ GitHub webhook 엔드포인트(`POST /github/webhooks`)는 HMAC 검증을 반드
 
 서비스/preview host는 `<service>--<project>--<org>` 또는 `pr-<number>--<service>--<project>--<org>` 패턴으로 생성됩니다. 따라서 `*.apps`, `*.preview`, `*.console`, `*.resources` wildcard 인증서를 준비해야 합니다.
 
+Cloudflare Tunnel을 쓰는 경우 각 tenant service hostname을 tunnel ingress rule에 직접 매핑하지 마세요. Tunnel은 `*.apps.<BASE_DOMAIN>`, `*.preview.<BASE_DOMAIN>`, `*.console.<BASE_DOMAIN>`, `*.resources.<BASE_DOMAIN>` 같은 zone-level wildcard를 **내부 Kubernetes Ingress Controller 하나**로 보내고, 최종 Host 기반 라우팅은 Kubernetes Ingress가 담당해야 합니다. Cloudflare Tunnel hostname wildcard는 `*.example.com` 형태만 쓰고 `test.*.example.com` 같은 중간 wildcard에 의존하지 않습니다. 자세한 예시는 [Cloudflare Tunnel 운영 가이드](docs/cloudflare-tunnel.md)와 [production tunnel 예시](deploy/production/cloudflare-tunnel.example.yml)를 참고하세요.
+
 > 보안 필수: 대시보드는 서버 토큰(`RAIBITSERVER_DASHBOARD_TOKEN`/`RAIBITSERVER_TOKEN`)으로 API 데이터를 렌더링할 수 있으므로 public ingress에 노출할 때 반드시 별도 인증 계층을 적용하세요. 기본 구성에서는 `RAIBITSERVER_DASHBOARD_BASIC_AUTH`를 `username:password` 형식으로 설정해야 하며, 서버 토큰이 있는데 basic auth가 없으면 대시보드 요청은 503으로 차단됩니다.
 
 ### 4. production 환경 변수 예시
@@ -327,7 +329,9 @@ GITHUB_PRIVATE_KEY=<github-app-private-key-pem>
 | Admin only | SSH, Kubernetes API 직접 접근, DB admin endpoint |
 | Outbound | GitHub API/webhook response, registry, package mirror, object storage |
 
-DB, Redis, provider credential endpoint는 public internet에 직접 노출하지 않습니다. GitHub webhook은 API public endpoint로 받아야 하므로 webhook secret/HMAC 검증이 필수입니다.
+Cloudflare Tunnel 배포에서는 public inbound 80/443도 origin 서버에 직접 열지 않고, `cloudflared` outbound와 내부 ingress/service 통신만 허용하는 구성을 권장합니다. API/Dashboard는 localhost 또는 cluster Service로 bind하고, 외부에서 `3000`, NodePort, registry, DB/Redis/provider port에 직접 닿지 못하게 막습니다.
+
+DB, Redis, provider credential endpoint는 public internet에 직접 노출하지 않습니다. PostgreSQL/MySQL/Redis public tunnel은 일반 사용자 접속 경로로 쓰지 말고, DB console은 RAIBITSERVER API mediated access로 유지합니다. 운영자 TCP 접속은 WARP/private network/SSH bastion으로 분리하세요. GitHub webhook은 API public endpoint로 받아야 하므로 webhook secret/HMAC 검증이 필수이며, Cloudflare Cache Rules에서는 `/api/*`, `/api/*/stream`, `/github/webhooks`, `/api/github/webhooks`를 cache bypass로 둡니다.
 
 ### 8. 백업, 복구, 관측성
 
