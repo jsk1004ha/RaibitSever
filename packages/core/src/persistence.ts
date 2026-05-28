@@ -145,11 +145,12 @@ export class PrismaControlPlaneRepository {
 
   async createUser(input: Record<string, any>) {
     const accountType = normalizeAccountType(input.accountType);
-    return this.prisma.user.upsert({
+    const user = await this.prisma.user.upsert({
       where: { email: input.email },
       update: { name: input.name, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || undefined, role: input.role || undefined, accountType, approvalStatus: input.approvalStatus || undefined },
       create: { name: input.name, email: input.email, avatarUrl: input.avatarUrl || null, githubId: input.githubId || null, passwordHash: input.passwordHash || null, role: input.role || 'USER', accountType, approvalStatus: input.approvalStatus || 'PENDING' },
     });
+    return redactUser(user);
   }
 
   async findUserByEmail(email: string) {

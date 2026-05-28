@@ -93,6 +93,9 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   const githubController = await fs.readFile(new URL('../apps/api/src/modules/integrations/github.controller.ts', import.meta.url), 'utf8');
   const authController = await fs.readFile(new URL('../apps/api/src/modules/auth/auth.controller.ts', import.meta.url), 'utf8');
   const apiMain = await fs.readFile(new URL('../apps/api/src/main.ts', import.meta.url), 'utf8');
+  const raibitserverService = await fs.readFile(new URL('../apps/api/src/raibitserver.service.ts', import.meta.url), 'utf8');
+  const coreApi = await fs.readFile(new URL('../packages/core/src/api.ts', import.meta.url), 'utf8');
+  const envPolicy = await fs.readFile(new URL('../packages/core/src/env-policy.ts', import.meta.url), 'utf8');
   const persistence = await fs.readFile(new URL('../packages/core/src/persistence.ts', import.meta.url), 'utf8');
   const apiClient = await fs.readFile(new URL('../packages/api-client/src/index.ts', import.meta.url), 'utf8');
   assert.match(servicesController, /@Get\(\)/);
@@ -117,7 +120,16 @@ test('OpenAPI and Nest controller surface expose client contract routes', async 
   for (const marker of ["@Get('github/installations')", "@Get('github/installations/:installationId/repositories')", "@Post('github/webhooks')", "@Post('github/repositories/import')", "@Post('github/repositories/:repositoryId/sync')"]) assert.ok(githubController.includes(marker), `${marker} missing from GitHub controller`);
   assert.ok(apiMain.includes('rawBody: true'), 'Nest bootstrap must keep raw webhook bytes for GitHub HMAC verification');
   assert.ok(githubController.includes('req.rawBody'), 'GitHub webhook controller must verify the original raw payload bytes');
+  assert.ok(raibitserverService.includes('user: publicUser(user)'), 'Nest signup response must not expose passwordHash');
+  assert.ok(raibitserverService.includes('normalizeEnvEntries'), 'Nest env writes must normalize entries before persistence');
+  assert.ok(raibitserverService.includes('parseDotEnv'), 'Nest env-file writes must parse dotenv content before persistence');
+  assert.ok(envPolicy.includes('assertEnvironmentWriteAllowed'), 'limited-secret env write policy must be centralized in core');
+  assert.ok(coreApi.includes('assertEnvironmentWriteAllowed(subject, entries)'), 'core env writes must use the shared limited-secret write guard');
+  assert.ok(coreApi.includes('assertEnvironmentWriteAllowed(subject, parsed.entries)'), 'core env-file writes must use the shared limited-secret write guard');
+  assert.ok(raibitserverService.includes('assertNestEnvironmentWriteAllowed(subject, entries)'), 'Nest env writes must use the shared limited-secret write guard');
+  assert.ok(raibitserverService.includes('assertNestEnvironmentWriteAllowed(subject, parsed.entries)'), 'Nest env-file writes must use the shared limited-secret write guard');
   assert.ok(persistence.includes('if (integrationIds.length === 0) return { installationId: String(input.installationId), repositories: [] };'), 'Prisma GitHub installation repository listing must not leak all repos when scope filters out integrations');
+  assert.ok(persistence.includes('return redactUser(user);'), 'Prisma user creation/update surfaces must redact passwordHash');
   assert.ok(!persistence.includes('integrationIds.length === 0 || integrationIds.includes'), 'Prisma GitHub installation repository listing must not use broad fallback matching');
   assert.ok(persistence.includes('servicesForPrismaGitHubRepository'), 'Prisma GitHub webhook must map deliveries to attached services');
   assert.ok(persistence.includes("type: 'preview-deploy'"), 'Prisma GitHub webhook must enqueue preview deploy jobs');

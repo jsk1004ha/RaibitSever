@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import type { ProjectSpec, ServiceSpec, ResourceSpec } from '@raibitserver/schemas';
-import { assertRateLimit, assertSystemDeploymentActor, createControlPlaneRepository, createFixedWindowRateLimiter, createSessionToken, githubOAuthLoginPlan, hashPassword, normalizeEmail, organizationScopeFromProjectInput, personalOrganizationSlug, quotaUsageGauges, quotaWarnings, requireScope, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, signupPolicyForAccount, validateServiceSecurity, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
+import { assertEnvironmentWriteAllowed, assertRateLimit, assertSystemDeploymentActor, createControlPlaneRepository, createFixedWindowRateLimiter, createSessionToken, githubOAuthLoginPlan, hashPassword, normalizeEmail, normalizeEnvEntries, organizationScopeFromProjectInput, parseDotEnv, personalOrganizationSlug, quotaUsageGauges, quotaWarnings, requireScope, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, shouldPromoteFirstLogin, signupPolicyForAccount, validateServiceSecurity, verifyPassword, type InMemoryControlPlaneRepository, type PrismaControlPlaneRepository } from '@raibitserver/core';
 
 /**
  * NestJS-facing desired-state service.
@@ -49,7 +49,7 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     });
     const membership = await repository.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
     const token = createSessionToken({ ...user, email }, [membership], jwtSecret, { issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver' });
-    return { user, organization, membership, token };
+    return { user: publicUser(user), organization, membership, token };
   }
 
   async login(input: Record<string, any>) {
@@ -414,14 +414,20 @@ export class RAIBITSERVERService implements OnModuleDestroy {
     const repository: any = await this.repositoryPromise;
     await assertProjectAccess(repository, projectId, subject);
     await assertServiceInProject(repository, projectId, serviceId);
-    return repository.upsertServiceEnvironment({ projectId, serviceId, entries: input.entries || input.environment || input, actorUserId: subject.id, source: input.source || 'api' });
+    const entries = normalizeEnvEntries(input.entries || input.environment || input, { source: input.source || 'api' });
+    assertNestEnvironmentWriteAllowed(subject, entries);
+    return repository.upsertServiceEnvironment({ projectId, serviceId, entries, actorUserId: subject.id, source: input.source || 'api' });
   }
 
   async importEnvironmentFile(projectId: string, serviceId: string, input: Record<string, any>, subject: Record<string, any>) {
     const repository: any = await this.repositoryPromise;
     await assertProjectAccess(repository, projectId, subject);
     await assertServiceInProject(repository, projectId, serviceId);
-    return repository.importServiceEnvFile({ projectId, serviceId, content: input.content || input.text || '', actorUserId: subject.id, source: input.filename || '.env' });
+    const source = input.filename || '.env';
+    const parsed = parseDotEnv(String(input.content || input.text || ''), { source });
+    assertNestEnvironmentWriteAllowed(subject, parsed.entries);
+    const result = await repository.upsertServiceEnvironment({ projectId, serviceId, entries: parsed.entries, actorUserId: subject.id, source });
+    return { ...result, source, parsed: { plainCount: parsed.plainCount, secretCount: parsed.secretCount, errors: parsed.errors } };
   }
 
 
@@ -557,6 +563,20 @@ function isGlobalSubject(subject: Record<string, any>) {
 function assertAdmin(subject: Record<string, any>) {
   if (subject?.global === true || subject?.userRole === 'ADMIN' || subject?.claims?.userRole === 'ADMIN') return;
   throw new ForbiddenException('admin required');
+}
+
+function publicUser(user: Record<string, any>) {
+  if (!user) return user;
+  const { passwordHash, ...rest } = user;
+  return rest;
+}
+
+function assertNestEnvironmentWriteAllowed(subject: Record<string, any>, entries: Array<Record<string, any>>) {
+  try {
+    return assertEnvironmentWriteAllowed(subject, entries);
+  } catch (error) {
+    throw new ForbiddenException(error instanceof Error ? error.message : 'role requires env:write to modify secret environment keys');
+  }
 }
 
 async function usersForRepository(repository: any) {

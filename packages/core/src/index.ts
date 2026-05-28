@@ -7,6 +7,7 @@ export { compileProject } from './manifest-compiler.ts';
 export { listCatalog, getCatalogEntry } from './catalog.ts';
 export { connectionEnvForResource, injectResourceEnv } from './env-injection.ts';
 export { parseDotEnv, normalizeEnvEntries, maskEnvEntries } from './env-file.ts';
+export { assertEnvironmentWriteAllowed, secretEnvironmentKeys } from './env-policy.ts';
 export { validateServiceSecurity, guardDatabaseQuery, sanitizeLogRecord, safeAuthModeFromEnv, unsafeDisabledAuthAllowed, securityHeaders, createFixedWindowRateLimiter, assertRateLimit, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantDeploymentCreate, sanitizeDeploymentStatusInput, assertSystemDeploymentActor, redactDbConsoleStatement, normalizeTenantGitUrl } from './security.ts';
 export { can, assertCan, visibleEnvironment } from './rbac.ts';
 export { checkQuota, quotaForPlan, usageMetricDefinitions, quotaUsageGauges, quotaWarnings } from './quota.ts';
@@ -23,7 +24,7 @@ export { createDeploymentWorkflowHandlers, processBuilderWorkflowJob, processBui
 export { organizationScopeFromProjectInput, projectScopeFromInput } from './scope.ts';
 export { signJwtHs256, verifyJwtHs256, authorizeRequest, subjectFromRequest, requireAction, requireScope } from './auth.ts';
 export { hashPassword, verifyPassword, normalizeEmail, createSessionToken, sessionPayloadForUser, sessionTtlSeconds, personalOrganizationSlug, normalizeAccountType, configuredAdminEmails, signupPolicyForAccount, shouldPromoteFirstLogin } from './identity.ts';
-export { runtimeConfigStatus, assertRuntimeKeys, secretEncryptionConfigured, parseApiRuntimeConfig, validateApiRuntimeConfig, assertApiRuntimeConfig, devHeaderAuthAllowed } from './config.ts';
+export { runtimeConfigStatus, assertRuntimeKeys, secretEncryptionConfigured, parseApiRuntimeConfig, validateApiRuntimeConfig, assertApiRuntimeConfig, devHeaderAuthAllowed, devTokenAuthAllowed } from './config.ts';
 export { sealSecret, openSecret, secureRandomSecret, publicSecretRecord } from './secret-vault.ts';
 export { runDbConsoleQuery, browseDbConsole, resourceConsoleView } from './db-console.ts';
 export { buildPostgresProviderPlan, buildResourceProviderPlan, provisionPostgresProvider, provisionResourceProvider, providerConnectionEnvForResource, providerConsoleSurface } from './resource-providers.ts';

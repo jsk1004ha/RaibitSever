@@ -27,6 +27,13 @@ test('shared database resources inject bounded connection limits', () => {
   assert.equal(mysql.MYSQL_CONNECTION_LIMIT, '2');
 });
 
+test('provider connection env is deterministic when provider owns the live secret', () => {
+  const first = connectionEnvForResource({ name: 'todo-postgres', engine: 'postgresql', plan: 'shared-small' }, 'todo');
+  const second = connectionEnvForResource({ name: 'todo-postgres', engine: 'postgresql', plan: 'shared-small' }, 'todo');
+  assert.equal(first.DATABASE_URL, second.DATABASE_URL);
+  assert.match(first.DATABASE_URL, /provider-managed-todo-todo-postgres/);
+});
+
 test('service env injection attaches selected resources only', () => {
   const env = injectResourceEnv(
     { name: 'api', attachedResources: ['redis'], environment: { NODE_ENV: 'production' } },

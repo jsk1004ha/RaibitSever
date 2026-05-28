@@ -5,6 +5,7 @@ type EnvRecord = Record<string, any>;
 export const RUNTIME_KEY_CATALOG = Object.freeze([
   { name: 'RAIBITSERVER_AUTH_JWT_SECRET', category: 'auth', required: true, secret: true, description: 'HS256 JWT signing secret for signup/login and API sessions' },
   { name: 'RAIBITSERVER_AUTH_AUDIENCE', category: 'auth', required: false, secret: false, description: 'Expected JWT audience for API session tokens' },
+  { name: 'RAIBITSERVER_TRUST_PROXY_HEADERS', category: 'auth', required: false, secret: false, description: 'Set to 1 only behind a trusted edge/proxy to use X-Forwarded-For for auth rate-limit keys' },
   { name: 'RAIBITSERVER_ADMIN_BOOTSTRAP_TOKEN', category: 'auth', required: false, secret: true, description: 'Production-only token required to bootstrap an ADMIN account for an ADMIN_EMAILS address' },
   { name: 'RAIBITSERVER_SECRET_ENCRYPTION_KEY', category: 'secrets', required: true, secret: true, description: '32+ character key used by production secret stores before persisting credentials' },
   { name: 'RAIBITSERVER_GITHUB_CLIENT_ID', category: 'github', required: false, secret: false, description: 'GitHub OAuth/App client id' },
@@ -62,6 +63,7 @@ export function parseApiRuntimeConfig(env: EnvRecord = process.env) {
       jwtSecret,
       rateLimit: authRateLimit,
       allowDevHeaders: devHeaderAuthAllowed(env),
+      allowDevToken: devTokenAuthAllowed(env),
     },
     secrets: {
       encryptionConfigured: secretEncryptionKey.length >= 32,
@@ -84,6 +86,9 @@ export function validateApiRuntimeConfig(env: EnvRecord = process.env) {
   }
   if (production && env.RAIBITSERVER_AUTH_DEV_HEADERS === '1') {
     issues.push({ key: 'RAIBITSERVER_AUTH_DEV_HEADERS', code: 'UNSAFE_PRODUCTION_DEV_HEADERS', message: 'development auth headers are forbidden when NODE_ENV=production' });
+  }
+  if (production && env.RAIBITSERVER_AUTH_DEV_TOKEN === '1') {
+    issues.push({ key: 'RAIBITSERVER_AUTH_DEV_TOKEN', code: 'UNSAFE_PRODUCTION_DEV_TOKEN', message: 'development token minting is forbidden when NODE_ENV=production' });
   }
   if (production && stringValue(env.RAIBITSERVER_AUTH_JWT_SECRET || '').length < 32) {
     issues.push({ key: 'RAIBITSERVER_AUTH_JWT_SECRET', code: 'WEAK_JWT_SECRET', message: 'RAIBITSERVER_AUTH_JWT_SECRET must be at least 32 characters in production' });
@@ -154,6 +159,11 @@ export function devHeaderAuthAllowed(env: EnvRecord = process.env) {
   return env.RAIBITSERVER_AUTH_DEV_HEADERS === '1'
     && env.NODE_ENV !== 'production'
     && env.RAIBITSERVER_DEV_HEADER_BIND_LOCAL === '1';
+}
+
+export function devTokenAuthAllowed(env: EnvRecord = process.env) {
+  return env.RAIBITSERVER_AUTH_DEV_TOKEN === '1'
+    && env.NODE_ENV !== 'production';
 }
 
 function configuredAdminEmailsFromEnv(env: EnvRecord) {

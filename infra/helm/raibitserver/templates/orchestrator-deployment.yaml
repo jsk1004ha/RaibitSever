@@ -13,9 +13,33 @@ spec:
         app.kubernetes.io/name: raibitserver-orchestrator
     spec:
       serviceAccountName: raibitserver-orchestrator
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: orchestrator
           image: "{{ .Values.image.registry }}/raibitserver/orchestrator:{{ .Values.image.tag }}"
           env:
             - name: RAIBITSERVER_DRY_RUN
               value: "0"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            readOnlyRootFilesystem: true
+            runAsUser: 10001
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

@@ -24,6 +24,7 @@ type AppServiceSpec struct {
 	Preview          bool              `json:"preview"`
 	PullRequestNumber int              `json:"pullRequestNumber,omitempty"`
 	BaseServiceName  string            `json:"baseServiceName,omitempty"`
+	PublicEgress     bool              `json:"publicEgress,omitempty"`
 }
 
 type DeploymentPlan struct {
@@ -61,7 +62,7 @@ func SpecFromState(project *store.Project, service *store.Service, deployment *s
 		host = previewKey + "--" + baseServiceName + "--" + projectSlug + "--" + organizationSlug + ".preview." + domain
 		serviceName = previewKey + "-" + baseServiceName
 	}
-	return AppServiceSpec{Name: serviceName, Namespace: organizationSlug + "-" + projectSlug, Image: firstNonEmpty(deployment.ImageURL, service.ImageURL), Port: service.Port, Replicas: service.Replicas, Host: host, ProjectSlug: projectSlug, OrganizationSlug: organizationSlug, ServiceType: firstNonEmpty(service.Type, "web"), DeploymentID: deployment.ID, Preview: preview, PullRequestNumber: deployment.PullRequestNumber, BaseServiceName: baseServiceName}
+	return AppServiceSpec{Name: serviceName, Namespace: organizationSlug + "-" + projectSlug, Image: firstNonEmpty(deployment.ImageURL, service.ImageURL), Port: service.Port, Replicas: service.Replicas, Host: host, ProjectSlug: projectSlug, OrganizationSlug: organizationSlug, ServiceType: firstNonEmpty(service.Type, "web"), DeploymentID: deployment.ID, Preview: preview, PullRequestNumber: deployment.PullRequestNumber, BaseServiceName: baseServiceName, PublicEgress: servicePublicEgress(service)}
 }
 
 func CompileServiceManifests(spec AppServiceSpec) []map[string]any {
@@ -79,6 +80,9 @@ func CompileServiceManifests(spec AppServiceSpec) []map[string]any {
 	}
 	if strings.EqualFold(spec.ServiceType, "web") && spec.Host != "" {
 		items = append(items, ingressManifest(spec, labels))
+	}
+	if spec.PublicEgress {
+		items = append(items, servicePublicEgressPolicy(spec, labels))
 	}
 	return items
 }
@@ -104,8 +108,49 @@ func ingressManifest(spec AppServiceSpec, labels map[string]any) map[string]any 
 }
 
 func networkPolicyManifest(spec AppServiceSpec, labels map[string]any) map[string]any {
-	return map[string]any{"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": map[string]any{"name": spec.Name + "-default", "namespace": spec.Namespace, "labels": labels}, "spec": map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/name": spec.Name}}, "policyTypes": []any{"Ingress", "Egress"}, "ingress": []any{map[string]any{"from": []any{map[string]any{"namespaceSelector": map[string]any{}}}}}, "egress": []any{map[string]any{"to": []any{map[string]any{"namespaceSelector": map[string]any{}}}}}}}
+	namespaceSelector := map[string]any{"matchLabels": map[string]any{"kubernetes.io/metadata.name": spec.Namespace}}
+	ingressControllerSelector := map[string]any{"matchLabels": map[string]any{"raibitserver.io/ingress-gateway": "true"}}
+	dnsNamespaceSelector := map[string]any{"matchLabels": map[string]any{"kubernetes.io/metadata.name": "kube-system"}}
+	dnsPodSelector := map[string]any{"matchLabels": map[string]any{"k8s-app": "kube-dns"}}
+	return map[string]any{
+		"apiVersion": "networking.k8s.io/v1",
+		"kind":       "NetworkPolicy",
+		"metadata":   map[string]any{"name": spec.Name + "-default", "namespace": spec.Namespace, "labels": labels},
+		"spec": map[string]any{
+			"podSelector": map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/name": spec.Name}},
+			"policyTypes": []any{"Ingress", "Egress"},
+			"ingress": []any{map[string]any{"from": []any{
+				map[string]any{"namespaceSelector": ingressControllerSelector},
+			}}},
+			"egress": []any{
+				map[string]any{"to": []any{map[string]any{"namespaceSelector": namespaceSelector}}},
+				map[string]any{
+					"to":    []any{map[string]any{"namespaceSelector": dnsNamespaceSelector, "podSelector": dnsPodSelector}},
+					"ports": []any{map[string]any{"protocol": "UDP", "port": 53}, map[string]any{"protocol": "TCP", "port": 53}},
+				},
+			},
+		},
+	}
 }
+
+func servicePublicEgressPolicy(spec AppServiceSpec, labels map[string]any) map[string]any {
+	return map[string]any{
+		"apiVersion": "networking.k8s.io/v1",
+		"kind":       "NetworkPolicy",
+		"metadata":   map[string]any{"name": spec.Name + "-public-egress", "namespace": spec.Namespace, "labels": labels},
+		"spec": map[string]any{
+			"podSelector": map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/name": spec.Name}},
+			"policyTypes": []any{"Egress"},
+			"egress": []any{
+				map[string]any{"to": []any{map[string]any{"ipBlock": map[string]any{"cidr": "0.0.0.0/0", "except": privateIPv4EgressExceptions}}}},
+				map[string]any{"to": []any{map[string]any{"ipBlock": map[string]any{"cidr": "::/0", "except": privateIPv6EgressExceptions}}}},
+			},
+		},
+	}
+}
+
+var privateIPv4EgressExceptions = []any{"10.0.0.0/8", "100.64.0.0/10", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16"}
+var privateIPv6EgressExceptions = []any{"::1/128", "fc00::/7", "fe80::/10", "fd00:ec2::254/128"}
 
 var slugPattern = regexp.MustCompile(`[^a-z0-9._-]+`)
 
@@ -126,4 +171,41 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func servicePublicEgress(service *store.Service) bool {
+	if service == nil {
+		return false
+	}
+	return boolValue(service.DesiredSpec["allowPublicEgress"]) ||
+		boolValue(service.DesiredSpec["publicEgress"]) ||
+		boolValue(mapValue(service.DesiredSpec, "egress")["publicInternet"]) ||
+		boolValue(service.DesiredState["allowPublicEgress"]) ||
+		boolValue(service.DesiredState["publicEgress"]) ||
+		boolValue(mapValue(service.DesiredState, "egress")["publicInternet"])
+}
+
+func mapValue(row map[string]any, key string) map[string]any {
+	if row == nil || row[key] == nil {
+		return map[string]any{}
+	}
+	if typed, ok := row[key].(map[string]any); ok {
+		return typed
+	}
+	return map[string]any{}
+}
+
+func boolValue(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true") || strings.TrimSpace(typed) == "1"
+	case float64:
+		return typed != 0
+	case int:
+		return typed != 0
+	default:
+		return false
+	}
 }

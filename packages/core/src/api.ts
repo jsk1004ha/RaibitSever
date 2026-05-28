@@ -1,12 +1,12 @@
 import { RAIBITSERVERControlPlane } from './control-plane.ts';
-import { isSecretKey, maskSecrets } from './secrets.ts';
+import { maskSecrets } from './secrets.ts';
 import { authorizeRequest, requireAction, requireScope, signJwtHs256, subjectFromRequest } from './auth.ts';
 import { organizationScopeFromProjectInput } from './scope.ts';
 import { createSessionToken, hashPassword, normalizeEmail, personalOrganizationSlug, sessionTtlSeconds, shouldPromoteFirstLogin, signupPolicyForAccount, verifyPassword } from './identity.ts';
 import { runtimeConfigStatus } from './config.ts';
-import { devHeaderAuthAllowed } from './config.ts';
+import { devHeaderAuthAllowed, devTokenAuthAllowed } from './config.ts';
 import { normalizeEnvEntries, parseDotEnv } from './env-file.ts';
-import { can } from './rbac.ts';
+import { assertEnvironmentWriteAllowed } from './env-policy.ts';
 import { quotaUsageGauges, quotaWarnings } from './quota.ts';
 import { assertRateLimit, assertSystemDeploymentActor, createFixedWindowRateLimiter, safeAuthModeFromEnv, sanitizeDeploymentStatusInput, sanitizeTenantDeploymentCreate, sanitizeTenantResourceApiInput, sanitizeTenantResourceApiUpdate, sanitizeTenantServiceInput, sanitizeTenantServiceUpdate, securityHeaders, validateServiceSecurity } from './security.ts';
 import { githubOAuthLoginPlan } from './github-integration.ts';
@@ -43,7 +43,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const user = controlPlane.store.createUser({ name: body.name || email, email, passwordHash, role: policy.role, accountType: policy.accountType, approvalStatus: policy.approvalStatus });
         const membership = controlPlane.store.addMember({ organizationId: organization.id, userId: user.id, role: 'owner' });
         const token = createSessionToken({ ...user, email }, [membership], auth.jwtSecret, { issuer: auth.issuer || 'raibitserver', expiresInSeconds: auth.sessionTtlSeconds || sessionTtlSeconds(auth) });
-        return send(res, 201, { user, organization, membership, token });
+        return send(res, 201, { user: publicUser(user), organization, membership, token });
       }
       if (method === 'POST' && url.pathname === '/auth/login') {
         const body = await readJson(req);
@@ -86,9 +86,9 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         return send(res, 200, { ok: true });
       }
       if (method === 'POST' && url.pathname === '/auth/dev-token') {
+        if (!auth.allowDevToken) return send(res, 404, { error: 'not_found', path: url.pathname });
         const body = await readJson(req);
         if (!auth.jwtSecret) return send(res, 400, { error: 'jwt_secret_not_configured' });
-        if (!auth.allowDevToken) authorizeRequest(req, 'team:invite', auth);
         const token = signJwtHs256({ sub: body.sub || 'dev-user', role: body.role || 'developer', organizationId: body.organizationId || null, projectIds: body.projectIds || null, global: body.global === true }, auth.jwtSecret, { expiresInSeconds: auth.sessionTtlSeconds || sessionTtlSeconds(auth), issuer: auth.issuer || 'raibitserver' });
         return send(res, 201, { token });
       }
@@ -497,7 +497,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         await assertServiceAccess(controlPlane.store, projectId, serviceId, subject);
         const body = await readJson(req);
         const entries = normalizeEnvEntries(body.entries || body.environment || body, { source: body.source || 'api' });
-        enforceEnvironmentWrite(subject, entries);
+        assertEnvironmentWriteAllowed(subject, entries);
         return send(res, 200, controlPlane.store.upsertServiceEnvironment({ projectId, serviceId, entries, actorUserId: subject.id, source: body.source || 'api' }));
       }
       const envFileMatch = url.pathname.match(/^\/projects\/([^/]+)\/services\/([^/]+)\/env-file$/);
@@ -508,7 +508,7 @@ export function createApiHandler(controlPlane = new RAIBITSERVERControlPlane(), 
         const body = await readJson(req);
         const source = body.filename || '.env';
         const parsed = parseDotEnv(String(body.content || body.text || ''), { source });
-        enforceEnvironmentWrite(subject, parsed.entries);
+        assertEnvironmentWriteAllowed(subject, parsed.entries);
         const result = controlPlane.store.upsertServiceEnvironment({ projectId, serviceId, entries: parsed.entries, actorUserId: subject.id, source });
         return send(res, 200, { ...result, source, parsed: { plainCount: parsed.plainCount, secretCount: parsed.secretCount, errors: parsed.errors } });
       }
@@ -638,17 +638,6 @@ async function assertProjectAccess(store: any, projectId: string, subject: Recor
   return project;
 }
 
-function enforceEnvironmentWrite(subject: Record<string, any>, entries: Array<Record<string, any>>) {
-  if (can(subject.role, 'env:write')) return true;
-  const secretKeys = entries.filter((entry) => entry.isSecret === true || isSecretKey(entry.key)).map((entry) => entry.key);
-  if (secretKeys.length) {
-    const error = new Error(`role ${subject.role} requires env:write to modify secret environment keys: ${secretKeys.join(', ')}`);
-    (error as any).statusCode = 403;
-    throw error;
-  }
-  return true;
-}
-
 function authConfigFromEnv() {
   const jwtSecret = process.env.RAIBITSERVER_AUTH_JWT_SECRET || '';
   const mode = safeAuthModeFromEnv(process.env);
@@ -659,7 +648,7 @@ function authConfigFromEnv() {
     issuer: process.env.RAIBITSERVER_AUTH_ISSUER || 'raibitserver',
     audience: process.env.RAIBITSERVER_AUTH_AUDIENCE || 'raibitserver-api',
     allowDevHeaders: devHeaderAuthAllowed(process.env),
-    allowDevToken: process.env.RAIBITSERVER_AUTH_DEV_TOKEN === '1',
+    allowDevToken: devTokenAuthAllowed(process.env),
     defaultRole: process.env.RAIBITSERVER_ROLE || 'owner',
     sessionTtlSeconds: sessionTtlSeconds({ sessionTtlSeconds: process.env.RAIBITSERVER_SESSION_TTL_SECONDS }),
   };
@@ -732,7 +721,9 @@ export function sendSseSnapshot(res, event, body) {
 
 function authRateKey(req, label: string) {
   const headers = req.headers || {};
-  const forwarded = String(headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const forwarded = process.env.RAIBITSERVER_TRUST_PROXY_HEADERS === '1'
+    ? String(headers['x-forwarded-for'] || '').split(',')[0].trim()
+    : '';
   const ip = forwarded || req.socket?.remoteAddress || 'local';
   return `${ip}:${label}`;
 }

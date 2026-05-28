@@ -1,6 +1,5 @@
 import { getCatalogEntry, normalizeResourceEngine } from './catalog.ts';
 import { slugify } from './ids.ts';
-import { secureRandomSecret } from './secret-vault.ts';
 
 type AnyRecord = Record<string, any>;
 
@@ -12,8 +11,8 @@ function userFor(resource: AnyRecord, projectSlug: any) {
   return resource.username || sharedTenantName(resource, 'app', projectSlug);
 }
 
-function passwordFor(resource: AnyRecord) {
-  return resource.password || secureRandomSecret(24);
+function passwordFor(resource: AnyRecord, projectSlug: any, engine: string) {
+  return resource.password || resource.generatedPassword || resource.desiredSpec?.password || resource.desiredState?.password || deterministicProviderPassword(resource, projectSlug, engine);
 }
 
 function databaseFor(resource: AnyRecord, projectSlug: any) {
@@ -26,7 +25,7 @@ export function connectionEnvForResource(resource: AnyRecord, projectSlug = 'pro
   const host = hostFor(resource, projectSlug);
   const port = resource.port || defaultPort(engine);
   const username = userFor(resource, projectSlug);
-  const password = passwordFor(resource);
+  const password = passwordFor(resource, projectSlug, engine);
   const database = databaseFor(resource, projectSlug);
   const bucket = resource.bucket || slugify(resource.name || 'bucket');
   const protocol = resource.tls ? 'rediss' : 'redis';
@@ -82,13 +81,13 @@ export function connectionEnvForResource(resource: AnyRecord, projectSlug = 'pro
       env.S3_ENDPOINT = resource.endpoint || `https://${host}`;
       env.S3_BUCKET = bucket;
       env.S3_REGION = resource.region || 'local';
-      env.S3_ACCESS_KEY = resource.accessKey || `ak-${bucket}`;
-      env.S3_SECRET_KEY = resource.secretKey || `sk-${bucket}`;
+      env.S3_ACCESS_KEY = resource.accessKey || deterministicProviderPlaceholder(resource, projectSlug, engine, 'access-key');
+      env.S3_SECRET_KEY = resource.secretKey || deterministicProviderPlaceholder(resource, projectSlug, engine, 'secret-key');
       break;
     case 'vector-db':
     case 'qdrant':
       env.VECTOR_DB_URL = resource.url || `http://${host}:${port}`;
-      env.VECTOR_DB_API_KEY = resource.apiKey || `vdb-${slugify(resource.name || 'key')}`;
+      env.VECTOR_DB_API_KEY = resource.apiKey || deterministicProviderPlaceholder(resource, projectSlug, engine, 'api-key');
       env.VECTOR_DB_COLLECTION = resource.collection || slugify(resource.name || 'collection');
       break;
     case 'message-queue':
@@ -135,6 +134,17 @@ function uniqueTenantScope(resource: AnyRecord, projectSlug: any) {
     .map((value) => slugify(value));
   if (parts.length) return parts.join('-').slice(0, 48);
   return 'project';
+}
+
+function deterministicProviderPassword(resource: AnyRecord, projectSlug: any, engine: string) {
+  return deterministicProviderPlaceholder(resource, projectSlug, engine);
+}
+
+function deterministicProviderPlaceholder(resource: AnyRecord, projectSlug: any, engine: string, suffix = '') {
+  const project = slugify(projectSlug || resource.projectSlug || resource.project || 'project');
+  const name = slugify(resource.name || resource.slug || engine || 'resource');
+  const suffixPart = suffix ? `-${slugify(suffix)}` : '';
+  return `provider-managed-${project}-${name}${suffixPart}`.slice(0, 96);
 }
 
 function connectionLimitForResource(resource: AnyRecord) {

@@ -286,13 +286,23 @@ function pdbManifest(namespace: string, serviceName: string, labels: AnyRecord, 
 }
 
 function secretManifest(namespace: string, name: string, labels: AnyRecord, data: AnyRecord): AnyRecord {
+  const providerContract = hasProviderManagedPlaceholder(data);
   return {
     apiVersion: 'v1',
     kind: 'Secret',
-    metadata: { name, namespace, labels },
+    metadata: {
+      name,
+      namespace,
+      labels,
+      ...(providerContract ? { annotations: { 'raibitserver.io/provider-contract': 'not-live-secret' } } : {}),
+    },
     type: 'Opaque',
     stringData: data,
   };
+}
+
+function hasProviderManagedPlaceholder(data: AnyRecord) {
+  return Object.values(data || {}).some((value) => String(value).includes('provider-managed-'));
 }
 
 function configMapManifest(namespace: string, name: string, labels: AnyRecord, data: AnyRecord): AnyRecord {
@@ -346,14 +356,15 @@ function tenantIsolationNetworkPolicy(namespace: string, services: AnyRecord[], 
       podSelector: {},
       policyTypes: ['Ingress', 'Egress'],
       ingress: [
-        { from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': namespace } } }] },
         { from: [{ namespaceSelector: { matchLabels: { 'raibitserver.io/ingress-gateway': 'true' } } }] },
       ],
       egress,
     },
     raibitserver: {
-      allowsOwnServices: serviceNames,
-      allowsOwnResources: resourceNames,
+      ingressFromGatewayOnly: true,
+      blocksSameNamespaceIngressByDefault: true,
+      allowsSameNamespaceEgressToServices: serviceNames,
+      allowsSameNamespaceEgressToResources: resourceNames,
       allowsDnsEgress: true,
       blocksMetadataEndpoint: true,
       blocksControlPlane: true,

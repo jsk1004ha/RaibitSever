@@ -37,3 +37,22 @@ test('Go orchestrator reconciler contract is executable when Go exists or static
   assert.match(kube, /NetworkPolicy/);
   assert.match(kube, /readOnlyRootFilesystem/);
 });
+
+test('Go orchestrator network policy stays namespace-scoped instead of all-namespace wildcard', async () => {
+  const [kube, kubeTest] = await Promise.all([
+    fs.readFile('services/orchestrator/internal/kube/deployment.go', 'utf8'),
+    fs.readFile('services/orchestrator/internal/kube/deployment_test.go', 'utf8'),
+  ]);
+  assert.doesNotMatch(kube, /namespaceSelector": map\[string\]any\{\}/, 'NetworkPolicy must not allow every namespace with an empty namespaceSelector');
+  assert.match(kube, /kubernetes\.io\/metadata\.name/);
+  assert.match(kube, /spec\.Namespace/);
+  assert.match(kube, /raibitserver\.io\/ingress-gateway/);
+  assert.doesNotMatch(kube, /raibitserver\.io\/ingress": "true"/);
+  assert.match(kube, /k8s-app/);
+  assert.match(kube, /kube-dns/);
+  assert.match(kube, /servicePublicEgressPolicy/);
+  assert.match(kube, /privateIPv4EgressExceptions/);
+  assert.match(kube, /169\.254\.0\.0\/16/);
+  assert.match(kubeTest, /TestNetworkPolicyUsesSharedIngressGatewayLabel/);
+  assert.match(kubeTest, /TestPublicEgressIsServiceScopedAndOptIn/);
+});

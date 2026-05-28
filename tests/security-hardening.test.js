@@ -7,6 +7,7 @@ import { RAIBITSERVERControlPlane } from '../packages/core/src/control-plane.ts'
 import { signJwtHs256 } from '../packages/core/src/auth.ts';
 import { assertApiRuntimeConfig, validateApiRuntimeConfig } from '../packages/core/src/config.ts';
 import { signupPolicyForAccount, shouldPromoteFirstLogin } from '../packages/core/src/identity.ts';
+import { PrismaControlPlaneRepository } from '../packages/core/src/persistence.ts';
 
 test('env auth bypass flag is ignored unless explicitly confirmed outside production', async () => {
   const previous = snapshotEnv(['RAIBITSERVER_AUTH_DISABLED', 'RAIBITSERVER_AUTH_DISABLED_CONFIRM', 'NODE_ENV', 'RAIBITSERVER_AUTH_JWT_SECRET']);
@@ -46,6 +47,7 @@ test('API runtime config fails fast for unsafe production security settings', ()
     RAIBITSERVER_AUTH_RATE_LIMIT: '0',
     RAIBITSERVER_AUTH_DISABLED: '1',
     RAIBITSERVER_AUTH_DEV_HEADERS: '1',
+    RAIBITSERVER_AUTH_DEV_TOKEN: '1',
     RAIBITSERVER_AUTH_JWT_SECRET: 'short',
   };
   const unsafe = validateApiRuntimeConfig(unsafeEnv);
@@ -55,10 +57,34 @@ test('API runtime config fails fast for unsafe production security settings', ()
     'INVALID_POSITIVE_INTEGER',
     'UNSAFE_PRODUCTION_AUTH_DISABLED',
     'UNSAFE_PRODUCTION_DEV_HEADERS',
+    'UNSAFE_PRODUCTION_DEV_TOKEN',
     'WEAK_JWT_SECRET',
     'MISSING_SECRET_ENCRYPTION_KEY',
   ]);
   assert.throws(() => assertApiRuntimeConfig(unsafeEnv), /invalid API runtime configuration/);
+});
+
+test('production ignores dev-token minting flag and requires real authorization', async () => {
+  const previous = snapshotEnv(['NODE_ENV', 'RAIBITSERVER_AUTH_DEV_TOKEN', 'RAIBITSERVER_AUTH_JWT_SECRET', 'RAIBITSERVER_SECRET_ENCRYPTION_KEY']);
+  process.env.NODE_ENV = 'production';
+  process.env.RAIBITSERVER_AUTH_DEV_TOKEN = '1';
+  process.env.RAIBITSERVER_AUTH_JWT_SECRET = 'x'.repeat(32);
+  process.env.RAIBITSERVER_SECRET_ENCRYPTION_KEY = 'y'.repeat(32);
+  const server = http.createServer(createApiHandler(new RAIBITSERVERControlPlane()));
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  try {
+    const response = await request(port, 'POST', '/auth/dev-token', { sub: 'attacker', global: true });
+    assert.equal(response.statusCode, 404);
+    const admin = signJwtHs256({ sub: 'admin', role: 'owner', global: true }, process.env.RAIBITSERVER_AUTH_JWT_SECRET);
+    const authorized = await request(port, 'POST', '/auth/dev-token', { sub: 'attacker', role: 'owner', global: true }, admin);
+    assert.equal(authorized.statusCode, 404);
+    assert.equal(validateApiRuntimeConfig(process.env).issues.some((issue) => issue.code === 'UNSAFE_PRODUCTION_DEV_TOKEN'), true);
+  } finally {
+    server.close();
+    restoreEnv(previous);
+  }
 });
 
 test('production admin bootstrap requires configured admin email plus bootstrap token', () => {
@@ -102,6 +128,7 @@ test('session JWT lifetime is server-clamped and login brute force is rate limit
   try {
     const signup = await request(port, 'POST', '/auth/signup', { email: 'ttl@example.com', password: 'correct-horse', organizationSlug: 'ttl-org', expiresInSeconds: 315360000 });
     assert.equal(signup.statusCode, 201);
+    assert.equal(Object.prototype.hasOwnProperty.call(signup.body.user, 'passwordHash'), false);
     const payload = decodeJwt(signup.body.token);
     assert.equal(payload.exp - payload.iat <= 24 * 60 * 60, true);
 
@@ -112,6 +139,48 @@ test('session JWT lifetime is server-clamped and login brute force is rate limit
     assert.equal(limited.statusCode, 429);
   } finally {
     server.close();
+  }
+});
+
+test('Prisma user creation redacts passwordHash before returning API-facing user data', async () => {
+  const repo = new PrismaControlPlaneRepository({
+    user: {
+      upsert: async () => ({
+        id: 'usr_1',
+        email: 'hash@example.com',
+        name: 'Hash',
+        role: 'USER',
+        accountType: 'NON_CLUB',
+        approvalStatus: 'PENDING',
+        passwordHash: 'stored-password-hash',
+      }),
+    },
+  });
+  const user = await repo.createUser({ email: 'hash@example.com', name: 'Hash', passwordHash: 'stored-password-hash' });
+  assert.equal(Object.prototype.hasOwnProperty.call(user, 'passwordHash'), false);
+});
+
+test('auth rate limits do not trust spoofed X-Forwarded-For unless explicitly enabled', async () => {
+  const previous = snapshotEnv(['RAIBITSERVER_TRUST_PROXY_HEADERS']);
+  delete process.env.RAIBITSERVER_TRUST_PROXY_HEADERS;
+  const secret = 'xff-spoof-secret';
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'jwt', jwtSecret: secret, issuer: 'raibitserver' } }));
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  try {
+    const signup = await request(port, 'POST', '/auth/signup', { email: 'xff@example.com', password: 'correct-horse', organizationSlug: 'xff-org' });
+    assert.equal(signup.statusCode, 201);
+
+    let limited;
+    for (let i = 0; i < 11; i += 1) {
+      limited = await request(port, 'POST', '/auth/login', { email: 'xff@example.com', password: `wrong-${i}` }, null, { 'x-forwarded-for': `198.51.100.${i}` });
+    }
+    assert.equal(limited.statusCode, 429);
+  } finally {
+    server.close();
+    restoreEnv(previous);
   }
 });
 
@@ -154,6 +223,34 @@ test('tenant API rejects risky sources and strips service/resource mass-assignme
   } finally {
     server.close();
     restoreEnv(previous);
+  }
+});
+
+test('limited environment writers can update plain keys but not secret-looking keys', async () => {
+  const secret = 'env-write-secret';
+  const controlPlane = new RAIBITSERVERControlPlane();
+  const org = controlPlane.store.createOrganization({ name: 'Env Org', slug: 'env-org' });
+  const project = controlPlane.store.createProject({ organizationId: org.id, name: 'env', slug: 'env' });
+  const service = controlPlane.store.createService({ projectId: project.id, name: 'web', sourceType: 'image', image: 'registry.local/web:1' });
+  const token = signJwtHs256({ sub: 'dev-env', role: 'developer', organizationId: org.id }, secret);
+  const server = http.createServer(createApiHandler(controlPlane, { auth: { mode: 'jwt', jwtSecret: secret } }));
+  server.listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  try {
+    const plain = await request(port, 'POST', `/projects/${project.id}/services/${service.id}/env`, { PUBLIC_FLAG: 'true' }, token);
+    assert.equal(plain.statusCode, 200);
+    assert.equal(plain.body.plainCount, 1);
+
+    const secretWrite = await request(port, 'POST', `/projects/${project.id}/services/${service.id}/env`, { DATABASE_URL: 'postgresql://user:pass@db/app' }, token);
+    assert.equal(secretWrite.statusCode, 403);
+    assert.match(secretWrite.body.error, /requires env:write/);
+
+    const fileSecretWrite = await request(port, 'POST', `/projects/${project.id}/services/${service.id}/env-file`, { content: 'API_TOKEN=secret-token' }, token);
+    assert.equal(fileSecretWrite.statusCode, 403);
+    assert.match(fileSecretWrite.body.error, /requires env:write/);
+  } finally {
+    server.close();
   }
 });
 
@@ -203,10 +300,10 @@ function decodeJwt(token) {
   return JSON.parse(Buffer.from(String(token).split('.')[1], 'base64url').toString('utf8'));
 }
 
-function request(port, method, path, body = null, token = null) {
+function request(port, method, path, body = null, token = null, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const payload = body ? JSON.stringify(body) : null;
-    const headers = payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {};
+    const headers = { ...extraHeaders, ...(payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}) };
     if (token) headers.authorization = `Bearer ${token}`;
     const req = http.request({ port, path, method, headers }, (res) => {
       const chunks = [];

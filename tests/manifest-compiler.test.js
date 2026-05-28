@@ -23,6 +23,7 @@ test('compiler emits namespace, workloads, routes, autoscaling, and isolation', 
 
 test('web service uses secret refs and safe container defaults', () => {
   const deployment = find('Deployment', 'web');
+  const secret = find('Secret', 'web-env');
   const container = deployment.spec.template.spec.containers[0];
   assert.equal(container.securityContext.runAsNonRoot, true);
   assert.equal(container.securityContext.allowPrivilegeEscalation, false);
@@ -33,7 +34,26 @@ test('web service uses secret refs and safe container defaults', () => {
   assert.deepEqual(deployment.spec.template.spec.volumes, [{ name: 'tmp', emptyDir: {} }]);
   assert.equal(deployment.spec.template.spec.automountServiceAccountToken, false);
   assert.equal(container.env.some((env) => env.name === 'DATABASE_URL' && env.valueFrom.secretKeyRef.name === 'web-env'), true);
+  assert.equal(secret.metadata.annotations['raibitserver.io/provider-contract'], 'not-live-secret');
+  assert.match(secret.stringData.DATABASE_URL, /provider-managed-/);
   assert.equal(deployment.spec.strategy.rollingUpdate.maxUnavailable, 0);
+});
+
+test('provider-owned storage and vector placeholders are marked as not-live secrets', () => {
+  const storagePlan = compileProject({
+    organization: { slug: 'gdg' },
+    project: { name: 'assets' },
+    services: [{ name: 'web', type: 'web', sourceType: 'image', image: 'example/web:1', attachedResources: ['assets', 'vectors'] }],
+    resources: [
+      { name: 'assets', engine: 'object-storage', type: 'storage', bucket: 'assets' },
+      { name: 'vectors', engine: 'vector-db', type: 'vector' },
+    ],
+  });
+  const secret = storagePlan.manifests.find((manifest) => manifest.kind === 'Secret' && manifest.metadata.name === 'web-env');
+  assert.equal(secret.metadata.annotations['raibitserver.io/provider-contract'], 'not-live-secret');
+  assert.match(secret.stringData.S3_ACCESS_KEY, /provider-managed-/);
+  assert.match(secret.stringData.S3_SECRET_KEY, /provider-managed-/);
+  assert.match(secret.stringData.VECTOR_DB_API_KEY, /provider-managed-/);
 });
 
 test('tenant network policy allows DNS but blocks metadata and private control-plane ranges', () => {
@@ -42,8 +62,20 @@ test('tenant network policy allows DNS but blocks metadata and private control-p
   assert.ok(dnsRule, 'DNS egress rule exists');
   const externalRule = policy.spec.egress.find((rule) => rule.to?.[0]?.ipBlock?.cidr === '0.0.0.0/0');
   assert.equal(externalRule, undefined, 'public internet egress is opt-in');
+  assert.equal(
+    policy.spec.ingress.some((rule) => rule.from?.some((peer) => peer.namespaceSelector?.matchLabels?.['kubernetes.io/metadata.name'] === plan.metadata.namespace)),
+    false,
+    'default ingress must not allow same-namespace lateral traffic',
+  );
+  assert.equal(
+    policy.spec.ingress.some((rule) => rule.from?.some((peer) => peer.namespaceSelector?.matchLabels?.['raibitserver.io/ingress-gateway'] === 'true')),
+    true,
+    'default ingress allows only the shared ingress gateway namespace',
+  );
   assert.equal(policy.raibitserver.blocksMetadataEndpoint, true);
   assert.equal(policy.raibitserver.blocksControlPlane, true);
+  assert.equal(policy.raibitserver.ingressFromGatewayOnly, true);
+  assert.equal(policy.raibitserver.blocksSameNamespaceIngressByDefault, true);
 });
 
 test('tenant network policy adds bounded public egress only when service opts in', () => {
